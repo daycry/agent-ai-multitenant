@@ -20,7 +20,7 @@
 #     CVE-2026-59873 (CRITICAL, gzip bomb en node-tar 6.2.1).
 # Es el mismo digest que ya usan node-jest y node-vitest, que pasan Trivy en
 # verde: una sola base de Node vetada en el repo en vez de tres.
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS deps
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # `npm ci` a secas, sin el `|| npm install` que había antes: ese fallback
@@ -29,13 +29,13 @@ COPY package.json package-lock.json* ./
 # lock no cuadra, el build tiene que parar y decirlo.
 RUN npm ci
 
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS builder
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runner
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3100
