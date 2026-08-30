@@ -286,6 +286,26 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "in hooks. When a decision impacts backend (payload shape, "
             "pagination, search), negotiate with Backend before implementing."
         ),
+        # El stack va aqui y no en ROLE_DEFAULT_SKILLS (2026-08-30). Su prompt
+        # nombra por su nombre Next.js App Router, Tailwind, shadcn/ui y TanStack
+        # Query — se comprobo buscando las cuatro cadenas literales— y no tenia
+        # ninguna de las cuatro skills, que existen en el catalogo y no llegaban
+        # a nadie. Un prompt que nombra lo que el agente no tiene le hace usarlo
+        # peor, no le impide usarlo: el resultado es trabajo mediocre y silencio.
+        #
+        # No suben al mapa por rol porque `frontend_dev` lo comparten equipos de
+        # otro stack: el frontend de CodeIgniter renderiza Twig, y heredar
+        # skills de Next.js le daria exactamente el mismo defecto al reves.
+        # El rol se queda con lo agnostico (responsive, ARIA, performance).
+        skill_slugs=(
+            "responsive-design",
+            "accessibility-aria",
+            "web-performance",
+            "nextjs-app-router",
+            "tailwind-design",
+            "shadcn-components",
+            "tanstack-query",
+        ),
     ),
     BuiltinAgent(
         slug="qa-engineer",
@@ -422,6 +442,16 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "adr-authoring",
             "runbook-authoring",
             "api-documentation",
+            # `changelog-authoring` (2026-08-30): no llegaba a NINGUN agente del
+            # catalogo, y no por olvido del catalogo sino por la mecanica del
+            # override — declarar `skill_slugs` SUSTITUYE la herencia del rol, y
+            # `ROLE_DEFAULT_SKILLS["technical_writer"]` si la lista. Al escribir
+            # las cinco de arriba se perdio la sexta sin que nada lo dijera.
+            #
+            # Y es la que menos podia faltar: CLAUDE.md exige una entrada en
+            # `docs/07-changelog/{plan_id}.md` como criterio de cierre de plan, y
+            # este es el agente que mantiene la documentacion al cerrarlo.
+            "changelog-authoring",
         ),
     ),
     BuiltinAgent(

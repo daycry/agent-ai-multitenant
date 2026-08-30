@@ -96,11 +96,18 @@ _FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
 # hubiese entrado. Ahora el criterio es UNO y vive escrito en
 # `builtin_role_capabilities`.
 _BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
-# El PM del equipo NO recibe `shell-exec`: su propio prompt dice «No escribes ni
-# revisas código a fondo: delega», y una puerta de ejecución cuyo toolchain no
-# existe en el sandbox es justo la trampa del ADR 0162 — acepta el comando y
-# devuelve un «not found» del SO que parece un problema de PATH.
-_PM_TOOLS = (*_FILE_TOOLS, "semantic-search")
+# El PM del equipo es de SOLO LECTURA, y eso incluye no recibir `write-file` ni
+# `delete-file` — no sólo `shell-exec`. Su propio prompt dice «NO escribes ni
+# revisas código a fondo; delegas», su entregable es el Plan (que viaja por
+# `submit_result`, no por un fichero) y el mapa por rol le da `_READ` desde
+# siempre. Hasta el 2026-08-30 este equipo le daba las cuatro de `_FILE_TOOLS`:
+# otra vez el mismo rol con capacidades distintas según por qué seed entrara.
+#
+# Lo de `shell-exec` sigue valiendo y por su propio motivo: una puerta de
+# ejecución cuyo toolchain no existe en el sandbox es la trampa del ADR 0162 —
+# acepta el comando y devuelve un «not found» del SO que parece un problema de
+# PATH.
+_PM_TOOLS = ("read-file", "list-files", "semantic-search")
 
 
 # Guía de higiene de stack compartida por TODOS los agentes CI4 (fix 2026-07-24).
@@ -262,8 +269,23 @@ class CI4Agent:
 
 # Extras de stack del equipo CI4 (PHP) sobre el default por rol (Ola B).
 _CI4_EXTRA_SKILLS: dict[str, tuple[str, ...]] = {
-    "backend_dev": ("php-phpunit", "codeigniter4-hmvc", "doctrine-orm"),
+    "backend_dev": ("php-phpunit", "codeigniter4-hmvc", "doctrine-orm", "twig-templating"),
     "frontend_dev": ("twig-templating",),
+    # `architect` (2026-08-30): su persona abre con «Eres el Software Architect de
+    # un proyecto CodeIgniter 4 + Doctrine ORM 3 (via daycry/doctrine)» y guarda
+    # la arquitectura HMVC modular. Disenar el mapeo de entidades sin la skill de
+    # Doctrine es exactamente el hueco que este bloque viene a cerrar.
+    "architect": ("doctrine-orm", "codeigniter4-hmvc"),
+    # `qa` (2026-08-30): el QA de este equipo no tenia `php-phpunit` mientras su
+    # propio prompt dice, literal, «Disenas y mantienes tres suites PHPUnit:
+    # Unit (tests/unit), Integration (tests/integration) y E2E (tests/E2E...)».
+    # Un prompt que ordena mantener suites PHPUnit a quien no tiene la skill de
+    # PHPUnit no falla: produce trabajo peor y nadie sabe por que.
+    #
+    # `codeigniter4-hmvc` va con ella porque las suites de este stack se
+    # organizan por modulo bajo `app/Modules/`, que es justo lo que esa skill
+    # explica; sin ella el QA escribe tests correctos en el sitio equivocado.
+    "qa": ("php-phpunit", "codeigniter4-hmvc"),
 }
 
 

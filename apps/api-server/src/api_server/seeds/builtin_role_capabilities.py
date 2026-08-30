@@ -154,7 +154,44 @@ ROLES_WITH_READ_ONLY_WORKSPACE: frozenset[str] = frozenset({"reviewer"})
 # seed, para que añadir una tercera puerta de escritura no obligue a acordarse
 # de este caso: quien la añada al catálogo la añade también aquí, y la guarda
 # estructural (`tests/unit/test_builtin_prompt_tool_coherence.py`) la cubre sola.
-WORKSPACE_MUTATING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file"})
+#
+# `shell-exec` ESTÁ en la lista, y llegó tarde (2026-08-30). Al cerrar el caso
+# del reviewer se razonó que `grep`/`cat` funcionan sobre un montaje de sólo
+# lectura y que por tanto no era la misma clase de defecto. Es falso, y lo dice
+# el propio runtime: `shell_exec` figura en `_PRODUCING_TOOLS`
+# (`agent_runtime/tool_classification.py`), junto a `write_file` y `stack_exec`,
+# porque ejecuta comandos arbitrarios y por tanto PUEDE escribir. Y el criterio
+# contrario ya estaba escrito unas líneas más abajo, en `ROLE_DEFAULT_TOOLS`:
+# el reviewer se queda en `_READ`.
+#
+# La leccion, que es la que hace falta recordar: una lista de «puertas de
+# escritura» que se construye pensando en el uso HABITUAL de cada tool deja
+# fuera justo las que escriben por accidente. La pregunta correcta no es «¿para
+# qué se usa?» sino «¿puede dejar el workspace distinto de como lo encontró?».
+WORKSPACE_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {"write-file", "delete-file", "shell-exec", "stack-exec"}
+)
+
+# Las que escriben ficheros POR SU PROPIA DEFINICION, que es una propiedad
+# distinta de la de arriba y por eso vive en su propio conjunto.
+#
+# La diferencia importa y costó un guarda mal planteado el 2026-08-30: al ver
+# `shell_exec` dentro de `_PRODUCING_TOOLS` del runtime se dedujo que un roster
+# no podía concederla sin permiso del mapa por rol, y esa regla cazó a siete
+# agentes CodeIgniter que la usan para `grep`/`cat` — su uso documentado. Pero
+# `_PRODUCING_TOOLS` es la heurística de PROGRESO del runtime («¿el agente ha
+# producido algo, o sigue leyendo?»), no una declaración sobre autoridad.
+#
+# Las dos reglas que salen de separarlas:
+#
+#   * Sobre un workspace de SOLO LECTURA no entra ninguna de
+#     ``WORKSPACE_MUTATING_TOOLS`` — ni para hacer `grep`, porque el criterio del
+#     reviewer (`_READ`) ya lo decidió por otras razones.
+#   * Quién escribe FICHEROS lo decide este mapa y sólo él. Un equipo puede
+#     añadir lectura o red (`http-get` al devops); no puede repartir escritura
+#     por su cuenta, que es como el mismo rol acabó con capacidades distintas
+#     según por qué seed entrara — tres veces seguidas.
+FILE_WRITING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file"})
 
 # `write-file` para `security` y `researcher` (2026-08-30): no es una capacidad
 # nueva, es que sus prompts YA les ordenaban producir un fichero y no tenían con
@@ -162,22 +199,50 @@ WORKSPACE_MUTATING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file
 # /docs/06-runbooks/security.md» y el Researcher cierra con «tu producto es un
 # documento». Un prompt que ordena lo imposible no es un permiso olvidado: es un
 # agente que gira hasta agotar reintentos, o que cierra la tarea sin entregable.
+# ---------------------------------------------------------------------------
+# `delete-file` VIAJA CON `write-file`, y no es una concesión: es cerrar la
+# tercera instancia del mismo defecto
+# ---------------------------------------------------------------------------
+# Hasta el 2026-08-30 esta tool la concedía SOLO el equipo CodeIgniter, a sus
+# diez agentes y con su motivo escrito (ci4_team.py, «R6 (ADR 0089): se concede
+# `delete-file` (wired) para que el agente pueda reconciliar el deliverable
+# eliminando ficheros stale/duplicados de intentos previos en el worktree
+# persistente»), mientras este mapa no la listaba en ningún rol.
+#
+# Lo que eso producía, medido: el re-seed de arranque poda lo que no está en el
+# spec, así que habría retirado `delete_file` a SIETE agentes de plataforma
+# (arquitecto, backend sr y jr, frontend, QA, devops, technical writer) sin una
+# sola línea que lo justificara — y los diez de CI4 la habrían conservado. El
+# mismo rol, con o sin la capacidad, según por qué seed hubiese entrado: la
+# tercera aparición del defecto que este módulo dice haber cerrado dos veces.
+#
+# Por qué se resuelve CONCEDIÉNDOLA y no retirándola de CI4: retenerla mientras
+# se concede `write-file` no es una frontera de seguridad. `write_file` ya
+# permite vaciar un fichero, y el runtime gatea las dos con la MISMA categoría
+# de acción sensible — su tabla lo dice literal: `"delete_file": "code_changes",
+# # destructiva sobre el worktree (como write_file)`. Lo único que añade retener
+# `delete-file` es un refactor que no se puede terminar.
+#
+# La regla, en una línea: quien puede escribir puede borrar; y quien no escribe
+# tampoco borra (el reviewer, `_READ`, por el ADR 0095).
+_ESCRIBE = ("write-file", "delete-file")
+
 ROLE_DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
     "project_manager": _READ,
-    "architect": (*_READ, "write-file", "stack-exec"),
-    "backend_dev": (*_READ, "write-file", "stack-exec"),
-    "frontend_dev": (*_READ, "write-file", "stack-exec"),
-    "qa": (*_READ, "write-file", "stack-exec"),
+    "architect": (*_READ, *_ESCRIBE, "stack-exec"),
+    "backend_dev": (*_READ, *_ESCRIBE, "stack-exec"),
+    "frontend_dev": (*_READ, *_ESCRIBE, "stack-exec"),
+    "qa": (*_READ, *_ESCRIBE, "stack-exec"),
     # Sin `stack-exec` (ADR 0095, ver arriba) y sin `shell-exec`: el reviewer
     # recibe el diff y el `<test-report>` ya calculados, y su workspace está
     # montado de sólo lectura. Darle una puerta de ejecución cuyo toolchain no
     # existe en el sandbox sólo le enseñaría a perseguir un «not found».
     "reviewer": _READ,
-    "devops": (*_READ, "write-file", "stack-exec", "shell-exec"),
-    "security": (*_READ, "write-file", "stack-exec"),
-    "specialist": (*_READ, "write-file", "http-get", "stack-exec"),
-    "researcher": (*_READ, "write-file", "http-get"),
-    "technical_writer": (*_READ, "write-file"),
+    "devops": (*_READ, *_ESCRIBE, "stack-exec", "shell-exec"),
+    "security": (*_READ, *_ESCRIBE, "stack-exec"),
+    "specialist": (*_READ, *_ESCRIBE, "http-get", "stack-exec"),
+    "researcher": (*_READ, *_ESCRIBE, "http-get"),
+    "technical_writer": (*_READ, *_ESCRIBE),
 }
 
 
@@ -192,6 +257,7 @@ def default_tool_slugs(role: str) -> tuple[str, ...]:
 
 
 __all__ = [
+    "FILE_WRITING_TOOLS",
     "ROLES_THAT_EXECUTE_TOOLCHAIN",
     "ROLES_WITH_READ_ONLY_WORKSPACE",
     "ROLE_DEFAULT_SKILLS",
