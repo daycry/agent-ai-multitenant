@@ -168,7 +168,9 @@ async def seed_qa_e2e_automator(session: AsyncSession) -> int:
             "name": QA_E2E_AUTOMATOR.name,
             "description": QA_E2E_AUTOMATOR.description,
             "role": QA_E2E_AUTOMATOR.role,
-            "system_prompt": QA_E2E_AUTOMATOR.system_prompt_es,
+            # El EFECTIVO (persona + guía de ejecución generada): la columna
+            # plana y `model_config.system_prompts` deben decir lo mismo.
+            "system_prompt": QA_E2E_AUTOMATOR.effective_prompt_es,
             "model_config": json.dumps(qa_e2e_automator_model_config()),
             "memory_scope": QA_E2E_AUTOMATOR.memory_scope,
             "review_capability": QA_E2E_AUTOMATOR.review_capability,
@@ -176,6 +178,40 @@ async def seed_qa_e2e_automator(session: AsyncSession) -> int:
         },
     )
     return 1
+
+
+async def seed_qa_e2e_automator_tools(session: AsyncSession) -> int:
+    """Cablea las tools del QA E2E Automator (`agent_tools`). Devuelve enlaces.
+
+    Existe como paso propio porque este agente vive FUERA de ``BUILTIN_AGENTS``
+    —para no mover el conteo de once que fija ``test_seed_agents``— y por eso se
+    quedó con CERO tools desde el día que se sembró, mientras su prompt le ordena
+    «escribe specs Playwright deterministas» y «reproduces minimalmente». Un
+    agente que no puede escribir un fichero no produce entregable reconocible.
+
+    Debe correr DESPUÉS de :func:`seed_qa_e2e_automator` (FK
+    ``agent_tools.agent_id``) y de ``seed_builtin_tools`` (FK
+    ``agent_tools.tool_id``). Reusa el upsert + la poda de
+    :mod:`api_server.seeds.builtin_agents`: mismo contrato idempotente que el
+    resto del catálogo, no una segunda forma de escribir la misma junction.
+    """
+    from api_server.seeds.builtin_agents import (
+        _DELETE_STALE_AGENT_TOOLS_SQL,
+        _UPSERT_AGENT_TOOL_SQL,
+    )
+    from api_server.seeds.builtin_tools import _tool_id
+
+    keep_ids = [str(_tool_id(slug)) for slug in QA_E2E_AUTOMATOR.resolved_tool_slugs()]
+    for tool_id in keep_ids:
+        await session.execute(
+            _UPSERT_AGENT_TOOL_SQL,
+            {"agent_id": str(QA_E2E_AUTOMATOR.id), "tool_id": tool_id},
+        )
+    await session.execute(
+        _DELETE_STALE_AGENT_TOOLS_SQL,
+        {"agent_id": str(QA_E2E_AUTOMATOR.id), "keep_ids": keep_ids},
+    )
+    return len(keep_ids)
 
 
 __all__ = [
@@ -186,4 +222,5 @@ __all__ = [
     "QA_E2E_AUTOMATOR_SLUG",
     "qa_e2e_automator_model_config",
     "seed_qa_e2e_automator",
+    "seed_qa_e2e_automator_tools",
 ]

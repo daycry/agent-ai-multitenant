@@ -170,6 +170,12 @@ def test_the_step_order_still_respects_the_foreign_keys() -> None:
     _before("agents", "teams")  # FK team_members.agent_id
     _before("skills", "agent_skills")  # FK agent_skills.skill_id
     _before("tools", "agent_tools")  # FK agent_tools.tool_id
+    # El QA E2E Automator vive fuera de `BUILTIN_AGENTS`, así que su cableado de
+    # tools es un paso propio con DOS precondiciones. Sin fijarlas aquí, moverlo
+    # de sitio fallaría en el arranque real y no en la suite — y su ausencia ya
+    # dejó al agente con cero tools durante meses sin que nada se quejara.
+    _before("qa_e2e_automator", "qa_e2e_automator_tools")  # FK agent_tools.agent_id
+    _before("tools", "qa_e2e_automator_tools")  # FK agent_tools.tool_id
     _before("ci4_agents", "ci4_team")  # FK team_members.agent_id
     _before("kb_categories", "knowledge_bases")  # FK knowledge_bases.category_id
     _before("knowledge_bases", "catalog_ingestion")  # el corpus necesita la KB

@@ -64,8 +64,9 @@ def _ci4_agent_id(slug: str) -> UUID:
 
 # ---------------------------------------------------------------------------
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
-# `api_server.seeds.builtin_tools`). shell_exec + stack_exec + file +
-# semantic-search van a TODOS; http_* a auth-security/devops. La familia git
+# `api_server.seeds.builtin_tools`). file + semantic-search van a TODOS;
+# shell_exec a todos menos al PM; stack_exec la reparte el ROL
+# (`resolved_tool_slugs`); http_* a auth-security/devops. La familia git
 # dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
 # ---------------------------------------------------------------------------
 # R6 (ADR 0089): se concede `delete-file` (wired) para que el agente pueda
@@ -83,14 +84,23 @@ def _ci4_agent_id(slug: str) -> UUID:
 # PROJ-08/F3: `search-code` retirado — no está cableada en el runtime (el grep
 # vive dentro de shell-exec/stack_exec).
 _FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
-# Base que todo agente del equipo recibe: ejecutar comandos del stack
-# (deny-by-default por allowed_commands del proyecto), leer/editar el repo,
-# git vía shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
-# `stack-exec` (ADR 0093) es el HERMANO de `shell-exec` para el toolchain del
-# stack: shell-exec corre en el sandbox fino (git/python), stack-exec lanza el
-# comando en el runtime-template del proyecto (php-phpunit) vía el worker, que es
-# donde existen composer/php/phpunit. Ambos comparten la misma allowlist.
-_BASE_TOOLS = ("shell-exec", "stack-exec", *_FILE_TOOLS, "semantic-search")
+# Base que todo agente del equipo recibe: leer/editar el repo, git vía
+# shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
+#
+# `stack-exec` YA NO ESTÁ AQUÍ, y no es un recorte: se MUEVE a
+# ``CI4Agent.resolved_tool_slugs``, que la deriva del rol usando
+# ``ROLES_THAT_EXECUTE_TOOLCHAIN``. Antes este equipo la repartía a brocha gorda
+# (los diez agentes, PM y reviewer incluidos) mientras ``ROLE_DEFAULT_TOOLS`` era
+# selectivo: dos criterios en competencia dentro del mismo repo, de modo que la
+# respuesta a «¿este agente puede correr composer?» dependía de por qué seed
+# hubiese entrado. Ahora el criterio es UNO y vive escrito en
+# `builtin_role_capabilities`.
+_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
+# El PM del equipo NO recibe `shell-exec`: su propio prompt dice «No escribes ni
+# revisas código a fondo: delega», y una puerta de ejecución cuyo toolchain no
+# existe en el sandbox es justo la trampa del ADR 0162 — acepta el comando y
+# devuelve un «not found» del SO que parece un problema de PATH.
+_PM_TOOLS = (*_FILE_TOOLS, "semantic-search")
 
 
 # Guía de higiene de stack compartida por TODOS los agentes CI4 (fix 2026-07-24).
@@ -151,6 +161,41 @@ class CI4Agent:
     def id(self) -> UUID:
         return _ci4_agent_id(self.slug)
 
+    def resolved_tool_slugs(self) -> tuple[str, ...]:
+        """Tools efectivas del agente, derivadas de su ROL en dos pasos.
+
+        El criterio de QUIÉN ejecuta el toolchain y el de QUIÉN puede escribir en
+        su workspace son UNO cada uno en todo el repo, y viven en
+        `builtin_role_capabilities`. Se leen desde aquí en vez de repetirse
+        agente a agente, porque repetirlos es exactamente como se separaron: este
+        equipo repartía `stack-exec` a los diez —PM y reviewer incluidos—
+        mientras el mapa por rol era selectivo, y la respuesta a «¿este agente
+        puede correr composer?» dependía de por qué seed hubiese entrado.
+
+        Los dos pasos van en este orden y el orden importa poco, porque son
+        disjuntos —nadie quita `stack-exec` ni añade `write-file`—, pero se deja
+        explícito para que quien añada un tercero no tenga que deducirlo:
+
+        1. **Se QUITA** lo que escribe en el workspace si el rol lo tiene montado
+           en sólo lectura (hoy, el reviewer — ADR 0095). No es un recorte de
+           capacidad: desde ahí `write_file` rebota con EROFS, y un error del
+           sistema de ficheros es indistinguible de una ruta mal puesta, así que
+           el agente reintenta. Le sobraba puerta, no le faltaba permiso.
+        2. **Se AÑADE** `stack-exec` si el rol ejecuta el toolchain.
+        """
+        from api_server.seeds.builtin_role_capabilities import (
+            ROLES_THAT_EXECUTE_TOOLCHAIN,
+            ROLES_WITH_READ_ONLY_WORKSPACE,
+            WORKSPACE_MUTATING_TOOLS,
+        )
+
+        slugs = self.tool_slugs
+        if self.role in ROLES_WITH_READ_ONLY_WORKSPACE:
+            slugs = tuple(s for s in slugs if s not in WORKSPACE_MUTATING_TOOLS)
+        if self.role in ROLES_THAT_EXECUTE_TOOLCHAIN and "stack-exec" not in slugs:
+            slugs = (*slugs, "stack-exec")
+        return slugs
+
     @property
     def effective_prompt_es(self) -> str:
         """El prompt ES tal y como lo recibe el agente: persona + higiene.
@@ -164,13 +209,27 @@ class CI4Agent:
         plana que ya no decía lo mismo que el prompt efectivo, justo en la
         parte que evita que el agente gire sin converger. Con la propiedad, las
         dos escrituras salen del mismo sitio y no pueden volver a divergir.
+
+        La higiene NOMBRA `stack_exec`, así que sólo se añade a quien la tiene:
+        antes se le pegaba a los diez agentes, y desde que el reparto lo decide
+        el rol eso dejaría al PM leyendo instrucciones sobre una tool que no
+        puede invocar. Un prompt que nombra lo que no existe quema turnos igual
+        que uno que calla lo que sí existe.
         """
-        return self.system_prompt_es + _CI4_STACK_HYGIENE_ES
+        from api_server.seeds.tool_usage_guidance import execution_guidance
+
+        tools = self.resolved_tool_slugs()
+        hygiene = _CI4_STACK_HYGIENE_ES if "stack-exec" in tools else ""
+        return self.system_prompt_es + execution_guidance(tools)[0] + hygiene
 
     @property
     def effective_prompt_en(self) -> str:
-        """El prompt EN efectivo: persona + higiene (ver ``effective_prompt_es``)."""
-        return self.system_prompt_en + _CI4_STACK_HYGIENE_EN
+        """El prompt EN efectivo: persona + ejecución + higiene (ver ``effective_prompt_es``)."""
+        from api_server.seeds.tool_usage_guidance import execution_guidance
+
+        tools = self.resolved_tool_slugs()
+        hygiene = _CI4_STACK_HYGIENE_EN if "stack-exec" in tools else ""
+        return self.system_prompt_en + execution_guidance(tools)[1] + hygiene
 
     def to_model_config(self) -> dict[str, Any]:
         """model_config SIN provider/model: sólo prompts bilingües.
@@ -255,7 +314,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "ambiguous, ask ONE concrete question before proceeding. Get human "
             "approval before moving a Plan to status='approved'."
         ),
-        tool_slugs=_BASE_TOOLS,
+        tool_slugs=_PM_TOOLS,
     ),
     CI4Agent(
         slug="ci4-architect",
@@ -285,7 +344,10 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             '({"es": ..., "en": ...}). Documentas cada decisión como un ADR '
             "(Contexto, Decisión, Alternativas, Consecuencias) y marcas si es "
             "reversible o one-way door. NO codificas features de negocio, pero SÍ "
-            "escribes esqueletos y módulos base."
+            "escribes esqueletos y módulos base — y andamiar (crear el proyecto "
+            "con el instalador del framework, generar el módulo base, añadir la "
+            "dependencia que decide la arquitectura) es toolchain: va por "
+            "`stack_exec`. «No codifico features» no significa «no ejecuto»."
         ),
         system_prompt_en=(
             "You are the Software Architect of a CodeIgniter 4 + Doctrine ORM 3 "
@@ -301,7 +363,11 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "each decision as an ADR (Context, Decision, Alternatives, "
             "Consequences) and mark whether it is reversible or a one-way door. "
             "You do NOT implement business features, but you DO write skeletons "
-            "and base modules."
+            "and base modules — and scaffolding (creating the project with the "
+            "framework installer, generating the base module, adding the "
+            "dependency the architecture picks) is toolchain work: it goes "
+            "through `stack_exec`. «I don't code features» does not mean «I "
+            "don't execute»."
         ),
         tool_slugs=(*_BASE_TOOLS,),
     ),
@@ -584,8 +650,8 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
         slug="ci4-reviewer",
         name="CodeIgniter 4 — Code Reviewer",
         description=(
-            "Hace cumplir el gate de calidad (cs-fixer + phpstan + psalm + phpcpd) "
-            "y CI en cada PR; vigila el baseline drift; dueño del gate "
+            "Exige y LEE el gate de calidad (cs-fixer + phpstan + psalm + phpcpd) "
+            "que la plataforma ejecuta; vigila el baseline drift; dueño del gate "
             "merge-to-main con veredicto estructurado."
         ),
         role="reviewer",
@@ -596,10 +662,17 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
         review_capability=True,
         system_prompt_es=(
             "Eres el Code Reviewer / Quality Gatekeeper de un proyecto "
-            "CodeIgniter 4. Haces cumplir el contrato de calidad del proyecto "
-            "(p.ej. un script @quality: cs-fixer + análisis estático PHPStan y "
-            "Psalm + detección de duplicados phpcpd + dependencias no usadas) y el "
-            "@ci completo en cada PR. Revisas en orden: (1) correctness — ¿hace lo "
+            "CodeIgniter 4. TÚ NO EJECUTAS LA TOOLCHAIN, y no es un olvido: tu "
+            "copia del workspace está montada en SÓLO LECTURA para que una "
+            "revisión no pueda alterar el trabajo sin commitear del "
+            "implementador. El contrato de calidad del proyecto (cs-fixer, "
+            "análisis estático PHPStan y Psalm, duplicados phpcpd, dependencias "
+            "no usadas) y las suites los corre la PLATAFORMA, y sus resultados te "
+            "llegan en el bloque <test-report>: tu trabajo es EXIGIRLOS y LEERLOS, "
+            "no lanzarlos. Si ese bloque no trae la evidencia que necesitas, dilo "
+            "en la revisión y sé más exigente con lo que no has podido verificar; "
+            "no des por bueno lo que nadie ejecutó. Revisas en orden: (1) "
+            "correctness — ¿hace lo "
             "que dice? ¿los tests cubren los casos reales? (2) multi-tenancy / "
             "contexto — ¿alguna query sin el filtro de contexto? (3) seguridad — "
             "secretos, inputs, inyección. (4) mantenibilidad — naming, tamaño de "
@@ -614,10 +687,17 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
         ),
         system_prompt_en=(
             "You are the Code Reviewer / Quality Gatekeeper of a CodeIgniter 4 "
-            "project. You enforce the project's quality contract (e.g. a @quality "
-            "script: cs-fixer + PHPStan and Psalm static analysis + phpcpd "
-            "duplication detection + unused dependencies) and the full @ci on "
-            "every PR. You review in order: (1) correctness — does it do what it "
+            "project. YOU DO NOT RUN THE TOOLCHAIN, and that is deliberate: your "
+            "copy of the workspace is mounted READ-ONLY so that a review cannot "
+            "alter the implementer's uncommitted work. The project's quality "
+            "contract (cs-fixer, PHPStan and Psalm static analysis, phpcpd "
+            "duplication detection, unused dependencies) and the test suites are "
+            "run by the PLATFORM, and their results reach you in the "
+            "<test-report> block: your job is to DEMAND and READ them, not to "
+            "launch them. If that block lacks the evidence you need, say so in "
+            "the review and be stricter about whatever you could not verify; "
+            "never bless what nobody executed. You review in order: (1) "
+            "correctness — does it do what it "
             "says? do the tests cover real cases? (2) multi-tenancy / context — "
             "any query missing the context filter? (3) security — secrets, inputs, "
             "injection. (4) maintainability — naming, function size, duplication. "
@@ -781,7 +861,9 @@ async def seed_ci4_agent_tools(session: AsyncSession) -> int:
 
     links = 0
     for agent in CI4_AGENTS:
-        keep_ids = [str(_tool_id(slug)) for slug in agent.tool_slugs]
+        # `resolved_tool_slugs()`, no `tool_slugs`: `stack-exec` la añade el ROL
+        # (ver el método). Iterar el campo crudo sembraría el equipo sin ella.
+        keep_ids = [str(_tool_id(slug)) for slug in agent.resolved_tool_slugs()]
         for tool_id in keep_ids:
             await session.execute(
                 _UPSERT_AGENT_TOOL_SQL,

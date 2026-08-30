@@ -111,7 +111,14 @@ async def _drop_create_db() -> None:
 #: Añadir una entrada exige que exista la migración que la revoca. Hoy:
 #:   · `approval_policy_backfill_0133` → migración 0138 (respaldo interno de la
 #:     0133; la aplicación no lo consulta y no debe poder leerlo).
-_APP_REVOKED_TABLES: tuple[str, ...] = ("approval_policy_backfill_0133",)
+#:   · `agent_tools_backfill_0145` → la propia migración 0145, que revoca en el
+#:     mismo `upgrade` que crea la tabla (aprendido de la 0138: los default
+#:     privileges alcanzan a toda tabla que Alembic cree, así que revocar
+#:     «después» ya es tarde).
+_APP_REVOKED_TABLES: tuple[str, ...] = (
+    "approval_policy_backfill_0133",
+    "agent_tools_backfill_0145",
+)
 
 
 async def _grant_app_user_existing_tables() -> None:

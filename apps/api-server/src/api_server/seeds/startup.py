@@ -81,4 +81,86 @@ async def ensure_builtin_catalog(
             return {"seeded": False, "builtin_kbs": 0}
 
 
-__all__ = ["ensure_builtin_catalog"]
+async def refresh_builtin_agent_capabilities(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> dict[str, Any]:
+    """Re-aplica en cada arranque las tools y skills de los agentes BUILT-IN.
+
+    Por qué esto existe, y por qué no basta la red de arriba: aquélla siembra
+    **cuando falta**, y el defecto que cierra ésta es otro — el catálogo estaba
+    presente y RANCIO. Medido el 2026-08-30: el código repartía `stack-exec` a
+    seis roles desde julio y la base de datos llevaba desde el **2026-06-28** sin
+    tocarse, porque el seed completo es un CLI manual que nada dispara.
+
+    Lo que costó: un run real pidió `stack_exec` a la primera, recibió «tool not
+    allowed in this mode», y se pasó 24 llamadas buscando `php` dentro de un
+    sandbox de Python hasta agotar reintentos — 2,22 USD y 62,2k tokens sin
+    instalar nada. Y antes de eso, alguien ya había parcheado a mano las copias
+    de dos tenants (junio y julio) sin dejar nada que lo impidiera repetirse.
+
+    Se re-aplica SIEMPRE, no sólo cuando falta, y eso es deliberado: las tools de
+    un agente built-in son de la PLATAFORMA. Quien quiera personalizarlas adopta
+    una copia —para eso existe la adopción— y esa copia no se toca aquí. Volver a
+    afirmar la intención del catálogo en cada arranque es exactamente lo que
+    «built-in» significa. Las cinco funciones son upserts idempotentes que además
+    PODAN los links fuera del spec, así que retirar una tool en el código también
+    la retira de la base — que es lo que hace que un arreglo aterrice y no sólo
+    quede escrito.
+
+    **Los cinco pasos, y por qué son cinco.** El cableado de capacidades vive
+    repartido por roster: `BUILTIN_AGENTS` tiene el suyo, el equipo CodeIgniter 4
+    tiene el suyo y el QA E2E Automator vive fuera de ambas tuplas. Una primera
+    versión de esta función llamaba sólo a los dos primeros y dejaba fuera
+    justamente a los diez agentes CI4, que son el roster del incidente: habría
+    parecido que arreglaba el problema mientras el equipo que lo sufrió seguía
+    igual.
+
+    **Una transacción por paso**, y no una para los cinco: si un roster no está
+    sembrado todavía, su upsert revienta contra la FK de `agent_tools`, y con una
+    transacción común ese fallo arrastraría también a los pasos que sí habían
+    ido bien. Con el reparto, lo que se puede afirmar se afirma.
+
+    Best-effort en su conjunto: un fallo se loguea y NO impide arrancar — un
+    catálogo desactualizado deja agentes peor equipados; no arrancar deja la
+    plataforma entera fuera.
+    """
+    from api_server.seeds.builtin_agents import (
+        seed_builtin_agent_skills,
+        seed_builtin_agent_tools,
+    )
+    from api_server.seeds.ci4_team import seed_ci4_agent_skills, seed_ci4_agent_tools
+    from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator_tools
+
+    pasos: tuple[tuple[str, Any], ...] = (
+        ("agent_tools", seed_builtin_agent_tools),
+        ("agent_skills", seed_builtin_agent_skills),
+        ("ci4_agent_tools", seed_ci4_agent_tools),
+        ("ci4_agent_skills", seed_ci4_agent_skills),
+        ("qa_e2e_automator_tools", seed_qa_e2e_automator_tools),
+    )
+
+    aplicados: dict[str, int] = {}
+    fallidos: list[str] = []
+    for nombre, seed in pasos:
+        try:
+            async with sessionmaker() as session, session.begin():
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:k)"), {"k": _CATALOG_LOCK_KEY}
+                )
+                aplicados[nombre] = int(await seed(session))
+        except Exception:
+            fallidos.append(nombre)
+            _log.warning("startup.builtin_agent_capabilities_step_failed", step=nombre)
+
+    if fallidos:
+        _log.warning(
+            "startup.builtin_agent_capabilities_partial",
+            applied=aplicados,
+            failed=fallidos,
+        )
+    else:
+        _log.info("startup.builtin_agent_capabilities_refreshed", applied=aplicados)
+    return {"refreshed": not fallidos, "applied": aplicados, "failed": fallidos}
+
+
+__all__ = ["ensure_builtin_catalog", "refresh_builtin_agent_capabilities"]
