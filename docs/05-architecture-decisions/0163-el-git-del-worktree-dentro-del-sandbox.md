@@ -92,13 +92,39 @@ Dos cambios que van juntos:
 
 ### Qué se gana
 
-| Situación                                              | Con las guardas actuales                   | Sin `.git` en el sandbox               |
-| ------------------------------------------------------ | ------------------------------------------ | -------------------------------------- |
-| El agente borra `.git`                                 | bloqueado por una puerta, abierto por otra | **no hay nada que borrar**             |
-| `composer create-project .`                            | **sigue fallando**                         | **funciona**                           |
-| `npm create`, `django-admin startproject`, `rails new` | igual de rotos                             | funcionan                              |
-| El agente ve un repo git que no funciona               | sí, y gasta turnos en ello                 | no: ve un directorio, que es la verdad |
-| Superficie de fallo                                    | dos guardas que mantener                   | la clase desaparece                    |
+| Situación                            | Con las guardas actuales                   | Sin `.git` en el sandbox               |
+| ------------------------------------ | ------------------------------------------ | -------------------------------------- |
+| El agente borra `.git`               | bloqueado por una puerta, abierto por otra | **no hay nada que borrar**             |
+| `composer create-project .`          | **sigue fallando**                         | **funciona**                           |
+| El agente ve un repo que no funciona | sí, y gasta turnos en ello                 | no: ve un directorio, que es la verdad |
+| Superficie de fallo                  | dos guardas que mantener                   | la clase desaparece                    |
+
+**Corrección del 2026-08-31, medida.** Una versión anterior de este ADR
+afirmaba que `npm create`, `django-admin startproject`, `rails new` y
+`cargo new` fallaban igual. **Es falso**, y conviene que conste porque el
+argumento se apoyaba en ello. Comprobado ejecutándolos en sus propias imágenes
+de runtime con un `.git` presente:
+
+| Comando                     | Con `.git` delante                           |
+| --------------------------- | -------------------------------------------- |
+| `composer create-project .` | **falla** — «Project directory is not empty» |
+| `npm init -y`               | funciona                                     |
+| `cargo init`                | funciona                                     |
+| `cargo new .`               | funciona                                     |
+
+Es decir: `composer create-project` es MÁS ESTRICTO que la mayoría.
+
+La corrección no debilita la decisión: la reformula, y en una forma que
+generaliza mejor. **El problema no es que todos los andamiadores fallen; es que
+`.git` es un cable trampa invisible.** El agente no puede ver que ese fichero
+sostiene su propia entrega, tiene `rm` a mano, y basta UNA herramienta
+estricta —o una limpieza de directorio que le parezca razonable— para que lo
+corte. Que hoy sólo conozcamos un andamiador que lo fuerza no es una garantía:
+es el único que hemos probado.
+
+Y hay una asimetría que ninguna estadística de andamiadores cambia: el coste de
+perderlo es **el trabajo entero de la tarea**, y el beneficio de tenerlo dentro
+del sandbox es **cero** — ahí no sirve para nada.
 
 El punto que más pesa es el segundo: **hoy la plataforma no puede andamiar un
 proyecto nuevo por el camino canónico de su propio stack**, y eso afecta a todos
