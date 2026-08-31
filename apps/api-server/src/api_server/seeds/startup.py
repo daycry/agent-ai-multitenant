@@ -107,17 +107,24 @@ async def refresh_builtin_agent_capabilities(
     la retira de la base — que es lo que hace que un arreglo aterrice y no sólo
     quede escrito.
 
-    **Los seis pasos, y por qué son seis.** El cableado de capacidades vive
-    repartido por roster: `BUILTIN_AGENTS` tiene el suyo, el equipo CodeIgniter 4
-    tiene el suyo y el QA E2E Automator vive fuera de ambas tuplas (y por eso
-    llevaba cuatro skills declaradas y cero en la base: nadie las escribía).
-    Una primera
-    versión de esta función llamaba sólo a los dos primeros y dejaba fuera
-    justamente a los diez agentes CI4, que son el roster del incidente: habría
-    parecido que arreglaba el problema mientras el equipo que lo sufrió seguía
-    igual.
+    **Los once pasos, y por qué son once.** Hay tres rosters —`BUILTIN_AGENTS`,
+    el equipo CodeIgniter 4 y el QA E2E Automator, que vive fuera de ambas
+    tuplas— y de cada uno hay que re-afirmar TRES cosas: que el agente existe,
+    que tiene sus tools y skills, y que pertenece a su equipo.
 
-    **Una transacción por paso**, y no una para los cinco: si un roster no está
+    Las dos primeras versiones de esta función se quedaron cortas por el mismo
+    sitio, y conviene que conste porque el error se repite:
+
+    * la primera llamaba sólo a los dos pasos de `BUILTIN_AGENTS` y dejaba fuera
+      a los diez agentes CI4, que son el roster del incidente — habría parecido
+      que arreglaba el problema mientras el equipo que lo sufrió seguía igual;
+    * la segunda re-aplicaba CAPACIDADES sobre agentes que daba por presentes.
+      Al añadir `ci4-tech-writer` al roster, el arranque falló contra la FK de
+      `agent_tools.agent_id` y el equipo se quedó a diez miembros. «Las tools de
+      un agente built-in son de la plataforma» no se sostiene si el agente en sí
+      sólo llega corriendo el CLI a mano.
+
+    **Una transacción por paso**, y no una para los once: si un roster no está
     sembrado todavía, su upsert revienta contra la FK de `agent_tools`, y con una
     transacción común ese fallo arrastraría también a los pasos que sí habían
     ido bien. Con el reparto, lo que se puede afirmar se afirma.
@@ -129,20 +136,39 @@ async def refresh_builtin_agent_capabilities(
     from api_server.seeds.builtin_agents import (
         seed_builtin_agent_skills,
         seed_builtin_agent_tools,
+        seed_builtin_agents,
     )
-    from api_server.seeds.ci4_team import seed_ci4_agent_skills, seed_ci4_agent_tools
+    from api_server.seeds.builtin_teams import seed_builtin_teams
+    from api_server.seeds.ci4_team import (
+        seed_ci4_agent_skills,
+        seed_ci4_agent_tools,
+        seed_ci4_agents,
+        seed_ci4_team,
+    )
     from api_server.seeds.qa_e2e_automator import (
+        seed_qa_e2e_automator,
         seed_qa_e2e_automator_skills,
         seed_qa_e2e_automator_tools,
     )
 
+    # EL ORDEN ES LA FK, no una preferencia. Los agentes primero (upsert por
+    # uuid5 estable), luego sus capacidades (`agent_tools.agent_id`,
+    # `agent_skills.agent_id`), y al final la pertenencia al equipo
+    # (`team_members.agent_id`). Invertirlo revienta contra la clave ajena, que
+    # es EXACTAMENTE lo que pasó el 2026-08-30 al añadir `ci4-tech-writer`: sin
+    # los pasos de agentes, dos de seis fallaron y el equipo se quedó a diez.
     pasos: tuple[tuple[str, Any], ...] = (
+        ("agents", seed_builtin_agents),
+        ("qa_e2e_automator", seed_qa_e2e_automator),
+        ("ci4_agents", seed_ci4_agents),
         ("agent_tools", seed_builtin_agent_tools),
         ("agent_skills", seed_builtin_agent_skills),
         ("ci4_agent_tools", seed_ci4_agent_tools),
         ("ci4_agent_skills", seed_ci4_agent_skills),
         ("qa_e2e_automator_tools", seed_qa_e2e_automator_tools),
         ("qa_e2e_automator_skills", seed_qa_e2e_automator_skills),
+        ("teams", seed_builtin_teams),
+        ("ci4_team", seed_ci4_team),
     )
 
     aplicados: dict[str, int] = {}
