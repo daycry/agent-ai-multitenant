@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -208,6 +210,48 @@ class CommitTrailers:
         ]
 
 
+def _bares_candidatos(worktree_path: Path) -> list[Path]:
+    """Los bare repos del proyecto al que pertenece este worktree.
+
+    Disposición fijada por `git_repos`: ``<project>/worktrees/<task_id>`` junto a
+    ``<project>/repos/<repo>.git``. Se derivan en vez de recibirlos por parámetro
+    para no cambiar la firma de las tres llamadas vivas de `commit_task`.
+    """
+    return sorted((worktree_path.parent.parent / "repos").glob("*.git"))
+
+
+def _bare_de(worktree_path: Path) -> Path | None:
+    """El bare que REGISTRA este worktree, o ``None`` si ninguno lo hace."""
+    for bare in _bares_candidatos(worktree_path):
+        if (bare / "worktrees" / worktree_path.name).is_dir():
+            return bare
+    return None
+
+
+def _worktree_lock(worktree_path: Path, *, motivo: str) -> Path | None:
+    """Marca el worktree como bloqueado para que ``git worktree prune`` lo respete.
+
+    Devuelve el bare sobre el que se tomó el lock, o ``None`` si no se pudo.
+    """
+    bare = _bare_de(worktree_path)
+    if bare is None:
+        return None
+    try:
+        _run_git("--git-dir", str(bare), "worktree", "lock", str(worktree_path), "--reason", motivo)
+    except GitCommandError as exc:
+        # Ya bloqueado (un reintento tras un worker muerto) no es un fallo.
+        if "already locked" in str(exc).lower():
+            return bare
+        _log.warning("worktree.lock_failed", worktree=str(worktree_path), error=str(exc))
+        return None
+    return bare
+
+
+def _worktree_unlock(worktree_path: Path, bare: Path) -> None:
+    with contextlib.suppress(GitCommandError):
+        _run_git("--git-dir", str(bare), "worktree", "unlock", str(worktree_path))
+
+
 def repair_worktree_link(worktree_path: Path) -> bool:
     """Restaura ``<worktree>/.git`` si falta. Devuelve ``True`` si reparó.
 
@@ -240,11 +284,7 @@ def repair_worktree_link(worktree_path: Path) -> bool:
     if (worktree_path / ".git").exists():
         return False
 
-    # Disposición fijada por `git_repos`: <project>/worktrees/<task_id> junto a
-    # <project>/repos/<repo>.git. Se derivan los bares candidatos en vez de
-    # recibir la ruta, para no añadir un parámetro a las tres llamadas vivas.
-    project_root = worktree_path.parent.parent
-    bares = sorted((project_root / "repos").glob("*.git"))
+    bares = _bares_candidatos(worktree_path)
     if not bares:
         _log.warning(
             "worktree.link_missing_no_bare",
@@ -266,6 +306,10 @@ def repair_worktree_link(worktree_path: Path) -> bool:
         with contextlib.suppress(GitCommandError):
             _run_git("--git-dir", str(bare), "worktree", "repair", str(worktree_path))
         if (worktree_path / ".git").exists():
+            # Un lock superviviente es la huella de un worker que murió con el
+            # puntero oculto. Se suelta al reparar: si no, ese worktree quedaría
+            # a salvo del reaper para siempre.
+            _worktree_unlock(worktree_path, bare)
             _log.warning(
                 "worktree.link_repaired",
                 worktree=str(worktree_path),
@@ -286,6 +330,114 @@ def repair_worktree_link(worktree_path: Path) -> bool:
         ),
     )
     return False
+
+
+@contextlib.contextmanager
+def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
+    """Retira ``<worktree>/.git`` mientras dura el bloque y lo repone al salir.
+
+    ADR 0163. El puntero del worktree es, dentro del sandbox del agente, un
+    fichero **inútil** (apunta a metadatos que no se montan: todo git sale 128),
+    **imprescindible** para el worker (que commitea a través de él) y **un
+    obstáculo** (``composer create-project`` se niega a andamiar en un directorio
+    no vacío). Con esas tres a la vez y ``rm`` en la allowlist, que el agente lo
+    corte no es un accidente raro: es lo que va a pasar — y pasó el 2026-08-31,
+    dejando CodeIgniter instalado y fuera de toda rama.
+
+    Quitarlo de en medio elimina la clase entera en vez de taparla: no hay nada
+    que borrar, y el andamiador canónico de cada stack funciona.
+
+    Garantías, que son las que hacen esto seguro:
+
+    * **Se repone SIEMPRE**, también si el run revienta o lo cancelan: el
+      ``finally`` es la razón de que esto sea un gestor de contexto y no dos
+      llamadas sueltas que alguien pueda desemparejar.
+    * **Se repone el contenido EXACTO** que había, leído antes de retirarlo. No
+      se reconstruye por convención: si mañana git cambia el formato del puntero,
+      esto sigue siendo correcto.
+    * **Si el andamiador dejó su PROPIO ``.git``** —``cargo new`` lo hace— se
+      retira antes de reponer el nuestro. El versionado lo lleva el worktree, no
+      el scaffolder; es lo que hace ``--remove-vcs`` de composer. Se registra,
+      porque descartar el repo que otra herramienta creyó dejar hecho no debe
+      ser silencioso.
+
+    ``yield`` devuelve ``True`` si de verdad se retiró algo. Con un worktree sin
+    puntero (o un directorio que no lo es) no hace nada y devuelve ``False``.
+    """
+    enlace = worktree_path / ".git"
+    contenido: bytes | None = None
+    bare_bloqueado: Path | None = None
+
+    if enlace.is_file():
+        # EL LOCK VA PRIMERO, y es lo que hace segura toda la maniobra. Sin el
+        # puntero, git considera el worktree `prunable`: el `git worktree prune`
+        # que dispara una tarea hermana al arrancar —o el reaper programado—
+        # borraría sus metadatos, y entonces reponer el puntero no sirve de nada
+        # porque ya no hay a dónde apuntar. Sería EXACTAMENTE el incidente que
+        # esto viene a evitar, provocado por la propia cura.
+        #
+        # `git worktree lock` es el mecanismo que git prevé para un worktree
+        # temporalmente no disponible. Medido: con lock, un `prune` concurrente
+        # deja los metadatos intactos y el commit posterior entra.
+        bare_bloqueado = _worktree_lock(worktree_path, motivo="agent run in progress")
+        if bare_bloqueado is None:
+            # Sin lock no se oculta: preferimos que `composer create-project`
+            # falle a arriesgar el deliverable de la tarea.
+            _log.warning(
+                "worktree.link_hide_skipped",
+                worktree=str(worktree_path),
+                note="no se pudo bloquear el worktree; se deja el `.git` en su sitio",
+            )
+        else:
+            try:
+                contenido = enlace.read_bytes()
+                enlace.unlink()
+            except OSError as exc:
+                _log.warning(
+                    "worktree.link_hide_failed", worktree=str(worktree_path), error=str(exc)
+                )
+                contenido = None
+                _worktree_unlock(worktree_path, bare_bloqueado)
+                bare_bloqueado = None
+
+    try:
+        yield contenido is not None
+    finally:
+        if contenido is not None:
+            try:
+                # Un `.git` que NO es el nuestro sólo puede haberlo puesto algo de
+                # dentro del sandbox. Se retira: el worktree es quien versiona.
+                if enlace.exists():
+                    intruso = "directorio" if enlace.is_dir() else "fichero"
+                    if enlace.is_dir():
+                        shutil.rmtree(enlace, ignore_errors=True)
+                    else:
+                        with contextlib.suppress(OSError):
+                            enlace.unlink()
+                    _log.warning(
+                        "worktree.scaffolder_git_discarded",
+                        worktree=str(worktree_path),
+                        kind=intruso,
+                        note=(
+                            "el andamiador dejó su propio `.git` y se descarta: "
+                            "el versionado lo lleva el worktree del plan"
+                        ),
+                    )
+                enlace.write_bytes(contenido)
+            except OSError as exc:
+                # No se puede tirar el run por esto: `commit_task` repara.
+                _log.error(
+                    "worktree.link_restore_failed",
+                    worktree=str(worktree_path),
+                    error=str(exc),
+                    note="`repair_worktree_link` intentará reconstruirlo al commitear",
+                )
+        if bare_bloqueado is not None:
+            # El lock se suelta SIEMPRE. Un worktree que queda bloqueado tras un
+            # run muerto nunca lo podaría el reaper, y el disco crecería sin que
+            # nadie lo notara. Si el proceso muere antes de llegar aquí, el lock
+            # sobrevive a propósito: es lo que permite que el reintento repare.
+            _worktree_unlock(worktree_path, bare_bloqueado)
 
 
 def commit_task(
