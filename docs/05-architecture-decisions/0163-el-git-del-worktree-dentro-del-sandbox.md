@@ -1,8 +1,9 @@
 ---
 adr_id: "0163"
 title: "ADR 0163: El `.git` del worktree dentro del sandbox del agente"
-status: proposed
+status: accepted
 date: 2026-08-31
+decided_on: 2026-08-31
 deciders: [operador]
 relates_to: [0012, 0019, 0021, 0040, 0072, 0089, 0093, 0095, 0162]
 plan_referenced: 2026-08-29-hallazgos-e2e-hello-world-v2
@@ -75,20 +76,66 @@ fallando porque el directorio sigue sin estar vacío. Hemos convertido «destruy
 el repositorio en silencio» en «falla más alto», que es mejor, pero la tarea
 sigue sin poder hacerse por el camino natural.
 
-## Decisión que se propone
+## Decisión
 
 **Que el `.git` del worktree no exista dentro del sandbox mientras corre el
-agente, y que el worker deje de depender de él para commitear.**
+agente.**
 
-Dos cambios que van juntos:
+Tres piezas, y las tres hacen falta:
 
-1. **El worker retira el puntero antes de lanzar el contenedor y lo repone
-   después.** El agente ve un directorio de trabajo normal.
-2. **`commit_task` usa rutas explícitas**:
-   `git --git-dir=<bare>/worktrees/<task_id> --work-tree=<worktree> add -A`.
-   Las dos rutas las conoce el worker (las construyó al provisionar). Verificado
-   en laboratorio: con `.git` borrado, esta forma commitea sin problema mientras
-   los metadatos existan — y con el paso (1) ya nadie los rompe.
+1. **El worker retira el puntero antes de lanzar el contenedor y lo repone al
+   salir** (`git_link_hidden`, un gestor de contexto para que el `finally` no se
+   pueda desemparejar). El agente ve un directorio de trabajo normal — que es la
+   verdad, porque git ahí dentro nunca funcionó. Se repone el contenido EXACTO
+   leído antes, no uno reconstruido por convención. Sólo se aplica con el
+   workspace ESCRIBIBLE: un run de review monta el worktree ajeno de sólo lectura
+   (ADR 0095), así que ahí no hay nada que proteger y tocarlo arriesgaría pisar a
+   un run concurrente.
+
+2. **Se bloquea el worktree con `git worktree lock` mientras dura la ventana.**
+   Esta es la pieza que hace segura toda la maniobra, y NO estaba en la primera
+   versión de esta decisión: sin el puntero, git considera el worktree
+   `prunable`, y el `git worktree prune` que dispara **cualquier tarea hermana
+   del mismo proyecto** al provisionarse —o el reaper de las 03:30— se lleva sus
+   metadatos. Reponer el puntero después no sirve de nada porque ya no hay a
+   dónde apuntar: sería el incidente original **provocado por la propia cura**, y
+   esta vez sin que ningún agente borrara nada.
+
+3. **La provisión repara el enlace antes de sincronizar** (`repair_worktree_link`
+   antes de `sync_to_head`). Cubre la muerte dura del worker —hard limit de
+   Celery, OOM, reinicio del contenedor— que no ejecuta el `finally`. Sin esto,
+   el reintento moría en `sync_to_head` y la tarea quedaba en
+   `workspace_unavailable` en CADA relanzamiento. El orden importa: reparar
+   después de sincronizar no serviría, porque nunca se llega.
+
+El lock sobrevive a la muerte dura a propósito — es lo que impide que un prune se
+lleve los metadatos antes de que el reintento repare— y `repair_worktree_link`
+lo suelta al reparar. Un worktree que quedara bloqueado sería inmortal para el
+reaper y el disco crecería sin que nadie lo notara.
+
+### La mitad que se propuso y NO se implementa, y por qué
+
+La primera versión de esta decisión pedía además que `commit_task` usara
+`--git-dir=<bare>/worktrees/<id> --work-tree=<worktree>` «para que el worker deje
+de depender de un fichero que vive en el workspace escribible del agente».
+
+**Esa afirmación es falsa, y se comprobó leyendo el código.** `commit_task` no es
+el único camino del worker que corre git DENTRO del worktree:
+
+| Camino                          | Qué ejecuta                                         |
+| ------------------------------- | --------------------------------------------------- |
+| `sync_to_head` (`git_repos.py`) | `git -C <wt> fetch` / `reset --hard` / `clean -fdx` |
+| `compute_task_review_diff`      | el diff de la tarea, sobre el worktree              |
+| `commit_task`                   | `git add -A` y `git commit`                         |
+
+Cambiar sólo el tercero no elimina la dependencia: la deja intacta en los otros
+dos y la mueve de sitio en uno. El puntero hay que reponerlo igual, así que la
+«mitad 2» habría sido una capa más sobre un fallo ya cubierto tres veces —
+acumulación, no diseño.
+
+Lo que aquella mitad perseguía —que un puntero ausente no pueda costar el trabajo
+de la tarea— lo consiguen el lock y la reparación, y de forma que vale para TODOS
+los caminos, no sólo para el commit.
 
 ### Qué se gana
 
@@ -206,13 +253,39 @@ descarta, y eso tiene que estar escrito donde alguien lo lea.
 - La guía de `shell_exec` que hoy explica que «git sale 128 aquí» deja de tener
   sentido y hay que reescribirla: ya no habrá repo que confunda.
 
-## Lo que hay que medir antes de aceptarlo
+## Lo que se midió antes de aceptarlo
 
-1. Que `composer create-project codeigniter4/framework .` termina en verde en un
-   worktree sin `.git`. Es el caso que motivó el ADR.
-2. Que el commit con `--git-dir`/`--work-tree` produce el mismo sha y los mismos
-   trailers que el camino actual.
-3. Que un run abortado a mitad deja el worktree reponible.
-4. Que un andamiador que crea su propio `.git` —`cargo new` es el caso
-   conocido— acaba con el puntero del worktree en su sitio y no con el repo
-   que se inventó el scaffolder.
+Los cuatro puntos que esta decisión se puso a sí misma, más el que salió de la
+auditoría adversarial (cinco agentes, 2026-08-31):
+
+1. **El andamiaje funciona.** `composer create-project codeigniter4/framework .`
+   falla con el puntero delante («Project directory is not empty») y el worktree
+   queda vacío sin él. Verificado en la imagen de runtime real.
+2. **El commit y el push no cambian.** Ciclo completo con `commit_task` real:
+   sha de 40, trailers `Plan-Id`/`Task-Id` en su sitio, la rama del plan llega al
+   remoto. El índice vive en los metadatos del bare y no se toca.
+3. **Un run abortado deja el worktree reponible.** El `finally` repone byte a
+   byte, también al propagarse una excepción; y si el proceso muere de golpe, la
+   provisión del reintento repara.
+4. **Un andamiador con su propio `.git`** (`cargo new`) acaba con el puntero del
+   worktree en su sitio, no con el repo que se inventó el scaffolder.
+5. **El prune concurrente** —el que destapó la auditoría— ya no puede podar el
+   worktree oculto:
+
+   |          | Con `.git` oculto + `prune` de una hermana  |
+   | -------- | ------------------------------------------- |
+   | sin lock | metadatos **podados**, commit roto (rc=128) |
+   | con lock | metadatos **intactos**, commit OK           |
+
+21 tests lo fijan, todos verificados mutando producción: sin lock; sin soltar el
+lock; sin ocultar; ocultando también en review; y sin reparar en la provisión.
+
+## Lo que esta decisión NO garantiza
+
+- **La ventana existe.** Entre retirar y reponer hay hasta dos horas en las que
+  el worktree depende del lock. Si alguien añade un camino que pode SIN respetar
+  el lock, vuelve el problema. El lock es un fichero `locked` en los metadatos:
+  `git worktree prune` lo respeta, un `rm -rf` a mano no.
+- **No cubre un worktree que ya estaba roto** antes de este cambio. El del
+  incidente del 2026-08-31 sigue en disco sin registrar, y es irrecuperable
+  porque sus metadatos se podaron antes de que existiera el lock.
