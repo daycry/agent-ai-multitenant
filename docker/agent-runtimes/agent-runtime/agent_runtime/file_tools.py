@@ -22,6 +22,10 @@ _MAX_READ_BYTES = 1_000_000
 _CLI_ARTIFACTS = frozenset({".claude", ".claude.json"})
 
 
+#: El enlace del worktree con su rama. Ver :meth:`_mutable_path`.
+_GIT_DIR = ".git"
+
+
 @dataclass
 class WorkspaceFiles:
     """File tools confined to one workspace directory."""
@@ -43,6 +47,49 @@ class WorkspaceFiles:
             return ToolResult(ok=False, error=f"path escapes the workspace: {raw}")
         return candidate
 
+    def _mutable_path(self, raw: object) -> Path | ToolResult:
+        """Como :meth:`_safe_path`, pero además prohíbe tocar ``.git``.
+
+        Medido en vivo el 2026-08-31: un agente que intentaba
+        ``composer create-project codeigniter4/framework .`` —que exige
+        directorio vacío— borró ``.git`` para quitarlo de en medio. Instaló el
+        framework correctamente y `php spark routes` respondió, pero al cerrar la
+        tarea ``git add -A`` salió con «fatal: not a git repository» y el
+        deliverable se perdió: hecho y no entregable.
+
+        Desde el lado del agente eso NO es un error. Es un fichero que estorba, y
+        nada le dice que sostiene los principios 4 y 5 del sistema (worktree por
+        tarea; plan = rama con trailers). La guarda tiene que estar aquí, no en
+        el prompt: un prompt se puede ignorar bajo presión de una herramienta que
+        insiste en un directorio vacío.
+
+        Por qué la protección que había no lo cubría, que es lo que hay que
+        recordar: ``file_delete`` ya rechaza directorios «so a stray path cannot
+        wipe a subtree», y en un clon normal eso basta porque ``.git`` ES un
+        directorio. En un WORKTREE es un FICHERO con un puntero ``gitdir:``, así
+        que la guarda dejaba de aplicar justo donde vive el modelo del sistema.
+        """
+        resolved = self._safe_path(raw)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        root = Path(self.root).resolve()
+        try:
+            partes = resolved.relative_to(root).parts
+        except ValueError:  # pragma: no cover - _safe_path ya lo garantiza
+            return ToolResult(ok=False, error=f"path escapes the workspace: {raw}")
+        if _GIT_DIR in partes:
+            return ToolResult(
+                ok=False,
+                error=(
+                    "refusing to touch '.git': it links this worktree to the "
+                    "plan branch, and without it your work cannot be committed "
+                    "or pushed. If a command demands an empty directory, run it "
+                    "in a subdirectory and move the result, or use its "
+                    "--no-install / existing-directory mode."
+                ),
+            )
+        return resolved
+
     def file_read(self, args: dict[str, object]) -> ToolResult:
         resolved = self._safe_path(args.get("path"))
         if isinstance(resolved, ToolResult):
@@ -58,7 +105,7 @@ class WorkspaceFiles:
         return ToolResult(ok=True, output={"path": args.get("path"), "content": content})
 
     def file_write(self, args: dict[str, object]) -> ToolResult:
-        resolved = self._safe_path(args.get("path"))
+        resolved = self._mutable_path(args.get("path"))
         if isinstance(resolved, ToolResult):
             return resolved
         content = args.get("content", "")
@@ -81,7 +128,7 @@ class WorkspaceFiles:
         every file tool; refuses a directory so a stray `path` cannot wipe a
         subtree.
         """
-        resolved = self._safe_path(args.get("path"))
+        resolved = self._mutable_path(args.get("path"))
         if isinstance(resolved, ToolResult):
             return resolved
         if resolved.is_dir():

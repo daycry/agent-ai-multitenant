@@ -678,7 +678,7 @@ async def _provision_worktree(
     from shared_test_runtimes import catalog as runtime_catalog
 
     from workers.git_repos import BareRepoManager, WorktreeManager
-    from workers.plan_git import worktree_coordinates
+    from workers.plan_git import repair_worktree_link, worktree_coordinates
 
     def _git() -> str:
         # Coordenadas ÚNICAS (hallazgo #10a): mismo (layout, branch) que resuelven la
@@ -706,6 +706,21 @@ async def _provision_worktree(
                 + " — el historial del proyecto se perdió (¿wipe/pérdida de data_root?)."
             )
         path = wt.add(task_id, branch=branch)
+        # ADR 0163: un worker que muere DE GOLPE —hard limit de Celery, OOM,
+        # reinicio del contenedor— no ejecuta el `finally` de `git_link_hidden` y
+        # deja el worktree sin su puntero. Sin esta línea el reintento moría aquí
+        # mismo (`sync_to_head` sale 128) y la tarea quedaba en
+        # `workspace_unavailable` en CADA relanzamiento: irrecuperable sin manos.
+        #
+        # La red que ya existe vive en `commit_task`, y a `commit_task` no se
+        # llega si la provisión revienta antes. Repararlo aquí es lo que la
+        # convierte en una red de verdad. Lo destapó la auditoría del 2026-08-31
+        # midiendo la muerte dura, no razonando sobre ella.
+        #
+        # El lock del worktree sobrevive a esa muerte a propósito: es lo que
+        # impide que un prune se lleve los metadatos antes de que reparemos.
+        # `repair_worktree_link` lo suelta al terminar.
+        repair_worktree_link(Path(path))
         # task_wf_24 (C-06): el `clean -fdx` del sync barría también `vendor/`,
         # `node_modules/`, `.venv/`… así que cada reintento reinstalaba en frío.
         # Los nombres los declara cada plantilla de runtime; se pasa la UNIÓN
@@ -2222,17 +2237,33 @@ async def conduct_execution(
             usage=dict(_EMPTY_USAGE),
         )
     else:
-        result, approval, check_declarations = await _launch_and_stream(
-            request,
-            settings=settings,
-            sessionmaker=sessionmaker,
-            redis=redis,
-            prepared=prepared,
-            workspace=workspace,
-            exec_id=exec_id,
-            runner=runner,
-            cancel_poll_interval_s=cancel_poll_interval_s,
-        )
+        # ADR 0163: el `.git` del worktree NO existe mientras corre el agente.
+        # Dentro del sandbox es inutil (apunta a metadatos no montados: todo git
+        # sale 128), y en cambio estorba a los andamiadores que exigen directorio
+        # vacio. El 2026-08-31 un agente lo borro para poder ejecutar
+        # `composer create-project`, instalo CodeIgniter correctamente y el cierre
+        # murio con `fatal: not a git repository`.
+        #
+        # Solo cuando el workspace es ESCRIBIBLE. En un run de review el worktree
+        # del implementador se monta de solo lectura (ADR 0095), asi que el agente
+        # no puede romperlo y no hay nada que proteger; tocarlo ahi ademas
+        # arriesgaria pisar a un run concurrente sobre el mismo worktree.
+        from workers.plan_git import git_link_hidden
+
+        ocultar = workspace.host_path is not None and not workspace.read_only
+        wt_path = Path(workspace.host_path) if workspace.host_path else None
+        with git_link_hidden(wt_path) if ocultar and wt_path else contextlib.nullcontext():
+            result, approval, check_declarations = await _launch_and_stream(
+                request,
+                settings=settings,
+                sessionmaker=sessionmaker,
+                redis=redis,
+                prepared=prepared,
+                workspace=workspace,
+                exec_id=exec_id,
+                runner=runner,
+                cancel_poll_interval_s=cancel_poll_interval_s,
+            )
 
     # F12: the runtime parked on `awaiting_human_approval` but emitted NO approval
     # payload, so we cannot build an ApprovalRequest. Falling to the implementer path
