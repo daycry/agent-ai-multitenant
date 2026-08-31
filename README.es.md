@@ -24,8 +24,8 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000.svg?logo=nextdotjs&logoColor=white)](apps/admin-panel)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
 
-[![ADRs](https://img.shields.io/badge/ADRs-164-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
-[![Migrations](https://img.shields.io/badge/migrations-145-0ea5e9.svg)](apps/api-server/migrations/versions)
+[![ADRs](https://img.shields.io/badge/ADRs-165-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
+[![Migrations](https://img.shields.io/badge/migrations-146-0ea5e9.svg)](apps/api-server/migrations/versions)
 [![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
 [![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
 
@@ -77,7 +77,7 @@ flowchart LR
 | **Guardrails declarativos por capas**           | Plataforma → tenant → proyecto, aplicados en cuatro puntos del ciclo: `pre_llm`, `post_llm`, `pre_tool`, `post_tool`                                                                                          |
 | **Validación humana donde importa**             | 13 categorías de acción sensible × 4 plantillas (Sandbox, Desarrollo, Producción, Cliente Externo), más la tool `ask_human` que el propio agente puede llamar. Por plan, nunca un checkbox por tarea          |
 | **Los proveedores LLM son catálogo cerrado**    | Claude Agent SDK, GitHub Copilot, Azure AI Foundry vía APIM y Ollama — detrás de un único `Protocol` async `LLMProvider`. Un quinto proveedor exige un ADR escrito                                            |
-| **Las decisiones están escritas**               | 164 ADR, una cadena de precedencia para cuando dos documentos se contradicen, y tests que fallan cuando la documentación deja de describir el repositorio                                                     |
+| **Las decisiones están escritas**               | 165 ADR, una cadena de precedencia para cuando dos documentos se contradicen, y tests que fallan cuando la documentación deja de describir el repositorio                                                     |
 
 ## Cómo se arranca
 
@@ -281,7 +281,7 @@ cabecera. La política y su guarda están escritas en
 [documentación bilingüe](docs/03-guides/bilingual-docs.es.md).
 
 El resto del corpus se describe honestamente como **castellano hoy, traducido de
-forma incremental**. Es grande —164 ADR, un catálogo entero de gotchas, las siete
+forma incremental**. Es grande —165 ADR, un catálogo entero de gotchas, las siete
 carpetas canónicas de documentación, el roadmap— con enlaces internos y guardas
 estáticas sobre todo ello, así que una traducción de golpe rompería más de lo que
 entregaría. Los documentos llevan un campo `docs_language` en su frontmatter YAML,

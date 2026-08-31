@@ -686,7 +686,11 @@ async def _launch(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> tuple[An
             guardrails=None,
             approved_actions=[],
         ),
-        workspace=SimpleNamespace(host_path=None, read_only=False, code_diff=None),
+        # `tracked_paths=[]`: run sin worktree, así que no hay árbol versionado
+        # que proteger y `AGENT_TRACKED_PATHS` no se publica (contrato 2026-08-31).
+        workspace=SimpleNamespace(
+            host_path=None, read_only=False, code_diff=None, tracked_paths=[]
+        ),
         exec_id=str(uuid4()),
         runner=_FakeRunner(lines),
         cancel_poll_interval_s=3600.0,

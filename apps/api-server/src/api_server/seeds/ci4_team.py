@@ -52,6 +52,7 @@ from api_server.seeds.builtin_project_templates import (
     BuiltinProjectTemplate,
     upsert_project_template,
 )
+from api_server.seeds.builtin_role_capabilities import FILE_WRITING_TOOLS
 from api_server.seeds.builtin_teams import BuiltinTeam, TeamMemberDef, upsert_team
 
 
@@ -83,7 +84,17 @@ def _ci4_agent_id(slug: str) -> UUID:
 # lo lanza en el runtime-template del proyecto a través del worker.
 # PROJ-08/F3: `search-code` retirado — no está cableada en el runtime (el grep
 # vive dentro de shell-exec/stack_exec).
-_FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
+#
+# LAS DE ESCRITURA SE DERIVAN (2026-08-31), no se teclean aquí. Esta tupla decía
+# `("read-file", "write-file", "delete-file", "list-files")` y era una copia a
+# mano de `FILE_WRITING_TOOLS` más las dos lecturas: la MISMA forma que este
+# módulo lleva documentado haberse cobrado tres veces (dos declaraciones del
+# mismo hecho, ninguna derivada, y la que gana es la que casualmente lea el
+# seed). Se midió al añadir `move-file`: con la copia a mano, los diez agentes
+# que INSTALAN CodeIgniter —el roster del run que se atascó por no poder mover—
+# se habrían quedado sin la tool mientras los core la recibían por el mapa por
+# rol. Se ordena para que la tupla sembrada sea estable entre arranques.
+_FILE_TOOLS = ("read-file", "list-files", *sorted(FILE_WRITING_TOOLS))
 # Base que todo agente del equipo recibe: leer/editar el repo, git vía
 # shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
 #

@@ -1,13 +1,19 @@
 """Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
 git family retired task_06_18_06; delete_file added R6/ADR 0089;
-stack_exec added ADR 0093).
+stack_exec added ADR 0093; move_file added 2026-08-31).
 
-Seventeen tool definitions covering file ops, code runtime, HTTP,
-knowledge, notifications and two stack commands (shell_exec +
-stack_exec). The ``git`` family was
+Tool definitions covering file ops, HTTP, knowledge, notifications and
+two stack commands (shell_exec + stack_exec). The ``git`` family was
 removed (ADR 0049): it had no runtime executor, so it could never run.
 Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
 operator which of these the agent-runtime can actually execute today.
+
+Este encabezado ya NO dice cuántas son, y es a propósito: decía
+«Seventeen» mientras la tupla tenía trece — se quedó atrás cuando los
+cuatro ``run_*`` se retiraron (F5, 2026-07-28). Un número en prosa que
+ningún test comprueba no envejece con un aviso: envejece mintiendo, y
+quien lo lee para orientarse acaba buscando cuatro filas que no existen.
+``len(BUILTIN_TOOLS)`` es la respuesta, y los tests de siembra la usan.
 
 `implementation_type` choices reflect the eventual execution path:
 
@@ -64,8 +70,8 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 17 tools (git family retired task_06_18_06; delete_file added R6;
-# stack_exec added ADR 0093)
+# Catalog (git family retired task_06_18_06; delete_file added R6;
+# stack_exec added ADR 0093; move_file added 2026-08-31)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -133,6 +139,85 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                 },
             },
             ["deleted"],
+        ),
+    ),
+    # ----- move_file (2026-08-31) -----
+    # POR QUÉ EXISTE, medido en vivo el mismo día (proyecto «Hello World CI4 v3»,
+    # tenant mediapro, modelo gpt-oss:120b): `composer create-project .` exige un
+    # directorio COMPLETAMENTE vacío, y en el paso 31 del segundo run el agente
+    # llegó SOLO a la solución correcta — instalar en `tmpci/` y mover el
+    # resultado a su sitio. No pudo terminarla: la familia `file` era exactamente
+    # read/write/delete/list, así que de los TRES pasos de su plan el único
+    # ejecutable era el destructivo. Cuatro pasos después borró `app/` entera —
+    # 85 ficheros que eran el deliverable ya commiteado de la tarea anterior.
+    #
+    # El ADR 0163 (esconder el `.git` mientras corre el agente) cubre el PRIMER
+    # andamiaje sobre un worktree vacío, y por eso el primer run sí instaló. No
+    # cubre un reintento ni un proyecto que ya tiene código: ahí el directorio
+    # nunca está vacío, y sin esta tool la única salida que le queda al agente es
+    # vaciarlo. Las guardas de `delete_file` le cierran esa puerta —correctamente—
+    # y sus propios mensajes de error ya le dicen «run it in a subdirectory and
+    # move the result in»: esta fila es lo que convierte ese consejo en algo que
+    # se puede ejecutar.
+    BuiltinTool(
+        "move-file",
+        "move_file",
+        "Move or rename a file — or a whole directory with everything inside — within the "
+        "task's worktree. Sandboxed: source AND destination must stay under the worktree. "
+        "Use it when a scaffolder demands an EMPTY directory: run it in a subdirectory "
+        "(e.g. 'composer create-project ... ci4tmp'), then move its entries into place ONE "
+        "AT A TIME (list_files on that directory gives you the list) and delete the empty "
+        "leftover. Also renames a mis-named file or module without rewriting it. Missing "
+        "parent directories of the destination are created. Refused: moving onto the "
+        "worktree root (that is merging two trees, not one move), and moving or "
+        "overwriting a whole top-level directory that is tracked in this branch (it holds "
+        "an earlier task's committed work).",
+        "file",
+        "builtin",
+        "sandboxed",
+        10,
+        _obj(
+            {
+                "source": {
+                    "type": "string",
+                    "description": "Path to move, relative to the worktree.",
+                },
+                "destination": {
+                    "type": "string",
+                    "description": (
+                        "The FULL final path, relative to the worktree — not the folder "
+                        "to drop the source into. Missing parent directories are created."
+                    ),
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": (
+                        "Required to replace a destination that ALREADY exists; without "
+                        "it the move is refused, so a rename cannot silently bury work."
+                    ),
+                },
+            },
+            ["source", "destination"],
+        ),
+        _obj(
+            {
+                "moved": {"type": "boolean"},
+                "source": {"type": "string", "description": "Resolved source path."},
+                "destination": {"type": "string", "description": "Resolved final path."},
+                "entries": {
+                    "type": "integer",
+                    "description": "How many entries the moved directory held.",
+                },
+                "replaced": {
+                    "type": "boolean",
+                    "description": "Whether an existing destination was replaced.",
+                },
+                "replaced_entries": {
+                    "type": "integer",
+                    "description": "How many entries the replaced directory held.",
+                },
+            },
+            ["moved"],
         ),
     ),
     BuiltinTool(

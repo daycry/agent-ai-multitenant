@@ -39,6 +39,13 @@ _CATALOG_TOOL_NAMES: frozenset[str] = frozenset(
         "http_get",
         "http_post",
         "list_files",
+        # `move_file` (2026-08-31): la familia `file` no tenía forma de MOVER, y
+        # eso no era un hueco cosmético — un agente que llegó solo a «instalar en
+        # un temporal y mover el resultado» sólo pudo ejecutar el paso
+        # destructivo del plan y se llevó por delante 85 ficheros commiteados.
+        # Es un nombre de catálogo, no un alias: el runtime registra la familia
+        # `file` bajo los nombres canónicos (`register_builtin_families`).
+        "move_file",
         "read_file",
         "run_build",
         "run_lint",
@@ -146,6 +153,12 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "read_file",
         "write_file",
         "delete_file",
+        # `move_file` (2026-08-31): `register_builtin_families` la registra con
+        # las otras cuatro, así que anunciarla NO es una promesa falsa. Y sin
+        # ella aquí, el reparto que sí la concede quedaría en tools «sin
+        # ejecutor» — el filtro del anuncio la descartaría y el agente tendría
+        # concedida una puerta que nunca ve.
+        "move_file",
         "list_files",
         # network family
         "http_get",

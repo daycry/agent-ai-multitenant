@@ -68,6 +68,14 @@ FAMILY_FLAG_PREFIX = "AGENT_TOOL_FAMILY_"
 #: production, so the default is unchanged for real runs.
 _WORKSPACE_ROOT_ENV = "AGENT_WORKSPACE_ROOT"
 
+#: Las entradas de PRIMER NIVEL versionadas en la rama del plan, que el worker
+#: publica separadas por saltos de línea ("app\nsystem\npublic\ncomposer.json").
+#: La familia `file` las necesita para distinguir un árbol reconstruible
+#: (vendor/) del deliverable ya commiteado de otra tarea — ver
+#: `WorkspaceFiles._delete_tree`. Vacía o ausente ⇒ sin esa protección, que es
+#: la compatibilidad hacia atrás con un worker anterior al contrato.
+_TRACKED_PATHS_ENV = "AGENT_TRACKED_PATHS"
+
 # The family identifiers the operator references in the flag name. Kept as a
 # stable tuple so a contract/UI can enumerate them.
 FAMILY_FILE = "file"
@@ -110,6 +118,16 @@ def _workspace_root() -> str:
     return os.environ.get(_WORKSPACE_ROOT_ENV) or "/workspace"
 
 
+def _tracked_paths() -> str:
+    """El bloque crudo del contrato; `WorkspaceFiles` lo normaliza.
+
+    Se pasa tal cual —sin partir ni limpiar aquí— para que la normalización
+    (barras finales, líneas en blanco) tenga UN solo sitio y sus tests vivan
+    junto a la guarda que depende de ella.
+    """
+    return os.environ.get(_TRACKED_PATHS_ENV) or ""
+
+
 def register_builtin_families(
     registry: ToolRegistry,
     *,
@@ -143,12 +161,19 @@ def register_builtin_families(
         registry.register(name, fn)
         registered.append(name)
 
-    # --- file family: read_file / write_file / list_files (canonical) -------
+    # --- file family: read_file / write_file / move_file / list_files -------
+    # Un solo `WorkspaceFiles` para las cinco: comparten la raíz Y las rutas
+    # versionadas, y montar dos instancias sería la forma de que una guarda
+    # aplicara y la otra no.
     if family_enabled(FAMILY_FILE, flags):
-        files = WorkspaceFiles(root=_workspace_root())
+        files = WorkspaceFiles(root=_workspace_root(), tracked_paths=_tracked_paths())
         _add("read_file", files.file_read)
         _add("write_file", files.file_write)
         _add("delete_file", files.file_delete)
+        # `move_file` (2026-08-31): sin ella el agente que llegó solo a «instala
+        # en un temporal y mueve» sólo podía ejecutar el paso destructivo de su
+        # propio plan. Ver `WorkspaceFiles.file_move`.
+        _add("move_file", files.file_move)
         _add("list_files", files.file_list)
 
     # --- network family: http_get / http_post (canonical) -------------------

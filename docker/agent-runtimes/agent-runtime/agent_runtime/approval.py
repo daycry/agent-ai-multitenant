@@ -41,6 +41,13 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     # prod-03 A8 (auditoría 2026-07-06): estas tools estaban wired pero SIN
     # categoría, así que escapaban al gate incluso bajo customer-external.
     "delete_file": "code_changes",  # destructiva sobre el worktree (como write_file)
+    # `move_file` (2026-08-31): mueve o renombra ficheros y árboles del worktree,
+    # y con `overwrite=true` reemplaza lo que había. Sin categoría escaparía al
+    # gate incluso bajo «Cliente Externo» — que es el fail-open de prod-03 A8—, y
+    # además desmontaría media razón de haberla construido en vez de abrir `mv`
+    # en el allowlist de `shell_exec`: que por aquí SÍ pasa por la política de
+    # aprobación del proyecto.
+    "move_file": "code_changes",
     "run_pytest": "code_changes",  # ejecutan código arbitrario del repo
     "run_lint": "code_changes",
     "run_typecheck": "code_changes",

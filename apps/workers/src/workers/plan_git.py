@@ -440,6 +440,15 @@ def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
             _worktree_unlock(worktree_path, bare_bloqueado)
 
 
+#: El prefijo que `agent_runtime.file_tools` pone a lo que aparta antes de
+#: destruirlo. Se repite aquí a propósito y no se importa: el runtime corre
+#: DENTRO del contenedor efímero y el worker fuera, sin ningún paquete común
+#: entre los dos. Lo que ata los dos lados es
+#: `tests/unit/test_el_residuo_del_runtime_no_llega_al_commit.py`, que falla si
+#: alguien cambia uno solo.
+_PREFIJO_TRANSITORIO_RUNTIME = ".agent-runtime-tmp."
+
+
 def commit_task(
     worktree_path: Path,
     *,
@@ -470,7 +479,36 @@ def commit_task(
         "GIT_COMMITTER_NAME": author_name,
         "GIT_COMMITTER_EMAIL": author_email,
     }
-    _run_git("add", "-A", cwd=worktree_path, env_extra=env_extra)
+    # `-A` con exclusión: el residuo de las tools de fichero NO entra en la rama.
+    #
+    # Las tres tools destructivas de la familia `file` dejaron de destruir en su
+    # sitio (ADR 0164): apartan con un renombrado, y descartan después. Cuando el
+    # descarte no se puede —el mismo EACCES que motivaba el cambio— queda un
+    # hermano `.agent-runtime-tmp.<nombre>.<n>` en el workspace. Sin esta
+    # exclusión, `git add -A` lo commitea en la rama del plan y viaja al PR: el
+    # deliverable acaba con una copia oculta del árbol que se quiso retirar, con
+    # un nombre que no significa nada para quien lo revise.
+    #
+    # Dos patrones, y los dos hacen falta:
+    #
+    #   * el `**/` inicial porque el residuo aparece AL LADO de su objetivo, que
+    #     puede estar a cualquier profundidad
+    #     (`app/Config/.agent-runtime-tmp.cache.0`). Uno anclado a la raíz sólo
+    #     cazaría el caso fácil.
+    #   * el `/**` final porque lo apartado suele ser un DIRECTORIO: el primer
+    #     patrón excluye su nombre, pero `git add` desciende igual y mete lo de
+    #     dentro con rutas que ya no casan. Medido: sin esta segunda línea
+    #     `.agent-runtime-tmp.vendor.0/paquete/autoload.php` entraba en el commit.
+    _run_git(
+        "add",
+        "-A",
+        "--",
+        ".",
+        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*",
+        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*/**",
+        cwd=worktree_path,
+        env_extra=env_extra,
+    )
     try:
         _run_git(
             "commit",
