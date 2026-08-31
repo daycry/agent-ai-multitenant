@@ -200,6 +200,45 @@ Convenciones:
 - **No** edites los _baselines_ para silenciar problemas preexistentes: sólo los
   problemas nuevos de PHPStan/Psalm deben fallar.
 
+## Qué NO se versiona
+
+`composer create-project codeigniter4/framework .` **no deja un `.gitignore` en
+la raíz**. Comprobado el 2026-08-31 sobre una instalación intacta: los únicos
+`.gitignore` del árbol son los que traen dentro los paquetes de `vendor/`.
+
+Consecuencia si nadie lo escribe: el primer commit se lleva `vendor/` entero.
+Medido en ese mismo proyecto — 4.442 ficheros de dependencias en la rama del
+plan, sobre un total de 5.192. El diff de revisión de la tarea siguiente y el PR
+del plan quedan ilegibles, y cada worktree posterior arrastra la copia.
+
+**Escribe el `.gitignore` en la misma tarea que instala el esqueleto**, antes de
+dar la tarea por hecha:
+
+```gitignore
+/vendor/
+/writable/cache/
+/writable/logs/
+/writable/session/
+/writable/uploads/
+/writable/debugbar/
+.env
+/.php-cs-fixer.php
+/.phpunit.cache
+/phpunit.xml
+/tests/coverage*
+```
+
+Tres notas sobre por qué esa lista y no otra:
+
+- **`/vendor/`** lo reconstruye `composer install` desde `composer.lock`, que sí
+  se versiona. Versionar ambos es guardar dos veces lo mismo, y sólo uno de los
+  dos manda.
+- **`/writable/`** se versiona en su _estructura_ pero no en su contenido: CI4
+  necesita que los directorios existan, así que ignora los subdirectorios de
+  runtime uno a uno en vez de la carpeta entera.
+- **`.env`** nunca; commitea `env` (el ejemplo que ya trae el framework). Es la
+  misma regla que está en la skill de seguridad de este stack.
+
 ## Autenticación y seguridad
 
 La autenticación se gestiona con **`daycry/auth`** (config `Config/Auth.php`):
