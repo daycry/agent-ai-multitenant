@@ -48,7 +48,7 @@ Ese fichero es, simultáneamente:
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Inútil** para el agente         | Todo `git` sale 128. Lo documenta el propio código: «git is BROKEN here anyway: the worktree's `.git` points to the bare repo's worktree metadata, which is NOT mounted in the sandbox» (`workers/run_spec.py`) |
 | **Imprescindible** para el worker | `commit_task` hace `git add -A` con `cwd=worktree` y descubre el repo a través de ese puntero                                                                                                                   |
-| **Un obstáculo** para el agente   | `composer create-project` **exige** un directorio vacío. También `npm create`, `django-admin startproject`, `rails new`, `cargo new`…                                                                           |
+| **Un obstáculo** para el agente   | `composer create-project` **exige** un directorio vacío y se niega a andamiar. Es el andamiador más estricto de los medidos (ver la corrección más abajo), pero basta uno                                       |
 
 Con las tres cosas a la vez, y teniendo `rm` en la allowlist base del SDK, que el
 agente lo borre **no es una aberración: es el resultado esperado**. Le pedimos
