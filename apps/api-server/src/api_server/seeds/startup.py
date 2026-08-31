@@ -138,7 +138,9 @@ async def refresh_builtin_agent_capabilities(
         seed_builtin_agent_tools,
         seed_builtin_agents,
     )
+    from api_server.seeds.builtin_skills import seed_builtin_skills
     from api_server.seeds.builtin_teams import seed_builtin_teams
+    from api_server.seeds.builtin_tools import seed_builtin_tools
     from api_server.seeds.ci4_team import (
         seed_ci4_agent_skills,
         seed_ci4_agent_tools,
@@ -161,6 +163,15 @@ async def refresh_builtin_agent_capabilities(
         ("agents", seed_builtin_agents),
         ("qa_e2e_automator", seed_qa_e2e_automator),
         ("ci4_agents", seed_ci4_agents),
+        # EL CATÁLOGO EN SÍ, antes de repartirlo. Faltaba, y el hueco calla:
+        # el 2026-08-31 se añadió el parámetro `recursive` al esquema de
+        # `delete-file`, el refresco corrió ENTERO Y EN VERDE, y la base siguió
+        # sirviendo el esquema viejo — hubo que sembrar a mano. El modo de fallo
+        # grave es el otro: una tool NUEVA repartida a un rol revienta el paso de
+        # cableado contra la FK `agent_tools.tool_id`, y con una transacción por
+        # paso se pierde el roster entero por una fila que nadie sembró.
+        ("tools", seed_builtin_tools),
+        ("skills", seed_builtin_skills),
         ("agent_tools", seed_builtin_agent_tools),
         ("agent_skills", seed_builtin_agent_skills),
         ("ci4_agent_tools", seed_ci4_agent_tools),
