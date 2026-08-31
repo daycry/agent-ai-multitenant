@@ -151,6 +151,48 @@ fuera del alcance sin tocar el commit, pero cambia la disposición que ven los
 agentes y rompe la equivalencia entre «la raíz del workspace» y «la raíz del
 repo» — justo lo que el ADR 0162 acaba de fijar como fuente de confusión.
 
+**E. Andamiar en un directorio temporal y mover el resultado** (propuesta del
+operador, 2026-08-31). El agente ejecuta `composer create-project … tmp` —donde
+nunca hay `.git`— y luego mueve el contenido a la raíz. No toca el contrato del
+sandbox, no cambia el montaje ni el commit, y `mv` ya está permitido.
+
+**Es razonable y está medida.** Funciona para el caso que teníamos delante y
+falla para otro que la propia pregunta anticipaba. Comprobado ejecutando cada
+andamiador en su imagen de runtime y mirando qué ficheros OCULTOS deja:
+
+| Andamiador                              | Ocultos que crea               | ¿Sobrevive «temp + move»? |
+| --------------------------------------- | ------------------------------ | ------------------------- |
+| `composer create-project` (CodeIgniter) | ninguno — usa `env`, no `.env` | **sí**                    |
+| `npm init -y`                           | ninguno                        | sí                        |
+| `go mod init`                           | ninguno                        | sí                        |
+| `cargo new`                             | `.git`, `.gitignore`           | **no**                    |
+
+El caso de Rust rompe la propuesta por dos vías, y la segunda es la mala:
+
+- `mv tmp/* .` deja fuera los ocultos — el proyecto pierde su `.gitignore`;
+- `mv tmp/. .` o `cp -a` mueven el `.git` DE CARGO encima del puntero
+  del worktree. El worktree queda roto **exactamente igual que en el incidente**,
+  pero sin que nadie haya borrado nada: mucho más difícil de ver.
+
+No se descarta por mala, sino por **incompleta**: resuelve un andamiador y deja
+abierta la misma clase para otro. Y en la variante en la que la ejecuta el
+agente hereda además el coste de la alternativa C — turnos, en todos los
+proyectos, para siempre.
+
+## La sub-decisión que ninguna alternativa tenía escrita
+
+Evaluar la propuesta E destapó un hueco **en esta misma decisión**, y conviene
+que conste porque no estaba: si el `.git` no está durante el run y el agente
+lanza `cargo new .`, el andamiador **crea el suyo**. Al reponer el puntero, el
+worker se encuentra el sitio ocupado.
+
+La respuesta razonable —y hay que tomarla a propósito, no descubrirla en
+producción— es que **la plataforma retira el `.git` que traiga el andamiador**. El
+versionado lo lleva el worktree, no el scaffolder; es lo mismo que hace
+`--remove-vcs` de composer y lo que hace cualquier CI al empaquetar. Pero
+significa que el trabajo de versionado que el andamiador creyó dejar hecho se
+descarta, y eso tiene que estar escrito donde alguien lo lea.
+
 ## Consecuencias
 
 - `workers/isolation.py` y el ciclo de vida de la ejecución tienen que retirar y
@@ -171,3 +213,6 @@ repo» — justo lo que el ADR 0162 acaba de fijar como fuente de confusión.
 2. Que el commit con `--git-dir`/`--work-tree` produce el mismo sha y los mismos
    trailers que el camino actual.
 3. Que un run abortado a mitad deja el worktree reponible.
+4. Que un andamiador que crea su propio `.git` —`cargo new` es el caso
+   conocido— acaba con el puntero del worktree en su sitio y no con el repo
+   que se inventó el scaffolder.
