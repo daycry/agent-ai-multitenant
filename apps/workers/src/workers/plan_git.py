@@ -208,6 +208,86 @@ class CommitTrailers:
         ]
 
 
+def repair_worktree_link(worktree_path: Path) -> bool:
+    """Restaura ``<worktree>/.git`` si falta. Devuelve ``True`` si reparó.
+
+    **Por qué el worker no puede confiar en ese fichero.** Es un puntero de una
+    línea (``gitdir: <bare>/worktrees/<id>``) que vive DENTRO del workspace
+    montado en escritura para el agente, y del que depende todo el
+    ``git add -A`` del cierre de tarea. El agente puede borrarlo sin querer y
+    sin saberlo: medido el 2026-08-31, uno lo hizo para que
+    ``composer create-project`` aceptara el directorio —esa herramienta EXIGE
+    uno vacío— instaló CodeIgniter 4.7.4 correctamente, y el cierre murió con
+    ``fatal: not a git repository``. El deliverable quedó en disco y fuera de
+    toda rama.
+
+    Cerrar la tool de borrado no basta y conviene decir por qué: la allowlist
+    base del SDK incluye ``rm``, así que ``shell_exec("rm .git")`` hace lo mismo.
+    Una guarda por puerta deja las otras abiertas; ésta cubre el resultado.
+
+    **El orden importa, y es la parte que se descubrió midiendo.**
+    ``git worktree repair`` reconstruye el puntero SÓLO mientras sobrevivan los
+    metadatos del bare (``<bare>/worktrees/<id>``). En cuanto algún git dispara
+    ``worktree prune`` —lo hace solo al ver un puntero roto— esos metadatos
+    desaparecen y ya no hay nada que reparar. Comprobado en los dos casos:
+
+        .git borrado, metadatos intactos  -> repair lo restaura, el commit entra
+        .git borrado, metadatos podados   -> repair no puede hacer nada
+
+    Por eso esto se llama al PRINCIPIO de ``commit_task``, antes de cualquier
+    otra invocación de git sobre el worktree.
+    """
+    if (worktree_path / ".git").exists():
+        return False
+
+    # Disposición fijada por `git_repos`: <project>/worktrees/<task_id> junto a
+    # <project>/repos/<repo>.git. Se derivan los bares candidatos en vez de
+    # recibir la ruta, para no añadir un parámetro a las tres llamadas vivas.
+    project_root = worktree_path.parent.parent
+    bares = sorted((project_root / "repos").glob("*.git"))
+    if not bares:
+        _log.warning(
+            "worktree.link_missing_no_bare",
+            worktree=str(worktree_path),
+            note="`.git` ausente y ningún bare bajo repos/: no se puede reparar",
+        )
+        return False
+
+    for bare in bares:
+        if not (bare / "worktrees" / worktree_path.name).is_dir():
+            continue
+        # `worktree repair` SALE CON CÓDIGO 1 aunque haya reparado: imprime
+        # «error: unable to locate repository; .git file broken» —que describe el
+        # estado que viene a arreglar— y reconstruye el puntero igualmente.
+        # Medido: la primera versión trataba ese rc como fallo y abortaba antes
+        # de mirar el resultado. Es juzgar por la intención en vez de por el
+        # efecto, que es justo lo que este arreglo persigue. Se ejecuta, se
+        # ignora el código de salida y se COMPRUEBA el fichero.
+        with contextlib.suppress(GitCommandError):
+            _run_git("--git-dir", str(bare), "worktree", "repair", str(worktree_path))
+        if (worktree_path / ".git").exists():
+            _log.warning(
+                "worktree.link_repaired",
+                worktree=str(worktree_path),
+                bare=str(bare),
+                note=(
+                    "el `.git` del worktree faltaba y se ha reconstruido; "
+                    "algo dentro del sandbox lo borró"
+                ),
+            )
+            return True
+
+    _log.warning(
+        "worktree.link_missing_metadata_gone",
+        worktree=str(worktree_path),
+        note=(
+            "`.git` ausente y los metadatos del bare ya estaban podados: "
+            "irrecuperable. El deliverable sigue en disco, fuera de toda rama"
+        ),
+    )
+    return False
+
+
 def commit_task(
     worktree_path: Path,
     *,
@@ -227,6 +307,11 @@ def commit_task(
     treats that as "the task produced no code change" and skips the
     push.
     """
+    # ANTES de cualquier git sobre el worktree: un puntero roto hace que el
+    # siguiente comando dispare `worktree prune` y con él la posibilidad de
+    # reparar. Ver `repair_worktree_link`.
+    repair_worktree_link(worktree_path)
+
     env_extra = {
         "GIT_AUTHOR_NAME": author_name,
         "GIT_AUTHOR_EMAIL": author_email,
