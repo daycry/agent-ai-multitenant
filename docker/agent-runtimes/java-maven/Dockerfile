@@ -5,7 +5,7 @@
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
 # deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
 # (ecosistema docker, .github/dependabot.yml).
-FROM maven:3.9-eclipse-temurin-21@sha256:2b4496088e7b80ae10a8c9f74e574ea21380325a006ec684532ad6bad5bc7273 AS runtime
+FROM maven:3.9-eclipse-temurin-26@sha256:166ca19b6b5fe1e924ab2d66b64ba9854c739f16210b94bbe0074b036c5c7992 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-java-maven" \
       org.opencontainers.image.version="v1" \
