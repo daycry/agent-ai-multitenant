@@ -4,19 +4,19 @@
   "registry": "ghcr.io/daycry",
   "version": "v1",
   "digests": {
-    "dotnet-test": "sha256:e3fd802f60dcc230951ce571f8847af6107f145522efd147185936d8077861bf",
-    "generic-http": "sha256:cf83b831b957192f61f68c736bcc1903c4f9eda5b887452b67e44571e51cc916",
-    "generic-shell": "sha256:dc9917f35c9d93a785fb6e85c75f8af51b6ba2d37cf22086a9222f8ae6502508",
-    "go-test": "sha256:7dac756b5f77edd3aead177052cccac69fa99f9f474dd3c3b231769cd7cce3ed",
-    "java-gradle": "sha256:abbf22ebace20c199ec28e5139aa4427d2a62f9f3a70fa1e317c228d82a25507",
-    "java-maven": "sha256:6a7f190696f203c486d959e34908a1f87e5852f0c9e6635283ef1bd936afabc0",
-    "node-jest": "sha256:872c2b55bf8186223aa29ca6d2a2aa7f7ca52a1f894730ab7c11e2f655f49e24",
-    "node-playwright": "sha256:e7ef654f0ab77d31f8ef6e7ff2dab39483236d0f6b5d20669caa460697578637",
-    "node-vitest": "sha256:713ef2da6cd5ba7bdf85228d8aae151555f275fdbd7eef9ac4d9960858af8680",
-    "php-pest": "sha256:5a1ed9b79b37444dedfcbba63d9778f8e2d7a2455e3a42fbbeb2c1e59f9c11df",
-    "php-phpunit": "sha256:85ee7c775d056eec232f03984a021ffe0e96f2ac815107a2828477e8fd977012",
-    "python-pytest": "sha256:73e5c0e7f6912b344c70686c7efdc43cbdb78bd8d7c68b56e15364b83c749055",
-    "ruby-rspec": "sha256:46fa34d2e6afd1da08cc1142a0439ba333b3b9b41a19b19a40033096e6c01637",
-    "rust-cargo": "sha256:4d334cde9d3e66371ae0bb958d3125980a5f0ebe881e3a916d02db6f34b9d2ad"
+    "dotnet-test": "sha256:6d6b307a58eb1a0bb9da560a4b0a2fcb9330338a4c02787e180bec79ea1e214c",
+    "generic-http": "sha256:732578cae4857dd97aae425be62d2f1975cad80cc26ee8597d145e360e50d4d1",
+    "generic-shell": "sha256:728e883e5f786dc306de24beee992cd1e4859ddcbab7fbaee6b89a5241a12dea",
+    "go-test": "sha256:fe33e06da022c76850ed720b119f77df7c37d832fb193de840a2cc399fabb23f",
+    "java-gradle": "sha256:d217b5d218a586dbde30689f292af108a2b37c6584e874eaddd364bc3816de4f",
+    "java-maven": "sha256:5dbfe971ebab36b6c7493d8ea95a6280d7025293d4fd1053907818f2098ca1ef",
+    "node-jest": "sha256:72f89d4f2f783ee1580c9061bb9b9e41495dfef7a4dc225ff3ce951ffee8fccf",
+    "node-playwright": "sha256:9216d1f6a419f9b1298f691b1d5779e4dec55855d8d75453b1b2aadde3c2e074",
+    "node-vitest": "sha256:90e69a043c85dc5f0ad815bfe230ca0d4e3d89cb2ea59d9082ed1219d4c0f4ff",
+    "php-pest": "sha256:8dba581d94606ff85b74222eb64df188a80ef652a66bb996770db7da67d2c885",
+    "php-phpunit": "sha256:7fb9372beb26a8c1445ab0deefa2ded38bcf7b78e81b8b71093a237ad92a01fe",
+    "python-pytest": "sha256:076b2f36e7a4a7d263ad0df3697522a04490fb0d99ab617710abe40d304c6acb",
+    "ruby-rspec": "sha256:0a7962a20a38f13cd76748323a4dc6f3912e12151bfe6978760bbdad57391623",
+    "rust-cargo": "sha256:962c9c0dbd098dbdc171de197c1aec3052b46c936330a965d2e54f916b37abf1"
   }
 }
