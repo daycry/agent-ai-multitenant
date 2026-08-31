@@ -103,18 +103,37 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "delete-file",
         "delete_file",
-        "Delete a file from the task's worktree. Sandboxed: only under the worktree. "
-        "Use it to remove stale/duplicate files from previous attempts and reconcile the "
-        "deliverable.",
+        "Delete a file — or a whole directory with recursive=true — from the task's "
+        "worktree. Sandboxed: only under the worktree. Use it to remove stale or "
+        "duplicate files from previous attempts, and to drop a dependency directory "
+        "(vendor/, node_modules/) or a mis-scaffolded module before redoing it.",
         "file",
         "builtin",
         "sandboxed",
         10,
         _obj(
-            {"path": {"type": "string", "description": "Path relative to the worktree."}},
+            {
+                "path": {"type": "string", "description": "Path relative to the worktree."},
+                "recursive": {
+                    "type": "boolean",
+                    "description": (
+                        "Required to delete a DIRECTORY: removes it with everything "
+                        "inside. Refused on the worktree root itself."
+                    ),
+                },
+            },
             ["path"],
         ),
-        _obj({"deleted": {"type": "boolean"}}, ["deleted"]),
+        _obj(
+            {
+                "deleted": {"type": "boolean"},
+                "entries": {
+                    "type": "integer",
+                    "description": "How many entries the recursive delete removed.",
+                },
+            },
+            ["deleted"],
+        ),
     ),
     BuiltinTool(
         "apply-patch",
