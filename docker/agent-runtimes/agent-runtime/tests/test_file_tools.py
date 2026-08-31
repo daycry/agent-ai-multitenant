@@ -30,7 +30,11 @@ def test_delete_removes_an_existing_file(tmp_path: Path) -> None:
 def test_delete_missing_file_fails_cleanly(tmp_path: Path) -> None:
     res = _files(tmp_path).file_delete({"path": "nope.php"})
     assert res.ok is False
-    assert "not a file" in (res.error or "")
+    # "not found", no "not a file": desde que `recursive` acepta directorios, un
+    # camino que no existe no es «no es un fichero» —podría haber sido un
+    # directorio válido— sino que no está. El mensaje viejo mandaba al agente a
+    # dudar del TIPO cuando el problema era la RUTA.
+    assert "not found" in (res.error or "")
 
 
 def test_delete_directory_is_rejected(tmp_path: Path) -> None:
@@ -143,3 +147,86 @@ def test_a_file_merely_starting_with_git_is_untouched(tmp_path: Path) -> None:
         objetivo.write_text("vendor/\n", encoding="utf-8")
         res = _files(tmp_path).file_delete({"path": nombre})
         assert res.ok is True, f"{nombre} debería poder borrarse: {res.error}"
+
+
+# ---------------------------------------------------------------------------
+# `recursive`: borrar un DIRECTORIO, con la intención explícita
+# ---------------------------------------------------------------------------
+# El hueco se midió en vivo el 2026-08-31: el agente que instalaba CodeIgniter
+# intentó `shell_exec("rm -rf ./* ./.??*")` y rebotó contra el allowlist del
+# proyecto. Fichero a fichero un `vendor/` son miles de llamadas — inviable, así
+# que la necesidad era real aunque la vía fuera la mala.
+#
+# Se resuelve aquí y no abriendo `rm` en el allowlist porque `shell_exec` es la
+# puerta equivocada del ADR 0162, porque `rm -rf ./*` es ilimitado por
+# naturaleza, y porque así queda AUDITADO: el `steps_log` guarda la ruta y
+# cuántas entradas se llevó.
+
+
+def test_delete_directory_needs_recursive(tmp_path: Path) -> None:
+    """Sin la bandera sigue rechazándose, y el error dice cómo hacerlo."""
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "x.php").write_text("<?php", encoding="utf-8")
+
+    res = _files(tmp_path).file_delete({"path": "vendor"})
+    assert res.ok is False
+    assert "recursive=true" in (res.error or ""), "el error no dice cómo borrarlo"
+    assert (tmp_path / "vendor").is_dir()
+
+
+def test_delete_directory_with_recursive(tmp_path: Path) -> None:
+    (tmp_path / "vendor" / "pkg").mkdir(parents=True)
+    (tmp_path / "vendor" / "pkg" / "a.php").write_text("<?php", encoding="utf-8")
+    (tmp_path / "vendor" / "autoload.php").write_text("<?php", encoding="utf-8")
+
+    res = _files(tmp_path).file_delete({"path": "vendor", "recursive": True})
+    assert res.ok is True
+    assert not (tmp_path / "vendor").exists()
+    assert res.output is not None
+    assert res.output["entries"] == 3, f"el recuento no cuadra: {res.output}"
+
+
+def test_recursive_never_empties_the_workspace_root(tmp_path: Path) -> None:
+    """La única operación que no es «un árbol menos» sino «el deliverable».
+
+    Ninguna necesidad legítima la pide: para andamiar sobre un directorio limpio
+    está el ADR 0163, que quita de en medio lo único que estorbaba.
+    """
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "Hello.php").write_text("<?php", encoding="utf-8")
+
+    for ruta in (".", "./", "app/.."):
+        res = _files(tmp_path).file_delete({"path": ruta, "recursive": True})
+        assert res.ok is False, f"se aceptó vaciar la raíz con path={ruta!r}"
+        assert "workspace root" in (res.error or "")
+    assert (tmp_path / "app" / "Hello.php").exists()
+
+
+def test_recursive_still_refuses_the_git_link(tmp_path: Path) -> None:
+    """La bandera no es una puerta trasera a la guarda del ADR 0163."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/master\n", encoding="utf-8")
+
+    res = _files(tmp_path).file_delete({"path": ".git", "recursive": True})
+    assert res.ok is False
+    assert (tmp_path / ".git").is_dir()
+
+
+def test_recursive_stays_inside_the_workspace(tmp_path: Path) -> None:
+    """La jaula de ruta vale igual con la bandera puesta."""
+    fuera = tmp_path.parent / "fuera_del_workspace"
+    fuera.mkdir(exist_ok=True)
+    (fuera / "importante.txt").write_text("no tocar\n", encoding="utf-8")
+
+    res = _files(tmp_path).file_delete({"path": "../fuera_del_workspace", "recursive": True})
+    assert res.ok is False
+    assert (fuera / "importante.txt").exists()
+
+
+def test_recursive_on_a_file_works_as_before(tmp_path: Path) -> None:
+    """La bandera no cambia el caso del fichero: sigue siendo un `unlink`."""
+    objetivo = tmp_path / "viejo.php"
+    objetivo.write_text("<?php", encoding="utf-8")
+    res = _files(tmp_path).file_delete({"path": "viejo.php", "recursive": True})
+    assert res.ok is True
+    assert not objetivo.exists()

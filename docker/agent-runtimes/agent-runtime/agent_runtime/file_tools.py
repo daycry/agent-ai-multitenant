@@ -8,6 +8,7 @@ sees /workspace.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,23 +119,84 @@ class WorkspaceFiles:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return ToolResult(ok=True, output={"path": args.get("path"), "bytes_written": len(content)})
 
-    def file_delete(self, args: dict[str, object]) -> ToolResult:
-        """Remove a single file under the workspace (R6 / ADR 0089).
+    def _delete_tree(self, resolved: Path, *, raw: object, recursive: bool) -> ToolResult:
+        """La rama de DIRECTORIO de :meth:`file_delete`, aparte por legibilidad.
 
-        The agent needs this to reconcile a deliverable when an earlier run
-        left a stale or duplicate file in the (persistent) worktree — `rm` /
-        `git rm` are gated by the shell allowlist and there was no delete tool,
-        so competing implementations could never be cleaned up. Path-jailed like
-        every file tool; refuses a directory so a stray `path` cannot wipe a
-        subtree.
+        Separada no por longitud sino porque son dos operaciones distintas con
+        guardas distintas: borrar un fichero no puede llevarse nada por delante,
+        y borrar un árbol sí.
         """
+        if not recursive:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"is a directory, not a file: {raw}. "
+                    "Pass recursive=true to remove it with everything inside."
+                ),
+            )
+        if resolved == Path(self.root).resolve():
+            return ToolResult(
+                ok=False,
+                error=(
+                    "refusing to empty the workspace root: that removes the whole "
+                    "deliverable, not a subtree. Delete the specific paths you mean "
+                    "instead."
+                ),
+            )
+        # Se cuenta ANTES de borrar: después no hay nada que contar, y el número
+        # es lo que hace legible la entrada del `steps_log`.
+        entradas = sum(1 for _ in resolved.rglob("*"))
+        try:
+            shutil.rmtree(resolved)
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        return ToolResult(ok=True, output={"path": raw, "deleted": True, "entries": entradas})
+
+    def file_delete(self, args: dict[str, object]) -> ToolResult:
+        """Remove a file — or, with ``recursive``, a directory tree.
+
+        El caso original (R6 / ADR 0089): reconciliar el deliverable cuando un
+        intento anterior dejó un fichero rancio o duplicado en el worktree, que
+        persiste entre runs. Sin esta tool no había forma de limpiarlo (`rm` y
+        `git rm` los gatea el allowlist del proyecto) y las implementaciones en
+        competencia nunca convergían.
+
+        **``recursive`` (2026-08-31).** Faltaba el caso del DIRECTORIO, y no es
+        raro: reinstalar dependencias pide borrar ``vendor/`` o
+        ``node_modules/``, y un módulo mal andamiado se retira entero. Fichero a
+        fichero eso son miles de llamadas — inviable, así que el agente acababa
+        intentando ``shell_exec("rm -rf ...")``, que rebota contra el allowlist.
+        Medido en vivo el 2026-08-31, en el run que instaló CodeIgniter.
+
+        Por qué aquí y no abriendo ``rm`` en el allowlist, que era la otra
+        salida:
+
+        * ``shell_exec`` es la puerta equivocada del ADR 0162 — comparte lista
+          con ``stack_exec``, así que un ``rm`` autorizado ahí confunde sobre
+          qué corre dónde;
+        * ``rm -rf ./*`` es ilimitado por naturaleza. Esto mantiene la jaula de
+          ruta y sigue rechazando ``.git``;
+        * queda AUDITADO: el ``steps_log`` guarda qué ruta se borró y cuántas
+          entradas se llevó. Un ``rm`` por shell sólo dice que hubo un ``rm``;
+        * el runtime ya lo gatea como ``code_changes``, así que la política de
+          aprobación humana del proyecto se aplica sola.
+
+        Lo que sigue sin poder hacerse, a propósito: **vaciar la raíz del
+        workspace**. Es la única operación cuyo resultado no es «un árbol menos»
+        sino «el deliverable entero», y ninguna necesidad legítima la pide —
+        para andamiar sobre un directorio limpio está el ADR 0163, que quita de
+        en medio lo único que estorbaba.
+        """
+        recursive = bool(args.get("recursive", False))
         resolved = self._mutable_path(args.get("path"))
         if isinstance(resolved, ToolResult):
             return resolved
-        if resolved.is_dir():
-            return ToolResult(ok=False, error=f"is a directory, not a file: {args.get('path')}")
         if not resolved.exists():
-            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+            return ToolResult(ok=False, error=f"not found: {args.get('path')}")
+
+        if resolved.is_dir():
+            return self._delete_tree(resolved, raw=args.get("path"), recursive=recursive)
+
         try:
             resolved.unlink()
         except OSError as exc:
