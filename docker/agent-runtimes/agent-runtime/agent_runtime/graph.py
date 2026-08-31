@@ -242,16 +242,31 @@ def _trip_outcome(
 
 
 def _loop_trip_outcome(
-    *, review_retries: int, last_review_feedback: str, tool: str
+    *,
+    review_retries: int,
+    last_review_feedback: str,
+    tool: str,
+    failing_error: str | None = None,
 ) -> tuple[str, str, str | None]:
-    """``(abort_code, step_summary, output_override)`` for a mutating-tool
-    repetitive-loop trip — a thin wrapper over :func:`_trip_outcome` with the
-    historical repetitive-loop fallback (unchanged contract)."""
+    """``(abort_code, step_summary, output_override)`` for a repetitive-loop trip —
+    a thin wrapper over :func:`_trip_outcome` with the historical repetitive-loop
+    fallback (unchanged contract).
+
+    ``failing_error``, cuando el corte lo dispara una acción que FALLA
+    IDÉNTICAMENTE (2026-08-31), nombra ese error en el resumen. El abort_code sigue
+    siendo ``REPETITIVE_LOOP``: es la misma familia de fallo —el agente atascado
+    repitiendo— y el desenlace es el mismo, sólo cambia lo que el operador lee. Sin
+    esto, el `list_files {}` repetido 14 veces llegaba al visor como un "repetitive
+    loop" pelado que no dice que el problema era un argumento que faltaba. Lo fija
+    ``test_the_trip_summary_names_the_error_that_kept_repeating``, y su cara
+    negativa —un mutador que trip a por contador NO nombra error ninguno—
+    ``test_a_mutating_loop_that_is_not_failing_names_no_error``."""
+    detail = f": the same call keeps failing with '{failing_error}'" if failing_error else ""
     return _trip_outcome(
         review_retries=review_retries,
         last_review_feedback=last_review_feedback,
         fallback_code=str(SafeguardCode.REPETITIVE_LOOP),
-        fallback_summary=f"Repetitive loop detected on tool '{tool}'",
+        fallback_summary=f"Repetitive loop detected on tool '{tool}'{detail}",
     )
 
 
@@ -456,6 +471,15 @@ class _AgentLoop:
         # G8-B (ADR 0103): the last PRODUCTIVE action's (tool, args); a productive turn
         # whose action DIFFERS is intermediate progress that resets the loop-detector.
         self._last_productive_action: dict[str, Any] | None = None
+        # La acción EXACTA que `plan` pasó al detector este turno — `reflect` la
+        # reutiliza verbatim para anotar su resultado. No se reconstruye allí a
+        # partir de `last_decision` porque la fingerprint incluye el lote read-only
+        # (ADR 0111) y una reconstrucción sin él anotaría el fallo bajo OTRA huella,
+        # dejando la racha siempre a cero justo en los turnos con batch.
+        # MEDIDO sobre `test_batch_decision_failing_identically_trips_just_as_soon`:
+        # con esto se corta en la iteración 4; reconstruyendo desde `last_decision`
+        # se queman las 20 del presupuesto. No es una variable de conveniencia.
+        self._last_recorded_action: dict[str, Any] | None = None
 
     # -- nodes ---------------------------------------------------------------
     @staticmethod
@@ -840,8 +864,30 @@ class _AgentLoop:
             # MUTATING tool trips the hard repetitive-loop guard (Tema C): a read-only
             # tool repeated identically wastes turns but cannot corrupt the deliverable,
             # so it gets the nudge and is bounded by max_iterations/wall_clock instead.
+            #
+            # …CON UNA EXCEPCIÓN, medida el 2026-08-31 (ejecución
+            # 01a05881-89d7-79fa-be72-bd0e7c1a9fbb, proyecto "Hello World CI4 v3"):
+            # 14 de 23 llamadas al modelo fueron `list_files {}` devolviendo SIEMPRE
+            # `a non-empty 'path' is required`. La guarda no saltó —list_files es
+            # read-only— y el run murió por max_tokens con 2.149 tokens de salida.
+            # La exención de Tema C se apoya en que una lectura repetida INFORMA; una
+            # que falla siempre con el MISMO error no informa de nada, sea de lectura
+            # o no. Así que el corte duro también salta ahí (`is_failing_identically`,
+            # que exige el mismo umbral: mismo error `threshold` veces seguidas).
+            #
+            # Un error de PLATAFORMA (tool denegada, sin executor, worktree vacío) SÍ
+            # cuenta, al revés que en la contabilidad de esterilidad de
+            # `_track_research`, y no es una incoherencia: allí `_is_platform_error`
+            # existe para no CULPAR al agente de una avería ajena; aquí no se reparte
+            # culpa, se corta un gasto. Y "tool not allowed" o "no executor" no se
+            # arreglan reintentando —no dependen del agente—, así que son el caso más
+            # desesperado, no el más benigno: excluirlos dejaría fuera justo el peor.
+            # Además esos fallos son invisibles para el backstop de research (no suman
+            # racha estéril ni read_counts), o sea que sin esto no los ve NADIE.
             tripped_loop = self.detector.record(action)
-            if tripped_loop and _is_mutating_tool(decision.tool):
+            self._last_recorded_action = action
+            failing_identically = self.detector.is_failing_identically(action)
+            if tripped_loop and (_is_mutating_tool(decision.tool) or failing_identically):
                 # B2: when work was already produced, ESCALATE (preserve it) rather
                 # than hard-abort; a sterile loop stays aborted. When the loop trips
                 # DURING a self-review retry cycle, report the legible
@@ -856,6 +902,9 @@ class _AgentLoop:
                     review_retries=state["review_retries"],
                     last_review_feedback=str(state.get("last_review_feedback") or ""),
                     tool=decision.tool or "",
+                    failing_error=(
+                        self.detector.failure_error(action) if failing_identically else None
+                    ),
                 )
                 steps.append(
                     node_step(
@@ -1411,6 +1460,23 @@ class _AgentLoop:
             ):
                 self.detector.note_progress()
             self._last_productive_action = current_action
+        # Cómo acabó la acción que `plan` registró este turno (2026-08-31). Va DESPUÉS
+        # del `note_progress` de arriba a propósito: ese reset significa "el
+        # presupuesto de repetición vuelve a cero", y el resultado de este turno es lo
+        # primero que cuenta en el presupuesto nuevo — anotarlo antes lo borraría.
+        # El caso donde se nota —y el que fija
+        # `test_this_turns_failure_counts_in_the_budget_that_note_progress_reopened`—
+        # es un turno cuyo call PRINCIPAL falla mientras un elemento de su lote
+        # read-only lee un target nuevo: es productivo (resetea) y tiene un fallo
+        # que anotar a la vez.
+        # Se usa la acción verbatim de `plan` (con su lote read-only, ADR 0111) para
+        # que la huella coincida exactamente con la que registró el detector.
+        if self._last_recorded_action is not None:
+            self.detector.note_outcome(
+                self._last_recorded_action,
+                ok=bool(observation.get("ok")),
+                error=observation.get("error"),
+            )
         # ADR 0087 (Option 1): harvest the file the agent just wrote (path+content)
         # so the self-review can judge the real code. Keeps the latest per path.
         if _is_producing_tool(tool):
