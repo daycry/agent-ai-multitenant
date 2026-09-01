@@ -85,11 +85,55 @@ Se descartaron dos criterios más simples:
 - **«La raíz del workspace»**, que es lo que protegía la primera versión de la
   guarda. No cubre el caso real: `app/` no es la raíz.
 
-**Versionado** separa exactamente las dos poblaciones: lo commiteado es trabajo
-aceptado de alguien, y lo no versionado es artefacto reconstruible. El worker es
-el único punto con worktree + git, así que calcula las entradas de primer nivel
-versionadas y las publica en `AGENT_TRACKED_PATHS` **antes** de que el ADR 0163
-esconda el `.git`.
+**Versionado** separa las dos poblaciones mejor que las alternativas: lo
+commiteado suele ser trabajo aceptado de alguien, y lo no versionado suele ser
+artefacto reconstruible. El worker es el único punto con worktree + git, así que
+calcula las entradas de primer nivel versionadas y las publica en
+`AGENT_TRACKED_PATHS` **antes** de que el ADR 0163 esconda el `.git`.
+
+### Addendum del 2026-09-01: «separa EXACTAMENTE» era falso
+
+Este párrafo decía que versionado separa **exactamente** las dos poblaciones. Un
+incidente lo refutó al día siguiente de aceptarse el ADR, y la corrección importa
+porque el criterio se deriva de aquí.
+
+Lo medido, en el mismo proyecto: una tarea que sólo tenía que comprobar versiones
+ejecutó `composer install` para poder enseñarle una prueba al reviewer. Sin
+`.gitignore`, el `git add -A` del cierre se llevó **1.151 ficheros de `vendor/`**
+a la rama. Y entonces esta guarda hizo justo lo que dice este documento:
+
+```text
+delete_file vendor --recursive  ->  "refusing to recursively delete 'vendor':
+                                     it is tracked in this branch"
+move_file   vendor old_backup/  ->  rechazado igual
+composer create-project .       ->  falla, el directorio no está vacío
+->  max_tokens_exceeded, 105.025 tokens
+```
+
+**Blindó un artefacto reconstruible** y dejó la tarea del esqueleto sin salida.
+La guarda no falló: falló la premisa de que versionado implique aceptado.
+
+**La corrección, y de dónde sale:** un directorio de dependencias no es trabajo
+aceptado, esté versionado o no. Y eso no hace falta adivinarlo — cada runtime
+template lo **declara** (`shared_test_runtimes.catalog.dependency_dirs`: `vendor`
+en php, `node_modules` en node, `.venv`/`venv` en python), y la plataforma ya lo
+usaba: `sync_to_head(preserve=…)` los conserva para que el `clean -fdx` no se los
+lleve.
+
+Así que el criterio pasa a ser **versionado Y no declarado como directorio de
+dependencias**, y `compute_tracked_top_level_paths` resta esa lista. No es una
+segunda lista escrita a mano —la objeción que descartó esta idea la primera vez
+que se planteó— sino la misma declaración que el proyecto ya hace.
+
+La otra mitad vive fuera de este ADR: `commit_task` dejó de commitear esos
+directorios y des-versiona con `git rm --cached` los que ya entraron, de modo que
+el accidente no vuelve a ocurrir en vez de sólo tolerarse.
+
+**Y una limitación que se conoce y no se cierra:** hay proyectos que versionan un
+directorio con ese nombre a propósito — el `assets/vendor/` de Symfony
+AssetMapper, que su documentación manda commitear. Hoy no hay forma de que un
+proyecto lo declare. Si aparece el caso, la salida es darle esa declaración, no
+retirar la exclusión: retirarla devuelve el punto muerto.
 
 ## Dónde acaba la protección
 
