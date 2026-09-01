@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import os
+import re
 import shutil
 import stat
 from collections.abc import Iterable
@@ -25,6 +26,40 @@ _MAX_READ_BYTES = 1_000_000
 # working dir. Hide it from listings so the agent never wastes a turn reading CLI
 # config into its context — it is not part of the task's workspace.
 _CLI_ARTIFACTS = frozenset({".claude", ".claude.json"})
+
+#: Filtro de `file_list` cuando no llega ninguno. **No es el `"**/*"` que el
+#: esquema anunciaba**: ver :meth:`WorkspaceFiles.file_list`, punto 2.
+_DEFAULT_LIST_PATTERN = "*"
+
+#: Tope de entradas que `file_list` devuelve en una llamada.
+#:
+#: Medido el 2026-09-01 sobre las 893 salidas reales de `list_files` del
+#: `steps_log`: mediana 1 entrada, p95 16, **máximo 54**. 150 deja pasar intacto
+#: el 100% de lo observado con 2,8x de margen sobre el peor caso real.
+#:
+#: **El coste se mide en el PROMPT, no en el JSON**, y esa distinción costó una
+#: primera versión de esta constante. Dos correcciones sobre la medición ingenua:
+#:
+#:   * ~74 bytes por entrada, no ~60. Los 60 salían de las salidas VIEJAS, donde
+#:     `name` era un nombre suelto (`docs`); ahora es la ruta relativa, y en un
+#:     `vendor/` profundo llega a 108 B.
+#:   * el observation se renderiza **dos veces** en su propio turno (la cola
+#:     `context[-8:]` más `Last observation`) y sigue en esa cola ocho turnos más,
+#:     refacturándose en cada uno.
+#:
+#: Con 500 y el árbol real del incidente (11.956 entradas), un `"**/*"` costaba
+#: ~22.000 tokens en su turno y ~104.000 acumulados con la cola — el presupuesto
+#: ENTERO del run (`Budgets.max_tokens` = 100.000). Con 150 el peor caso queda en
+#: ~11 KB / ~6.600 tokens, que es el orden de un `file_read` mediano.
+#:
+#: El número que hay al otro lado es el que obliga a poner tope: la rama del plan
+#: del incidente llegó a **10.318 ficheros**. Un `"**/*"` sobre la raíz los
+#: devolvería todos.
+#:
+#: Si cambias este número, cambia también la descripción del catálogo
+#: (`api_server.seeds.builtin_tools`): es lo único que el modelo lee, y
+#: `test_el_tope_anunciado_es_el_que_se_aplica` falla si divergen.
+_MAX_LIST_ENTRIES = 150
 
 
 #: El enlace del worktree con su rama. Ver :meth:`_mutable_path`.
@@ -120,6 +155,370 @@ def _bandera(nombre: str, crudo: object) -> bool | ToolResult:
             "operation you asked for."
         ),
     )
+
+
+class _PatronInvalidoError(ValueError):
+    """El `pattern` no se puede interpretar. El mensaje viaja tal cual al modelo.
+
+    Es una excepción y no un `[]` a propósito. Devolver «cero coincidencias»
+    sobre un patrón que no se llegó a entender es indistinguible, desde el lado
+    del agente, de «ese fichero no existe» — y eso es EXACTAMENTE el defecto que
+    esta familia de arreglos persigue, sólo que una capa más abajo.
+    """
+
+
+def _mensaje_llaves(patron: str, faltan: int) -> str:
+    if faltan > 0:
+        sugerido = patron + "}" * faltan
+        return (
+            f"unbalanced braces in pattern {patron!r}: every '{{' needs its '}}'. "
+            f"Braces list alternatives, so you probably meant {sugerido!r}."
+        )
+    return (
+        f"unbalanced braces in pattern {patron!r}: a '}}' with no '{{' before it. "
+        "Braces list alternatives, e.g. 'composer.{json,lock}'."
+    )
+
+
+def _grupo_de_llaves(patron: str) -> tuple[int, int] | None:
+    """Los índices del primer grupo ``{...}`` de primer nivel, o ``None``.
+
+    Se salta el interior de una clase ``[...]`` porque ahí una llave es un
+    carácter más. Levanta :class:`_PatronInvalidoError` si no equilibran.
+    """
+    inicio = -1
+    nivel = 0
+    en_clase = False
+    for i, c in enumerate(patron):
+        if en_clase:
+            en_clase = c != "]"
+        elif c == "[":
+            en_clase = True
+        elif c == "{":
+            if nivel == 0:
+                inicio = i
+            nivel += 1
+        elif c == "}":
+            if nivel == 0:
+                raise _PatronInvalidoError(_mensaje_llaves(patron, 0))
+            nivel -= 1
+            if nivel == 0:
+                return inicio, i
+    if nivel:
+        raise _PatronInvalidoError(_mensaje_llaves(patron, nivel))
+    return None
+
+
+def _partir_alternativas(cuerpo: str) -> list[str]:
+    """Parte por las comas de PRIMER nivel: ``a,{b,c}`` da ``['a', '{b,c}']``."""
+    partes: list[str] = []
+    actual: list[str] = []
+    nivel = 0
+    en_clase = False
+    for c in cuerpo:
+        if en_clase:
+            en_clase = c != "]"
+        elif c == "[":
+            en_clase = True
+        elif c == "{":
+            nivel += 1
+        elif c == "}":
+            nivel -= 1
+        elif c == "," and nivel == 0:
+            partes.append("".join(actual))
+            actual = []
+            continue
+        actual.append(c)
+    partes.append("".join(actual))
+    return partes
+
+
+def _expandir_llaves(patron: str) -> list[str]:
+    """``a.{json,lock}`` -> ``['a.json', 'a.lock']``.
+
+    `pathlib` NO entiende las llaves, y el modelo las manda: 39 de las 965
+    llamadas a `list_files` medidas el 2026-09-01 las llevan
+    (``**/composer.{json,lock}``, ``{app,tests}/**/*.php``). Sin expandirlas, un
+    patrón perfectamente razonable devolvería vacío sobre un workspace que sí
+    contiene los ficheros.
+    """
+    grupo = _grupo_de_llaves(patron)
+    if grupo is None:
+        return [patron]
+    inicio, fin = grupo
+    prefijo, resto = patron[:inicio], patron[fin + 1 :]
+    salida: list[str] = []
+    for alternativa in _partir_alternativas(patron[inicio + 1 : fin]):
+        salida.extend(_expandir_llaves(f"{prefijo}{alternativa}{resto}"))
+    return salida
+
+
+def _fin_de_clase(patron: str, inicio: int) -> int:
+    """El índice del ``]`` que cierra la clase abierta en `inicio`."""
+    i = inicio + 1
+    if i < len(patron) and patron[i] in "!^":
+        i += 1
+    if i < len(patron) and patron[i] == "]":  # `[]]` = la clase del literal ']'
+        i += 1
+    while i < len(patron) and patron[i] != "]":
+        i += 1
+    if i >= len(patron):
+        raise _PatronInvalidoError(
+            f"unterminated '[' in pattern {patron!r}: brackets open a character "
+            "class and have to be closed, e.g. '[abc]*.php'."
+        )
+    return i
+
+
+def _clase_a_regex(cuerpo: str, patron: str) -> str:
+    negada = cuerpo[:1] in ("!", "^")
+    if negada:
+        cuerpo = cuerpo[1:]
+    if not cuerpo:
+        raise _PatronInvalidoError(
+            f"empty character class in pattern {patron!r}: '[]' matches nothing, e.g. '[abc]*.php'."
+        )
+    # `-` se deja crudo (los rangos `a-z` tienen que seguir funcionando); el
+    # resto de metacaracteres de una clase de regex se neutraliza.
+    cuerpo = cuerpo.replace("\\", "\\\\").replace("]", "\\]").replace("^", "\\^")
+    return f"[^/{cuerpo}]" if negada else f"[{cuerpo}]"
+
+
+def _a_regex(patron: str) -> re.Pattern[str]:
+    """Traduce UN glob (ya sin llaves) a la regex que casa una ruta relativa.
+
+    La traducción se escribe a mano en vez de delegar en `Path.glob` por dos
+    razones que no son de estilo:
+
+    * `Path.glob` cambió de semántica entre las versiones que conviven aquí —en
+      3.12 un ``**`` suelto casa sólo directorios y en 3.13 también ficheros—, y
+      el runtime va sobre `python:3.12-slim` mientras los tests corren en 3.13.
+      Un contrato que depende de eso no es un contrato;
+    * hace falta el recorrido propio de todas formas (podar `_CLI_ARTIFACTS`,
+      contar el total sin materializarlo, acotar la profundidad), y tener el
+      matcher aparte permite fijarlo con tests que no tocan el disco.
+    """
+    piezas: list[str] = []
+    i, n = 0, len(patron)
+    while i < n:
+        c = patron[i]
+        if c == "*":
+            j = i
+            while j < n and patron[j] == "*":
+                j += 1
+            if j - i >= 2 and j < n and patron[j] == "/":
+                # `**/` = cero o más segmentos completos. El «cero» es lo que
+                # hace que `**/*.php` encuentre también los de la raíz.
+                piezas.append("(?:[^/]+/)*")
+                i = j + 1
+            elif j - i >= 2:
+                piezas.append(".*")
+                i = j
+            else:
+                piezas.append("[^/]*")
+                i = j
+        elif c == "?":
+            piezas.append("[^/]")
+            i += 1
+        elif c == "[":
+            fin = _fin_de_clase(patron, i)
+            piezas.append(_clase_a_regex(patron[i + 1 : fin], patron))
+            i = fin + 1
+        else:
+            piezas.append(re.escape(c))
+            i += 1
+    return re.compile("".join(piezas) + r"\Z")
+
+
+def _prefijo_literal(patron: str) -> tuple[str, ...]:
+    """Los segmentos SIN comodín con los que empieza el patrón.
+
+    ``app/**/*.php`` -> ``('app',)``; ``**/*.php`` -> ``()``. Es lo que permite
+    no bajar a donde no puede haber nada, y es exacto: esos segmentos se
+    traducen a texto literal al principio de la regex, así que una ruta que no
+    los lleve no puede casar por debajo por mucho que se baje.
+    """
+    literales: list[str] = []
+    for segmento in patron.split("/"):
+        if any(c in segmento for c in "*?["):
+            break
+        literales.append(segmento)
+    return tuple(literales)
+
+
+@dataclass(frozen=True)
+class _Glob:
+    """Un `pattern` compilado: cómo casa y hasta dónde hay que bajar a buscarlo."""
+
+    patron: str
+    alternativas: tuple[re.Pattern[str], ...]
+    #: Niveles a recorrer, 1 = sólo el directorio pedido. ``None`` = sin límite.
+    profundidad: int | None
+    recursivo: bool
+    #: Un prefijo literal por alternativa. Ver :meth:`puede_haber_algo_bajo`.
+    prefijos: tuple[tuple[str, ...], ...]
+
+    def casa(self, relativa: str) -> bool:
+        return any(rx.match(relativa) for rx in self.alternativas)
+
+    def puede_haber_algo_bajo(self, segmentos: tuple[str, ...]) -> bool:
+        """¿Vale la pena abrir este directorio, o no puede casar nada dentro?
+
+        Medido el 2026-09-01 sobre un árbol de 10.400 entradas con la forma del
+        incidente: sin esta poda, ``app/**/*.php`` —justo el patrón que la nota
+        de truncado recomienda para acotar— recorría el árbol ENTERO, 176 ms
+        para devolver una coincidencia. Recomendar al modelo que acote y que
+        acotar no le salga más barato es recomendarle humo.
+
+        No cambia ningún resultado: si el segmento ``i`` del directorio difiere
+        del segmento ``i`` del prefijo literal, ninguna ruta por debajo puede
+        casar, porque ese segmento aparece como texto literal en la regex.
+        """
+        for prefijo in self.prefijos:
+            comunes = min(len(segmentos), len(prefijo))
+            if all(segmentos[i] == prefijo[i] for i in range(comunes)):
+                return True
+        return False
+
+
+def _compilar_glob(patron: str) -> _Glob:
+    """Compila el `pattern` del contrato, o levanta :class:`_PatronInvalidoError`.
+
+    La profundidad sale del propio patrón y es la pieza que hace que el default
+    siga costando lo mismo que antes: sin ``**``, un patrón de ``k`` segmentos
+    no puede casar nada por debajo del nivel ``k``, así que el recorrido para
+    ahí. ``*`` (el default, 279 llamadas reales) recorre un solo `scandir`,
+    exactamente como el `iterdir()` que había.
+    """
+    alternativas = _expandir_llaves(patron)
+    for alternativa in alternativas:
+        if alternativa.startswith("/") or ".." in alternativa.split("/"):
+            raise _PatronInvalidoError(
+                f"'pattern' must be relative to 'path' and stay inside the "
+                f"workspace: {patron!r} uses a leading '/' or a '..'. Point "
+                f"'path' at the directory you mean and give a relative glob, "
+                f"e.g. 'app/**/*.php'."
+            )
+    recursivo = any("**" in alternativa for alternativa in alternativas)
+    profundidad = None if recursivo else max(a.count("/") for a in alternativas) + 1
+    return _Glob(
+        patron=patron,
+        alternativas=tuple(_a_regex(a) for a in alternativas),
+        profundidad=profundidad,
+        recursivo=recursivo,
+        prefijos=tuple(_prefijo_literal(a) for a in alternativas),
+    )
+
+
+def _entrada(relativa: str, ruta: Path) -> dict[str, object]:
+    """Una entrada del listado. `name` es la RUTA relativa al `path` pedido.
+
+    En el listado plano coincide con el nombre —así que el contrato de antes se
+    mantiene—, pero con un patrón recursivo el nombre suelto no sirve: cuarenta
+    ``Home.php`` indistinguibles no le dicen al agente cuál abrir.
+    """
+    try:
+        return {
+            "name": relativa,
+            "type": "dir" if ruta.is_dir() else "file",
+            "size": ruta.stat().st_size if ruta.is_file() else None,
+        }
+    except OSError:
+        # El árbol se movió entre el recorrido y el `stat` (otro contenedor, un
+        # enlace roto). Se informa de la entrada sin inventarle metadatos, que
+        # es mejor que perderla del listado.
+        return {"name": relativa, "type": "file", "size": None}
+
+
+def _nada_casa(mostrada: object, patron: str, glob: _Glob, escaneadas: int) -> str:
+    """La nota del cero coincidencias: el caso que hizo repetir ocho veces.
+
+    Un ``[]`` a secas es indistinguible de «ese fichero no existe». Con el
+    número de entradas recorridas y —si el patrón no era recursivo— su forma
+    recursiva ya escrita, la respuesta que antes no decía nada pasa a decir el
+    siguiente paso.
+    """
+    if escaneadas == 0:
+        return f"'{mostrada}' is empty: there are no entries under it at all."
+    if not glob.recursivo:
+        return (
+            f"0 of the {escaneadas} entries visited under '{mostrada}' match "
+            f"'{patron}'. This pattern is NOT recursive - only '**' descends into "
+            f"subdirectories. Try '**/{patron}' to search the whole tree."
+        )
+    # Se dice «visited» y no «all the entries under it» porque el recorrido poda
+    # lo que el prefijo literal del patrón no puede alcanzar
+    # (:meth:`_Glob.puede_haber_algo_bajo`): con `app/**/*.rs` no se baja a
+    # `vendor/`, así que prometer que se miró el árbol entero sería falso. Un
+    # número que suena a total y no lo es es la misma clase de mentira barata
+    # que este arreglo persigue.
+    return (
+        f"0 of the {escaneadas} entries visited under '{mostrada}' match this "
+        f"pattern - widen the filter or check the path."
+    )
+
+
+def _recorrer(raiz: Path, glob: _Glob) -> tuple[list[tuple[str, Path]], int, int]:
+    """Recorre bajo `raiz` y devuelve `(coincidencias, escaneadas, ilegibles)`.
+
+    Tres decisiones que no son de estilo:
+
+    * **se cuenta todo lo que casa, se materializa sólo lo que se devuelve.**
+      El tope de :data:`_MAX_LIST_ENTRIES` sólo puede anunciarse honestamente
+      («había N») si se sabe cuántas había, y eso exige terminar el recorrido.
+      Terminarlo es barato —`scandir` no lee contenido— mientras que hacer
+      `stat` de 10.318 entradas para tirar 9.818 no lo es: el `stat` se hace
+      después, sobre las que se devuelven;
+    * **la profundidad la manda el patrón** (:func:`_compilar_glob`). El default
+      `*` recorre un único `scandir`, igual que el `iterdir()` de antes: el
+      arreglo no encarece el caso normal;
+    * **no se sigue un enlace simbólico a directorio.** Se informa de él como
+      entrada, pero no se desciende: un enlace a un ancestro es un recorrido
+      infinito, y un enlace fuera del workspace sería una fuga por la puerta de
+      atrás de la jaula de :meth:`WorkspaceFiles._safe_path`.
+
+    Un directorio ilegible se cuenta en vez de reventar la llamada —el caso
+    medido en :meth:`WorkspaceFiles._delete_tree`, un subárbol dejado por otro
+    contenedor sin permisos— y ese número acaba en la nota del resultado. Un
+    subárbol saltado en silencio sería el mismo defecto de este arreglo con otra
+    cara.
+    """
+    coincidencias: list[tuple[str, Path]] = []
+    escaneadas = 0
+    ilegibles = 0
+    pendientes: list[tuple[Path, tuple[str, ...], int]] = [(raiz, (), 1)]
+    while pendientes:
+        directorio, segmentos, nivel = pendientes.pop()
+        try:
+            with os.scandir(directorio) as hijos:
+                entradas = list(hijos)
+        except OSError:
+            ilegibles += 1
+            continue
+        prefijo = "".join(f"{s}/" for s in segmentos)
+        for hijo in entradas:
+            if hijo.name in _CLI_ARTIFACTS:
+                # Se poda el subárbol entero, no sólo la entrada: con un patrón
+                # recursivo, ocultar `.claude` y bajar dentro devolvería su
+                # contenido y el filtro no habría servido de nada.
+                continue
+            escaneadas += 1
+            relativa = f"{prefijo}{hijo.name}"
+            if glob.casa(relativa):
+                coincidencias.append((relativa, Path(hijo.path)))
+            if glob.profundidad is not None and nivel >= glob.profundidad:
+                continue
+            hijos_segmentos = (*segmentos, hijo.name)
+            if not glob.puede_haber_algo_bajo(hijos_segmentos):
+                continue
+            try:
+                bajar = hijo.is_dir() and not hijo.is_symlink()
+            except OSError:
+                continue
+            if bajar:
+                pendientes.append((Path(hijo.path), hijos_segmentos, nivel + 1))
+    coincidencias.sort(key=lambda par: par[0])
+    return coincidencias, escaneadas, ilegibles
 
 
 def _relativa(ruta: Path, root: Path) -> str:
@@ -1063,30 +1462,82 @@ class WorkspaceFiles:
             return
 
     def file_list(self, args: dict[str, object]) -> ToolResult:
-        """Lista un directorio del workspace; sin ``path``, el workspace entero.
+        """Lista el workspace filtrando por un glob; sin nada, el directorio pedido.
 
-        **Por qué el default vive aquí y no en :meth:`_safe_path` (2026-08-31).**
-        Medido en la ejecución ``01a05881-89d7-79fa-be72-bd0e7c1a9fbb``: de sus
-        22 ``list_files``, CATORCE fueron rechazadas con «a non-empty 'path' is
-        required». El agente quería listar el workspace —la operación más obvia
-        que existe— y se comió el 60% del presupuesto del run chocando contra un
-        requisito de FORMA. Los tokens de entrada eran planos (~4.200 por
-        llamada): no es que el contexto creciera, es que giraba en vacío. En la
-        llamada 71 descubrió que había que pasar ``"."`` y funcionó a la primera.
+        **El defecto que cierra (medido el 2026-09-01).** El esquema de la tool
+        —lo único que el modelo ve— anunciaba «List files matching a glob pattern
+        under a path» con ``pattern`` entre sus propiedades, y este método NUNCA
+        leía ``pattern``: hacía ``resolved.iterdir()``, un listado plano de un
+        nivel, sin filtrar. En un run real del proyecto `Hello World CI4 v3`
+        (tenant mediapro) hubo 15 llamadas con patrón no trivial y las 15
+        devolvieron el mismo listado plano sin avisar de nada:
 
-        La forma exacta del ``steps_log`` explica por qué el defecto sobrevivió
-        a una lectura del código: ``{"path": "", "pattern": "*"}``. El modelo no
-        omite la clave, la manda VACÍA. La clave ausente ya funcionaba (había un
-        default ``"."`` en el ``args.get``), así que quien mirara el fuente
-        concluiría que el caso estaba cubierto; el hueco era la cadena vacía, y
-        con ella el ``null``.
+            list_files {"path":".", "pattern":"tests/**/*.php"}     -> [{"name":"docs"}]
+            list_files {"path":".", "pattern":"*phpunit*"}          -> [{"name":"docs"}]
+            list_files {"path":".", "pattern":"vendor/bin/phpunit"} -> [{"name":"docs"}]
 
-        Y se arregla SÓLO aquí a propósito. ``_safe_path`` lo comparten
-        ``file_read`` / ``file_write`` / ``file_delete``, donde un path vacío
-        tiene que seguir siendo un error: «lista lo que sea» tiene una
-        interpretación obvia y útil, pero «escribe lo que sea» o «borra lo que
-        sea» no la tienen — adivinarla ahí convertiría un error de forma en un
-        borrado del workspace.
+        El agente probó ocho patrones distintos buscando los tests, recibió la
+        misma respuesta ocho veces y no pudo concluir nada — por eso repetía. Es
+        la misma familia que el ``path`` vacío que se cerró el 2026-08-31, pero
+        PEOR: aquél devolvía un error, y éste devolvía un resultado plausible.
+
+        Las cuatro decisiones del contrato, y por qué son ésas. Todas salen de
+        mirar los patrones que el modelo manda DE VERDAD — las 965 llamadas a
+        ``list_files`` del ``steps_log``, contadas el 2026-09-01:
+
+            **/*  316 | *  279 | **/*.php  72 | **/*.md  69 | *.php  32 | **  8
+            589 llevan '/'    | 578 llevan '**' | 39 llevan llaves | 33 sin comodín
+
+        **1. Qué significa `pattern`.** Un glob RELATIVO a ``path`` que casa
+        contra la RUTA relativa de cada entrada, no contra su nombre: 589 de 965
+        patrones reales llevan ``/`` (``tests/**/*.php``,
+        ``app/Config/Routes.php``), y casar contra el nombre los dejaría todos en
+        vacío. ``*``, ``?`` y ``[...]`` NO cruzan la barra; **sólo ``**``
+        desciende**, porque ``*`` a secas es el segundo patrón más usado (279
+        llamadas) y ahí significa «enséñame este directorio»: hacerlo recursivo
+        devolvería el árbol entero justo en el caso más frecuente. Las llaves
+        ``{json,lock}`` se expanden (39 llamadas reales las usan y `pathlib` no
+        las entiende). Y **distingue mayúsculas**, porque el runtime va sobre
+        Linux y el repo es PSR-4: casar ``home.php`` con ``Home.php`` le daría al
+        agente una ruta que después ``read_file`` no encuentra.
+
+        **2. Cuál es el default.** ``*`` — plano —, y el esquema del catálogo
+        pasa a decirlo. Anunciaba ``"**/*"``, y CUMPLIRLO habría sido peor que el
+        defecto: un ``list_files`` sobre la raíz de un CodeIgniter devolvería los
+        ~5.000 ficheros de ``vendor/`` en una sola llamada, y la rama del plan
+        del incidente llegó a tener 10.318. Corregir el contrato mintiendo por el
+        otro lado no vale, así que se corrige el esquema, no la implementación:
+        el default efectivo es el que ya había.
+
+        **3. El tope, que es la parte crítica.** :data:`_MAX_LIST_ENTRIES`
+        entradas (500, justificado allí con la distribución real), y **el
+        resultado dice que se truncó, cuántas había y cómo acotar**. Un truncado
+        silencioso es exactamente el defecto que este método arregla con otra
+        cara: el agente creería que no hay más ficheros. Por lo mismo,
+        ``truncated`` viaja SIEMPRE —también en ``False``—, porque la ausencia de
+        una señal es ambigua y la ambigüedad es lo que le hizo repetir.
+
+        **4. Un patrón que no se puede cumplir se RECHAZA.** Ignorarlo es
+        literalmente el defecto (no-string), y devolver ``[]`` sobre un patrón
+        que no se llegó a interpretar (llaves o corchetes sin cerrar) o que
+        apunta fuera del workspace (``/etc/**``, ``../``) diría «ese fichero no
+        existe» en vez de «esa pregunta no se puede contestar». Los errores
+        llevan la forma válida escrita. La única laxitud es la simétrica al
+        arreglo del ``path``: un ``pattern`` vacío, en blanco o ``null`` es el
+        default, porque el modelo manda las claves VACÍAS en vez de omitirlas
+        —medido: ``{"path": "", "pattern": "*"}`` doce veces— y «filtra por lo
+        que sea» sí tiene una interpretación obvia.
+
+        **Por qué el default de `path` vive aquí y no en `_safe_path`
+        (2026-08-31).** Medido en la ejecución
+        ``01a05881-89d7-79fa-be72-bd0e7c1a9fbb``: de sus 22 ``list_files``,
+        CATORCE fueron rechazadas con «a non-empty 'path' is required». El agente
+        quería listar el workspace —la operación más obvia que existe— y se comió
+        el 60% del presupuesto del run chocando contra un requisito de FORMA. Se
+        arregla SÓLO aquí a propósito: ``_safe_path`` lo comparten ``file_read``
+        / ``file_write`` / ``file_delete``, donde un path vacío tiene que seguir
+        siendo un error — «lista lo que sea» tiene interpretación obvia, «borra lo
+        que sea» no la tiene.
         """
         crudo = args.get("path")
         if crudo is None or (isinstance(crudo, str) and not crudo.strip()):
@@ -1096,15 +1547,57 @@ class WorkspaceFiles:
             return resolved
         if not resolved.is_dir():
             return ToolResult(ok=False, error=f"not a directory: {crudo}")
-        entries = [
-            {
-                "name": child.name,
-                "type": "dir" if child.is_dir() else "file",
-                "size": child.stat().st_size if child.is_file() else None,
-            }
-            for child in sorted(resolved.iterdir())
-            if child.name not in _CLI_ARTIFACTS
-        ]
-        # Se devuelve la ruta EFECTIVA, no la que mandó el modelo: si pidió ""
-        # y se listó ".", el `steps_log` tiene que decir qué se listó de verdad.
-        return ToolResult(ok=True, output={"path": crudo, "entries": entries})
+
+        patron_crudo = args.get("pattern")
+        if patron_crudo is None or (isinstance(patron_crudo, str) and not patron_crudo.strip()):
+            patron = _DEFAULT_LIST_PATTERN
+        elif not isinstance(patron_crudo, str):
+            return ToolResult(
+                ok=False,
+                error=(
+                    "'pattern' must be a string glob relative to 'path' (e.g. "
+                    f"'**/*.php'); got {type(patron_crudo).__name__}"
+                ),
+            )
+        else:
+            patron = patron_crudo.strip()
+        try:
+            glob = _compilar_glob(patron)
+        except _PatronInvalidoError as exc:
+            return ToolResult(ok=False, error=str(exc))
+
+        coincidencias, escaneadas, ilegibles = _recorrer(resolved, glob)
+        total = len(coincidencias)
+        truncado = total > _MAX_LIST_ENTRIES
+        entries = [_entrada(relativa, ruta) for relativa, ruta in coincidencias[:_MAX_LIST_ENTRIES]]
+
+        notas: list[str] = []
+        if truncado:
+            notas.append(
+                f"showing the first {_MAX_LIST_ENTRIES} of {total} matching entries, "
+                f"sorted by path. There ARE more than the ones listed: narrow the "
+                f"'pattern' (e.g. 'app/**/*.php' instead of '**/*') or point 'path' "
+                f"at a subdirectory."
+            )
+        elif total == 0:
+            notas.append(_nada_casa(crudo, patron, glob, escaneadas))
+        if ilegibles:
+            notas.append(
+                f"{ilegibles} director{'y' if ilegibles == 1 else 'ies'} could not be "
+                f"read and {'was' if ilegibles == 1 else 'were'} skipped, so entries "
+                f"under {'it' if ilegibles == 1 else 'them'} are not listed."
+            )
+
+        # Se devuelven la ruta y el patrón EFECTIVOS, no los que mandó el modelo:
+        # si pidió "" y se listó ".", el `steps_log` tiene que decir qué se listó
+        # de verdad y con qué filtro.
+        salida: dict[str, object] = {
+            "path": crudo,
+            "pattern": patron,
+            "entries": entries,
+            "truncated": truncado,
+            "total_matches": total,
+        }
+        if notas:
+            salida["note"] = " ".join(notas)
+        return ToolResult(ok=True, output=salida)

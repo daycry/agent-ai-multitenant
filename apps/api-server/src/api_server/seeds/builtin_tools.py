@@ -231,21 +231,93 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         _obj({"diff": {"type": "string", "description": "Unified diff."}}, ["diff"]),
         _obj({"applied_files": {"type": "array", "items": {"type": "string"}}}, ["applied_files"]),
     ),
+    # `pattern` y su default se reescribieron el 2026-09-01 y el motivo hay que
+    # dejarlo aquí, no sólo en el runtime: esta fila ES lo que el modelo ve, y
+    # decía dos cosas falsas a la vez. Anunciaba un filtro que `file_list` nunca
+    # leía (hacía `iterdir()`, plano y sin filtrar: 15 llamadas con patrón no
+    # trivial en un run real devolvieron todas el mismo listado, sin avisar), y
+    # anunciaba `"default": "**/*"`, que CUMPLIDO habría sido peor — la raíz de
+    # un CodeIgniter son ~5.000 ficheros de `vendor/`, y la rama de aquel plan
+    # llegó a 10.318. Por eso el default efectivo es `*` y la descripción explica
+    # la semántica entera: el modelo no tiene otro sitio donde leerla.
     BuiltinTool(
         "list-files",
         "list_files",
-        "List files matching a glob pattern under a path.",
+        (
+            "List entries under a path, filtered by a glob. 'pattern' is relative "
+            "to 'path' and is matched against each entry's RELATIVE PATH, so "
+            "'app/Config/Routes.php' and 'tests/**/*.php' both work. '*', '?' and "
+            "'[...]' never cross '/': only '**' descends, so the default '*' lists "
+            "just that one directory - use '**/*.php' to search the whole tree. "
+            "Braces list alternatives ('composer.{json,lock}'). Matching is "
+            "case-sensitive. At most 150 entries come back; when more match, "
+            "'truncated' is true and 'total_matches' says how many there were, so "
+            "you can narrow the pattern instead of assuming that is all. A pattern "
+            "that cannot be applied is rejected with an error, never ignored."
+        ),
         "file",
         "builtin",
         "safe",
         5,
         _obj(
             {
-                "path": {"type": "string", "default": "."},
-                "pattern": {"type": "string", "default": "**/*"},
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "Directory to list, relative to the workspace root.",
+                },
+                "pattern": {
+                    "type": "string",
+                    "default": "*",
+                    "description": (
+                        "Glob relative to 'path', matched against each entry's "
+                        "relative path. Only '**' descends into subdirectories."
+                    ),
+                },
             }
         ),
-        _obj({"files": {"type": "array", "items": {"type": "string"}}}, ["files"]),
+        _obj(
+            {
+                "path": {"type": "string", "description": "Directory that was listed."},
+                "pattern": {"type": "string", "description": "Glob that was applied."},
+                "entries": {
+                    "type": "array",
+                    "items": _obj(
+                        {
+                            "name": {
+                                "type": "string",
+                                "description": "Path of the entry, relative to 'path'.",
+                            },
+                            "type": {"type": "string", "enum": ["file", "dir"]},
+                            "size": {
+                                "type": ["integer", "null"],
+                                "description": "Size in bytes for files; null for directories.",
+                            },
+                        },
+                        ["name", "type"],
+                    ),
+                },
+                "truncated": {
+                    "type": "boolean",
+                    "description": (
+                        "True when more entries matched than were returned. Always "
+                        "present: false is the positive promise that this is all of them."
+                    ),
+                },
+                "total_matches": {
+                    "type": "integer",
+                    "description": "How many entries matched, counting the ones not listed.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "Only when the plain result would mislead: the listing was "
+                        "truncated, nothing matched, or a directory could not be read."
+                    ),
+                },
+            },
+            ["path", "pattern", "entries", "truncated", "total_matches"],
+        ),
     ),
     BuiltinTool(
         "search-code",

@@ -1598,9 +1598,23 @@ class _AgentLoop:
                 head = f"{first} … {symbol}" if symbol else first
                 digest = f"{head[:_READ_DIGEST_CHARS]} · {len(content)}B"
         elif base == "list_files":
-            files = output.get("files")
-            if isinstance(files, list):
-                digest = f"{len(files)} entries"
+            # La clave es `entries`, no `files`. Comprobado en la BD el
+            # 2026-09-01: 893 de 893 salidas reales de `list_files` traen
+            # `entries` y NINGUNA trae `files`, así que este digest —el que
+            # alimenta el bloque PROGRESS con lo que el agente ya ha mirado—
+            # llevaba muerto desde que se escribió. Venía del mismo
+            # `output_schema` mentiroso (`{"files": [...]}`) que anunciaba un
+            # `pattern` que la tool ignoraba.
+            entries = output.get("entries")
+            if isinstance(entries, list):
+                total = output.get("total_matches")
+                # Si hubo truncado, el digest dice el TOTAL: «20 de 4.442» es
+                # información distinta de «20», y es justo la que evita que el
+                # agente concluya que ya lo ha visto todo.
+                if isinstance(total, int) and total > len(entries):
+                    digest = f"{len(entries)} of {total} entries"
+                else:
+                    digest = f"{len(entries)} entries"
         if digest is None:
             return
         self.read_digests.pop(target, None)  # refresh LRU order

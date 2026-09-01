@@ -1989,3 +1989,599 @@ def test_one_ignore_line_covers_what_both_tools_can_leave_behind(
         f"{_PREFIJO_RESIDUO}build.0",
         f"{_PREFIJO_RESIDUO}vendor.0",
     ], f"los residuos de las dos tools no caben en un solo patrón: {residuos}"
+
+
+# ===========================================================================
+# `list_files` y su `pattern`: el contrato anunciado NO se cumplía
+# ===========================================================================
+# Medido en vivo el 2026-09-01, proyecto `Hello World CI4 v3` del tenant
+# mediapro. La tool ANUNCIA en su esquema —que es lo único que el modelo ve—
+#
+#     "List files matching a glob pattern under a path."
+#     {"path": {"default": "."}, "pattern": {"default": "**/*"}}
+#
+# y `file_list` NUNCA leía `pattern`: hacía `resolved.iterdir()`, un listado
+# PLANO de un nivel, sin filtrar. El agente buscaba los tests por el árbol:
+#
+#     list_files {"path":".", "pattern":"tests/**/*.php"}     -> [{"name":"docs"}]
+#     list_files {"path":".", "pattern":"*phpunit*"}          -> [{"name":"docs"}]
+#     list_files {"path":".", "pattern":"vendor/bin/phpunit"} -> [{"name":"docs"}]
+#
+# Ocho patrones distintos, la misma respuesta, ninguna señal de que el filtro se
+# estaba tirando a la basura. Por eso repetía: no podía concluir nada.
+#
+# Es la misma familia que el `path` vacío que se cerró el 2026-08-31 —el
+# contrato de la tool no coincide con su comportamiento— pero PEOR, porque aquél
+# devolvía un error y éste devolvía un resultado plausible.
+#
+# Lo que el modelo manda DE VERDAD (965 llamadas a `list_files` en el
+# `steps_log`, consultadas el 2026-09-01):
+#
+#     **/*  316 | *  279 | **/*.php  72 | **/*.md  69 | *.php  32 | **  8
+#     589 de 965 llevan '/'    -> el patrón casa contra la RUTA, no el nombre
+#     578 de 965 llevan '**'   -> la recursividad se pide explícitamente
+#      39 de 965 llevan llaves -> `**/composer.{json,lock}`, `{app,tests}/**/*.php`
+#      33 de 965 no llevan comodín alguno («¿existe app/Config/Routes.php?»)
+#
+# De ahí sale la semántica que fijan los tests de abajo.
+
+
+def _arbol_ci4(raiz: Path) -> None:
+    """Un CI4 en miniatura con la forma que tienen los patrones reales."""
+    ficheros = (
+        "composer.json",
+        "composer.lock",
+        "spark",
+        "phpunit.xml.dist",
+        "app/Config/Routes.php",
+        "app/Config/App.php",
+        "app/Controllers/Home.php",
+        "app/Views/welcome.php",
+        "tests/HomeTest.php",
+        "tests/unit/RouteTest.php",
+        "tests/_support/bootstrap.php",
+        "vendor/bin/phpunit",
+        "vendor/codeigniter4/framework/system/CodeIgniter.php",
+        "docs/README.md",
+    )
+    for relativa in ficheros:
+        destino = raiz / relativa
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text("x", encoding="utf-8")
+
+
+def _nombres(res: ToolResult) -> list[str]:
+    assert res.ok is True, res.error
+    assert res.output is not None
+    return [e["name"] for e in res.output["entries"]]
+
+
+# --- 1. el defecto medido --------------------------------------------------
+
+
+def test_the_pattern_is_actually_applied(tmp_path: Path) -> None:
+    """El defecto en una línea: el filtro se anunciaba y no se aplicaba."""
+    _arbol_ci4(tmp_path)
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "tests/**/*.php"})
+
+    assert _nombres(res) == [
+        "tests/HomeTest.php",
+        "tests/_support/bootstrap.php",
+        "tests/unit/RouteTest.php",
+    ], "`pattern` sigue sin leerse: esto es el listado plano de la raíz"
+
+
+def test_the_three_patterns_from_the_incident_now_answer(tmp_path: Path) -> None:
+    """Los tres patrones literales del run, que devolvían el mismo listado."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "tests/**/*.php"})) == [
+        "tests/HomeTest.php",
+        "tests/_support/bootstrap.php",
+        "tests/unit/RouteTest.php",
+    ]
+    assert _nombres(files.file_list({"path": ".", "pattern": "**/*phpunit*"})) == [
+        "phpunit.xml.dist",
+        "vendor/bin/phpunit",
+    ]
+    assert _nombres(files.file_list({"path": ".", "pattern": "vendor/bin/phpunit"})) == [
+        "vendor/bin/phpunit"
+    ]
+
+
+# --- 2. la semántica que se decide, cada pieza por separado ----------------
+
+
+def test_a_single_star_does_not_cross_directories(tmp_path: Path) -> None:
+    """`*` = este nivel. Es el 2.º patrón más usado (279 llamadas) y significa
+    «enséñame este directorio»: hacerlo recursivo devolvería el árbol entero."""
+    _arbol_ci4(tmp_path)
+
+    assert _nombres(_files(tmp_path).file_list({"path": ".", "pattern": "*"})) == [
+        "app",
+        "composer.json",
+        "composer.lock",
+        "docs",
+        "phpunit.xml.dist",
+        "spark",
+        "tests",
+        "vendor",
+    ]
+
+
+def test_only_double_star_descends(tmp_path: Path) -> None:
+    """`*.php` en la raíz de un CI4 no da nada; `**/*.php` da el árbol."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "*.php"})) == []
+    assert _nombres(files.file_list({"path": ".", "pattern": "**/*.php"})) == [
+        "app/Config/App.php",
+        "app/Config/Routes.php",
+        "app/Controllers/Home.php",
+        "app/Views/welcome.php",
+        "tests/HomeTest.php",
+        "tests/_support/bootstrap.php",
+        "tests/unit/RouteTest.php",
+        "vendor/codeigniter4/framework/system/CodeIgniter.php",
+    ]
+
+
+def test_the_pattern_matches_the_relative_path_not_the_name(tmp_path: Path) -> None:
+    """589 de 965 patrones reales llevan '/'. Casar contra el NOMBRE los
+    dejaría a todos en vacío, que es la forma silenciosa del mismo defecto."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "app/Config/Routes.php"})) == [
+        "app/Config/Routes.php"
+    ]
+    # Y la contraria: el nombre suelto NO casa una ruta profunda.
+    assert _nombres(files.file_list({"path": ".", "pattern": "Routes.php"})) == []
+
+
+def test_the_pattern_is_relative_to_the_path_given(tmp_path: Path) -> None:
+    """El patrón se ancla en `path`, no en la raíz del workspace."""
+    _arbol_ci4(tmp_path)
+
+    res = _files(tmp_path).file_list({"path": "app", "pattern": "**/*.php"})
+
+    assert _nombres(res) == [
+        "Config/App.php",
+        "Config/Routes.php",
+        "Controllers/Home.php",
+        "Views/welcome.php",
+    ]
+    assert res.output is not None
+    assert res.output["path"] == "app"
+
+
+def test_braces_are_expanded(tmp_path: Path) -> None:
+    """39 de las 965 llamadas reales usan llaves. `pathlib` no las entiende: sin
+    expandirlas, `**/composer.{json,lock}` devolvería vacío sobre un workspace
+    que SÍ tiene los dos ficheros — el defecto con otra cara."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "**/composer.{json,lock}"})) == [
+        "composer.json",
+        "composer.lock",
+    ]
+    assert _nombres(files.file_list({"path": ".", "pattern": "{app,tests}/**/*Test.php"})) == [
+        "tests/HomeTest.php",
+        "tests/unit/RouteTest.php",
+    ]
+
+
+def test_matching_is_case_sensitive(tmp_path: Path) -> None:
+    """El runtime corre sobre Linux y el repo es PSR-4: `Home.php` y `home.php`
+    son ficheros distintos. Casar sin distinguir mayúsculas le daría al agente
+    una ruta que después `read_file` no encuentra.
+
+    Se afirma sobre el NOMBRE que devuelve el listado, no sobre el sistema de
+    ficheros, para que valga igual en el Windows del desarrollador (que es
+    case-insensitive) y en el Linux del contenedor."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "**/Home.php"})) == [
+        "app/Controllers/Home.php"
+    ]
+    assert _nombres(files.file_list({"path": ".", "pattern": "**/home.php"})) == []
+
+
+def test_a_star_does_not_cross_a_separator_even_while_descending(tmp_path: Path) -> None:
+    """La pieza que hace predecible el resto: `**` desciende, `*` no.
+
+    Con `**/a*`, el `**/` come segmentos enteros y el `a*` casa DENTRO de uno
+    solo. Si `*` cruzara la barra, `x/a/b` casaría también y la diferencia entre
+    los dos comodines dejaría de significar nada.
+    """
+    (tmp_path / "x" / "a").mkdir(parents=True)
+    (tmp_path / "x" / "ab").write_text("x", encoding="utf-8")
+    (tmp_path / "x" / "a" / "b").write_text("x", encoding="utf-8")
+
+    assert _nombres(_files(tmp_path).file_list({"path": ".", "pattern": "**/a*"})) == [
+        "x/a",
+        "x/ab",
+    ]
+
+
+def test_question_mark_and_character_classes(tmp_path: Path) -> None:
+    (tmp_path / "ab.php").write_text("x", encoding="utf-8")
+    (tmp_path / "axb.php").write_text("x", encoding="utf-8")
+    files = _files(tmp_path)
+
+    assert _nombres(files.file_list({"path": ".", "pattern": "a?b.php"})) == ["axb.php"]
+    assert _nombres(files.file_list({"path": ".", "pattern": "a[bx]*.php"})) == [
+        "ab.php",
+        "axb.php",
+    ]
+    assert _nombres(files.file_list({"path": ".", "pattern": "a[!x]*.php"})) == ["ab.php"]
+
+
+# --- 3. el default efectivo -----------------------------------------------
+
+
+def test_the_default_pattern_is_flat_not_the_whole_tree(tmp_path: Path) -> None:
+    """El esquema anunciaba `"default": "**/*"`, y cumplirlo sería peor que el
+    defecto: `list_files` sobre la raíz de un CI4 devolvería los ~5.000 ficheros
+    de `vendor/` —en el incidente la rama llegó a 10.318— y reventaría el
+    contexto del agente en una sola llamada. El default efectivo es `*`."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    sin_patron = files.file_list({"path": "."})
+    plano = files.file_list({"path": ".", "pattern": "*"})
+
+    assert _nombres(sin_patron) == _nombres(plano)
+    assert "vendor/bin/phpunit" not in _nombres(sin_patron)
+    assert sin_patron.output is not None
+    assert sin_patron.output["pattern"] == "*", "el resultado no dice qué filtro se aplicó"
+
+
+def test_a_blank_pattern_is_the_same_as_omitting_it(tmp_path: Path) -> None:
+    """Mismo argumento que con `path`: el modelo manda la clave VACÍA, no la
+    omite (medido: `{"path": "", "pattern": "*"}` x12)."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+    esperado = _nombres(files.file_list({"path": "."}))
+
+    for patron in ("", "   ", None):
+        assert _nombres(files.file_list({"path": ".", "pattern": patron})) == esperado, (
+            f"pattern={patron!r} no se trató como ausente"
+        )
+
+
+def test_the_catalog_default_is_the_one_the_tool_applies(tmp_path: Path) -> None:
+    """El cruce que impide que esto vuelva a divergir.
+
+    El esquema del catálogo es LO ÚNICO que el modelo ve. Este test toma el
+    `default` que anuncia la fila `list-files` y comprueba, por comportamiento,
+    que pasárselo explícitamente da el MISMO resultado que omitirlo. Con el
+    `"**/*"` de antes fallaría por los dos lados a la vez: el anunciado no era
+    el efectivo, y el efectivo ni siquiera se aplicaba."""
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+
+    fila = next(t for t in BUILTIN_TOOLS if t.slug == "list-files")
+    propiedades = fila.input_schema["properties"]
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    anunciado = files.file_list(
+        {"path": propiedades["path"]["default"], "pattern": propiedades["pattern"]["default"]}
+    )
+    omitido = files.file_list({})
+
+    assert _nombres(anunciado) == _nombres(omitido), (
+        "el esquema anuncia un default que la implementación no aplica"
+    )
+
+
+def test_the_catalog_announces_the_keys_the_tool_returns(tmp_path: Path) -> None:
+    """La otra mitad del cruce: el esquema de SALIDA tampoco puede mentir.
+
+    Anunciaba `{"files": [...]}` con `files` en `required`, y la tool devuelve
+    `entries` desde siempre: 893 de 893 salidas reales del `steps_log` traen
+    `entries` y ninguna `files`.
+
+    Se cruzan las dos direcciones, y con las DOS formas del resultado —la normal
+    y la que lleva `note`—, porque `_obj` marca `additionalProperties: False`:
+    una clave que la tool devuelve y el esquema no declara es una promesa rota
+    en el sentido contrario.
+    """
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+
+    fila = next(t for t in BUILTIN_TOOLS if t.slug == "list-files")
+    declaradas = set(fila.output_schema["properties"])
+    obligatorias = set(fila.output_schema.get("required", ()))
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    normal = files.file_list({"path": ".", "pattern": "**/*.php"}).output
+    con_nota = files.file_list({"path": ".", "pattern": "*Test.php"}).output
+    assert normal is not None and con_nota is not None
+    assert "note" in con_nota, "el caso que ejercita la clave opcional no se dio"
+
+    for salida in (normal, con_nota):
+        assert set(salida) <= declaradas, (
+            f"la tool devuelve claves que el esquema no declara: {set(salida) - declaradas}"
+        )
+        assert obligatorias <= set(salida), (
+            f"el esquema exige claves que la tool no devuelve: {obligatorias - set(salida)}"
+        )
+    assert "entries" in obligatorias, "la clave que el agente lee de verdad no es obligatoria"
+
+
+# --- 4. el tope, y que el truncado SE DIGA --------------------------------
+
+
+def test_a_listing_over_the_cap_is_truncated_and_says_so(tmp_path: Path) -> None:
+    """Un truncado silencioso es EXACTAMENTE el defecto que se está cerrando,
+    con otra cara: el agente creería que no hay más ficheros."""
+    tope = file_tools._MAX_LIST_ENTRIES
+    total = tope + 25
+    (tmp_path / "src").mkdir()
+    for i in range(total):
+        (tmp_path / "src" / f"f{i:05d}.php").write_text("x", encoding="utf-8")
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "**/*.php"})
+
+    assert res.ok is True, res.error
+    assert res.output is not None
+    assert len(res.output["entries"]) == tope
+    assert res.output["truncated"] is True
+    assert res.output["total_matches"] == total
+    nota = res.output["note"]
+    assert str(total) in nota, "la nota no dice cuántas entradas había de verdad"
+    assert "pattern" in nota and "path" in nota, "la nota no dice cómo acotar la búsqueda"
+
+
+def test_a_listing_under_the_cap_promises_it_is_complete(tmp_path: Path) -> None:
+    """`truncated` va SIEMPRE: su ausencia sería ambigua para el modelo, y la
+    ambigüedad es lo que le hizo repetir ocho veces."""
+    _arbol_ci4(tmp_path)
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "**/*.php"})
+
+    assert res.output is not None
+    assert res.output["truncated"] is False
+    assert res.output["total_matches"] == len(res.output["entries"])
+    assert "note" not in res.output, "se mete ruido en el caso normal"
+
+
+def test_truncation_keeps_the_first_entries_in_path_order(tmp_path: Path) -> None:
+    """Determinista: dos llamadas iguales devuelven lo mismo, y el agente puede
+    razonar sobre el prefijo que sí ve."""
+    tope = file_tools._MAX_LIST_ENTRIES
+    for i in range(tope + 10):
+        (tmp_path / f"f{i:05d}.php").write_text("x", encoding="utf-8")
+
+    nombres = _nombres(_files(tmp_path).file_list({"path": ".", "pattern": "*.php"}))
+
+    assert nombres == sorted(nombres)
+    assert nombres[0] == "f00000.php"
+    assert nombres[-1] == f"f{tope - 1:05d}.php"
+
+
+# --- 5. el vacío que ENSEÑA en vez de mentir ------------------------------
+
+
+def test_zero_matches_explains_how_to_widen_the_search(tmp_path: Path) -> None:
+    """El agente probó ocho patrones porque ninguna respuesta le decía nada.
+    Un cero sin explicación es indistinguible de «no existe»."""
+    _arbol_ci4(tmp_path)
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "*Test.php"})
+
+    assert res.ok is True, res.error
+    assert res.output is not None
+    assert res.output["entries"] == []
+    assert "**/*Test.php" in res.output["note"], (
+        "la nota no propone la forma recursiva del patrón que el modelo mandó"
+    )
+
+
+def test_zero_matches_says_how_many_entries_it_visited(tmp_path: Path) -> None:
+    _arbol_ci4(tmp_path)
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "**/*.rs"})
+
+    assert res.output is not None
+    assert res.output["entries"] == []
+    recorridas = sum(1 for _ in tmp_path.rglob("*"))
+    nota = res.output["note"]
+    assert "**/" not in nota, "propone recursividad a un patrón que ya la lleva"
+    assert str(recorridas) in nota, (
+        "la nota no dice cuántas entradas se recorrieron: sin ese dato, un cero es "
+        "indistinguible de un directorio vacío"
+    )
+
+
+def test_a_literal_prefix_keeps_the_search_out_of_the_rest_of_the_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`app/**/*.php` no puede casar nada bajo `vendor/`, así que no se baja ahí.
+
+    Medido el 2026-09-01 sobre un árbol de 10.400 entradas con la forma del
+    incidente: sin la poda, este patrón —el mismo que la nota de truncado
+    recomienda para acotar— recorría el árbol entero y tardaba 176 ms en
+    devolver UNA coincidencia. Recomendarle al modelo que acote y que acotar no
+    le salga más barato es recomendarle humo.
+
+    Se observa por dónde abre el recorrido, que es la conducta que se afirma;
+    el resultado tiene que salir idéntico, y eso se comprueba en el mismo test.
+    """
+    _arbol_ci4(tmp_path)
+    abiertos: list[str] = []
+    real = file_tools.os.scandir
+
+    def _espia(ruta: Path) -> object:
+        abiertos.append(str(ruta))
+        return real(ruta)
+
+    monkeypatch.setattr(file_tools.os, "scandir", _espia)
+
+    res = _files(tmp_path).file_list({"path": ".", "pattern": "app/**/*.php"})
+
+    assert _nombres(res) == [
+        "app/Config/App.php",
+        "app/Config/Routes.php",
+        "app/Controllers/Home.php",
+        "app/Views/welcome.php",
+    ]
+    assert not [ruta for ruta in abiertos if "vendor" in ruta], (
+        f"se bajó a donde el prefijo literal del patrón no llega: {abiertos}"
+    )
+
+
+def test_a_non_recursive_pattern_never_descends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El default `*` mira UN nivel, y ni siquiera abre los subdirectorios.
+
+    Su hermana la poda por prefijo ya tenía test; ésta no, y una verificación
+    adversarial lo destapó quitando la guarda (`profundidad = None`): los 161
+    tests seguían en verde mientras el default pasaba de **7,8 ms a 810 ms** —
+    unas 100 veces— sobre el worktree real del incidente (11.956 entradas), y un
+    `list_files {}` de 9,1 ms a 1.466 ms.
+
+    El docstring del recorrido afirma que «el arreglo no encarece el caso
+    normal». Esto es lo que lo sostiene: sin esta guarda la afirmación sería
+    falsa y nadie se enteraría, que es la misma forma del defecto que este
+    fichero entero viene a cerrar — algo escrito y nunca contrastado.
+
+    Se afirma sobre la CONDUCTA (qué directorios se abren) y no sobre el tiempo,
+    que en una máquina cargada es una fuente de falsos rojos.
+    """
+    _arbol_ci4(tmp_path)
+    abiertos: list[str] = []
+    real = file_tools.os.scandir
+
+    def _espia(ruta: Path) -> object:
+        abiertos.append(str(ruta))
+        return real(ruta)
+
+    monkeypatch.setattr(file_tools.os, "scandir", _espia)
+
+    res = _files(tmp_path).file_list({"path": "."})
+
+    assert res.ok, res.error
+    assert len(abiertos) == 1, (
+        "un patrón sin `**` recorrió más de un directorio: la guarda de "
+        f"profundidad no está frenando el descenso. Abiertos: {abiertos}"
+    )
+    assert not [ruta for ruta in abiertos if "vendor" in ruta], (
+        f"se bajó a `vendor/` con el patrón por defecto: {abiertos}"
+    )
+
+
+def test_an_empty_directory_says_it_is_empty(tmp_path: Path) -> None:
+    (tmp_path / "build").mkdir()
+
+    res = _files(tmp_path).file_list({"path": "build", "pattern": "**/*"})
+
+    assert res.output is not None
+    assert res.output["entries"] == []
+    assert "empty" in res.output["note"]
+
+
+# --- 6. un patrón que no se puede cumplir se RECHAZA, no se ignora --------
+
+
+def test_a_non_string_pattern_is_rejected_with_an_actionable_error(tmp_path: Path) -> None:
+    """Ignorarlo es literalmente el defecto que se arregla."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    for basura in (["*.php"], 7, {"glob": "*"}, True):
+        res = files.file_list({"path": ".", "pattern": basura})
+        assert res.ok is False, f"pattern={basura!r} se aceptó y se ignoró"
+        assert "'pattern'" in (res.error or "")
+        assert "**/*.php" in (res.error or ""), "el error no enseña una forma válida"
+
+
+def test_an_unparsable_pattern_is_rejected(tmp_path: Path) -> None:
+    """Devolver `[]` sobre un patrón que no se pudo interpretar le haría creer
+    al agente que el fichero no está."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    llaves = files.file_list({"path": ".", "pattern": "composer.{json,lock"})
+    assert llaves.ok is False
+    assert "composer.{json,lock}" in (llaves.error or ""), (
+        "el error no enseña la forma equilibrada del patrón que el modelo mandó"
+    )
+
+    corchete = files.file_list({"path": ".", "pattern": "[abc*.php"})
+    assert corchete.ok is False
+    assert "[" in (corchete.error or "")
+
+
+def test_an_absolute_or_traversing_pattern_is_rejected(tmp_path: Path) -> None:
+    """`/etc/**` no casaría nada nunca, y ese `[]` diría «no existe» en vez de
+    «estás preguntando fuera del workspace»."""
+    _arbol_ci4(tmp_path)
+    files = _files(tmp_path)
+
+    for patron in ("/etc/**", "../**/*.php", "app/../../*.php"):
+        res = files.file_list({"path": ".", "pattern": patron})
+        assert res.ok is False, f"pattern={patron!r} devolvió un vacío que miente"
+        assert "relative" in (res.error or "").lower()
+
+
+# --- 7. lo que ya estaba y no se puede romper -----------------------------
+
+
+def test_cli_artifacts_stay_hidden_at_any_depth(tmp_path: Path) -> None:
+    """Se ocultaban en el listado plano; con recursividad hay que podar el
+    subárbol entero o `.claude/` reaparecería por la puerta de atrás."""
+    _arbol_ci4(tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".claude.json").write_text("{}", encoding="utf-8")
+
+    nombres = _nombres(_files(tmp_path).file_list({"path": ".", "pattern": "**/*"}))
+
+    assert not [n for n in nombres if ".claude" in n], (
+        f"los artefactos del CLI reaparecen con el patrón recursivo: {nombres}"
+    )
+
+
+def test_the_path_jail_still_holds_with_a_pattern(tmp_path: Path) -> None:
+    (tmp_path.parent / "fuera.php").write_text("x", encoding="utf-8")
+    (tmp_path / "app").mkdir()
+
+    res = _files(tmp_path).file_list({"path": "../", "pattern": "**/*.php"})
+
+    assert res.ok is False
+    assert "escapes the workspace" in (res.error or "")
+
+
+def test_list_files_wired_applies_the_pattern(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Por la misma puerta por la que la llama el agente: sin este test, todo lo
+    de arriba puede estar verde y la tool registrada seguir siendo la vieja."""
+    _arbol_ci4(tmp_path)
+    monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
+
+    registry = ToolRegistry()
+    register_builtin_families(
+        registry,
+        api=None,
+        sink=OrchestrationSink(),
+        flags={f: f == FAMILY_FILE for f in ALL_FAMILIES},
+    )
+
+    res = registry.call("list_files", {"path": "", "pattern": "tests/**/*.php"})
+
+    assert res.ok is True, res.error
+    assert res.output is not None
+    assert [e["name"] for e in res.output["entries"]] == [
+        "tests/HomeTest.php",
+        "tests/_support/bootstrap.php",
+        "tests/unit/RouteTest.php",
+    ]

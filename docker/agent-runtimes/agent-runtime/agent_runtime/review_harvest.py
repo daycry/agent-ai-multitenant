@@ -19,7 +19,17 @@ from typing import Any
 
 _WORKSPACE_ROOT_ENV = "AGENT_WORKSPACE_ROOT"
 # Never part of the reviewable deliverable: VCS, framework deps, agent scratch,
-# build noise. Mirrors what file_tools/list_files already hide from the agent.
+# build noise.
+#
+# Esta lista es SÓLO de la cosecha de review. Decía «mirrors what
+# file_tools/list_files already hide from the agent» y era falso: `list_files`
+# sólo oculta los artefactos del CLI (`.claude*`), y desde el 2026-09-01 que hace
+# globs de verdad se nota — un `**/*` lista `vendor/` entero.
+#
+# Y NO debe imitarse: `vendor/bin/phpunit` es uno de los patrones que un agente
+# manda de verdad (medido en el `steps_log`), así que ocultarle `vendor/` le
+# quitaría el binario que busca. Lo que no forma parte del ENTREGABLE a revisar
+# no es lo mismo que lo que el agente no puede mirar.
 _REVIEW_EXCLUDE_DIRS = frozenset(
     {".git", "vendor", "node_modules", "__pycache__", ".venv", "venv", ".claude"}
 )
