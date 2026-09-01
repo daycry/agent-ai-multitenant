@@ -276,9 +276,26 @@ def test_the_billing_window_query_skips_the_partitions_of_past_months(migrated: 
             for line in plan.splitlines()
             if f"on {TABLE}_" in line
         }
+
+        # El mes en el que EMPIEZA la ventana, preguntado a la misma base que
+        # planifica la consulta. De aquí sale qué se puede exigir y qué no.
+        #
+        # 2026-09-01: este test falló en CI con `['2026_08']`, y la afirmación
+        # era falsa otra vez —igual que la primera versión que el docstring ya
+        # cuenta—. La ventana `now() - 24h` del día 1 de un mes EMPIEZA en el mes
+        # anterior, así que Postgres escanea su partición porque de verdad la
+        # cruza. Podar ahí sería un fallo del planificador, no un acierto.
+        #
+        # Se deriva de la ventana en vez de suponer «todo mes anterior al actual
+        # está cerrado», que es cierto 30 días de cada 31. Un test que falla un
+        # día al mes no descubre nada: enseña a ignorarlo.
+        inicio_ventana = await conn.fetchval("SELECT now() - interval '24 hours'")
+        mes_de_la_ventana = month_start(inicio_ventana)
+
+        cerrados = [first for first in past if first < mes_de_la_ventana]
         leaked = sorted(
             partition_name(TABLE, first).removeprefix(f"{TABLE}_")
-            for first in past
+            for first in cerrados
             if partition_name(TABLE, first).removeprefix(f"{TABLE}_") in scanned
         )
         assert not leaked, (
@@ -286,9 +303,14 @@ def test_the_billing_window_query_skips_the_partitions_of_past_months(migrated: 
             f" ya cerrados ({leaked}): el filtro por `created_at` dejó de podar y"
             f" el particionado no le está comprando nada.\n{plan}"
         )
-        assert len(scanned) <= HEADROOM + 1, (
-            f"el plan toca {len(scanned)} particiones; el techo es el mes en curso"
-            f" más el colchón ({HEADROOM}).\n{plan}"
+
+        # Y el techo se mueve con la ventana por lo mismo: el mes en curso, más
+        # el anterior SÓLO cuando la ventana llega hasta él, más el colchón.
+        alcanzables = 1 if mes_de_la_ventana == now_month else 2
+        assert len(scanned) <= HEADROOM + alcanzables, (
+            f"el plan toca {len(scanned)} particiones; el techo son los"
+            f" {alcanzables} mes(es) que cruza la ventana más el colchón"
+            f" ({HEADROOM}).\n{plan}"
         )
 
     run(with_connection(migrated, _check))
