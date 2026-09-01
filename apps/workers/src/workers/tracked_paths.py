@@ -19,6 +19,13 @@ runtime tiene que tomar —«¿este directorio que me piden borrar entero es un
 entregable?»— basta con la raíz. Un `git ls-tree` no recursivo es además una
 sola lectura de árbol, no un recorrido del índice.
 
+**Versionado no basta: además tiene que ser TRABAJO.** El criterio del ADR 0164
+es «versionado = trabajo aceptado por una tarea anterior», y un directorio de
+dependencias no lo es aunque esté versionado — de hecho la plataforma ya lo
+afirma en otros dos sitios (`sync_to_head(preserve=...)` y la exclusión del
+`git add -A` de `commit_task`). Por eso esta lista los RESTA. Ver
+:func:`_directorios_de_dependencias`.
+
 Best-effort de principio a fin: cualquier fallo devuelve la lista vacía, que el
 runtime interpreta como «sin protección nueva» (compat hacia atrás). Perder la
 protección es malo; tumbar el run por no poder calcularla sería peor.
@@ -67,9 +74,50 @@ def compute_tracked_top_level_paths(worktree_path: str | None) -> list[str]:
             detail="el run sigue SIN protección de rutas versionadas",
         )
         return []
-    entries = [entry for entry in raw.split("\0") if entry]
+    dependencias = _directorios_de_dependencias()
+    entries = [entry for entry in raw.split("\0") if entry and entry not in dependencias]
     _log.info("tracked_paths.resolved", worktree=worktree_path, entries=len(entries))
     return entries
+
+
+def _directorios_de_dependencias() -> frozenset[str]:
+    """Los directorios que NUNCA son trabajo aceptado, estén versionados o no.
+
+    **Por qué hay que restarlos y no basta con que no lleguen a versionarse.**
+    Esta lista se calcula en la PROVISIÓN, desde el HEAD de la rama; el
+    des-versionado que los saca del índice ocurre al FINAL, en `commit_task`. En
+    una rama que ya se llevó `vendor/` por delante —1.151 ficheros, plan
+    `01a059db` de mediapro, medido el 2026-09-01— eso deja una ejecución entera
+    en la que `vendor` sigue estando en HEAD: sin esta resta,
+    `file_delete('vendor', recursive)` seguiría respondiendo «refusing to
+    recursively delete 'vendor': it is tracked in this branch» y la tarea
+    seguiría sin poder andamiar. Comprobado con la lista que tendría esa
+    ejecución siguiente.
+
+    **No es una lista nueva escrita a mano.** Es la MISMA declaración por runtime
+    del catálogo (`vendor` en los php, `node_modules` en los node, `.venv`/`venv`
+    en python) que la plataforma ya usa dos veces: `sync_to_head(preserve=...)`
+    la respeta al limpiar el worktree entre tareas, y la exclusión del
+    `git add -A` de `plan_git.commit_task` impide que vuelvan a entrar. Una
+    tercera copia a mano sería la forma de que se desincronizara de las otras dos
+    sin que nada avisara.
+
+    Import perezoso y degradado CONSERVADOR: si el catálogo no se puede leer se
+    devuelve el conjunto vacío, o sea que no se resta nada y se protege de MÁS.
+    Pasarse cuesta que una tarea se queje de no poder borrar `vendor/`; quedarse
+    corto costó los 85 ficheros de `app/` del 2026-08-31.
+    """
+    try:
+        from shared_test_runtimes import catalog as runtime_catalog
+
+        return frozenset(runtime_catalog.dependency_dirs())
+    except Exception as exc:  # catálogo ausente, manifiesto de release ilegible…
+        _log.warning(
+            "tracked_paths.dependency_dirs_unavailable",
+            error=str(exc)[:200],
+            detail="no se resta nada: se protege de más, nunca de menos",
+        )
+        return frozenset()
 
 
 def _log_git_failure(path: Path, error: str) -> None:

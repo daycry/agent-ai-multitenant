@@ -122,6 +122,13 @@ async def test_commit_and_push_persists_agent_output_to_bare(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_commit_and_push_noop_on_clean_worktree(tmp_path: Path) -> None:
+    """Un run que no produce nada no lleva NADA a la rama, y no revienta.
+
+    Ni siquiera el `.gitignore` base que la plataforma escribe desde
+    `commit_task` (2026-09-01): ese fichero acompaña a contenido y nunca es él
+    solo la razón de un commit, porque un proyecto vacío tiene que SEGUIR vacío
+    para el andamiador de la tarea siguiente (ADR 0163).
+    """
     # No file written → commit_task raises "clean" → swallowed, no push, no raise.
     settings = Settings(data_root=str(tmp_path))
     plan_id = str(uuid4())
@@ -142,8 +149,8 @@ async def test_commit_and_push_noop_on_clean_worktree(tmp_path: Path) -> None:
     bare = str(tmp_path / "projects" / "acme" / "api-ci" / "repos" / "api-ci.git")
     branch = make_plan_branch_name(plan_id, "p")
     # The branch exists (created at provision time, pointing at the empty seed
-    # commit), but NO agent commit was added — its tree is empty.
-    tree = _run_git("-C", bare, "ls-tree", "--name-only", branch)
+    # commit), but NO commit was added — its tree is empty.
+    tree = _run_git("-C", bare, "ls-tree", "-r", "--name-only", branch)
     assert tree.strip() == ""
 
 

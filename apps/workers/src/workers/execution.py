@@ -746,6 +746,24 @@ async def _provision_worktree(
         # backend PHP y frontend node) y limitarse al template por defecto del
         # proyecto seguiría arrasando los del otro.
         wt.sync_to_head(task_id, branch=branch, preserve=runtime_catalog.dependency_dirs())
+        # AQUÍ NO SE ESCRIBE NADA EN EL WORKSPACE, y en particular NO el
+        # `.gitignore` base (2026-09-01). Lo escribe `plan_git.commit_task`, al
+        # CERRAR la tarea, y la razón es el ADR 0163: lo que la plataforma deja en
+        # el workspace se lo encuentra el andamiador. Medido con la provisión real
+        # y Composer 2.9.4 — `Filesystem::isDirEmpty()` usa
+        # `ignoreDotFiles(false)`, o sea que un dotfile CUENTA:
+        #
+        #     workspace tras la provisión: ['.git', '.gitignore']
+        #     composer create-project codeigniter4/framework .  ->  rc=1
+        #         "Project directory is not empty."
+        #     (control, workspace vacío: rc=0, instala v4.7.4)
+        #
+        # Dentro del sandbox el beneficio de ese fichero es CERO —la exclusión de
+        # `commit_task` es la que protege a la plataforma— y el coste es que el
+        # andamiador canónico del proyecto del incidente no arranca. Escrito al
+        # commitear, llega igual al repositorio (que es para lo que se quería: que
+        # quien clone y trabaje fuera de la plataforma no se coma el mismo
+        # `git add -A`) sin existir nunca mientras corre el agente.
         if expect_plan_history and not any(entry.name != ".git" for entry in Path(path).iterdir()):
             raise RepoHistoryLostError(
                 f"El checkout de la rama '{branch}' está VACÍO pese a que el plan tiene "

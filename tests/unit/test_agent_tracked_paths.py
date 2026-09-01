@@ -385,3 +385,132 @@ async def test_el_contenedor_arranca_con_la_variable_puesta(
     assert result.status == "completed"
     assert runner.spec is not None
     assert runner.spec.env["AGENT_TRACKED_PATHS"] == "app\nsystem\ncomposer.json"
+
+
+# ---------------------------------------------------------------------------
+# 4. Un directorio de dependencias NUNCA es trabajo aceptado
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def worktree_con_vendor_versionado(tmp_path: Path) -> Path:
+    """La rama de mediapro tal como quedó: `vendor/` DENTRO de HEAD.
+
+    Es el estado que dejó el `git add -A` sin exclusiones del 2026-09-01 — 1.151
+    ficheros de `vendor/` commiteados en la rama del plan. El des-versionado que
+    lo repara ocurre al FINAL, en `commit_task`; esta lista se calcula al
+    PRINCIPIO, en la provisión. O sea que durante toda la ejecución siguiente
+    `vendor` sigue estando en HEAD, y sin este filtro la guarda lo seguiría
+    blindando una ejecución más.
+    """
+    work = tmp_path / "worktree-atascado"
+    (work / "app" / "Controllers").mkdir(parents=True)
+    (work / "app" / "Controllers" / "Home.php").write_text("<?php\n", encoding="utf-8")
+    (work / "vendor" / "codeigniter4").mkdir(parents=True)
+    (work / "vendor" / "autoload.php").write_text("<?php\n", encoding="utf-8")
+    (work / "vendor" / "codeigniter4" / "Boot.php").write_text("<?php\n", encoding="utf-8")
+    (work / "composer.json").write_text("{}\n", encoding="utf-8")
+    _git("init", "-q", "-b", "main", cwd=work)
+    _git("add", "-A", cwd=work)
+    _git("commit", "-qm", "la tarea anterior se llevo vendor/ a la rama", cwd=work)
+    return work
+
+
+def test_un_vendor_versionado_no_se_declara_como_trabajo_aceptado(
+    worktree_con_vendor_versionado: Path,
+) -> None:
+    """El criterio del ADR 0164 es «versionado = trabajo aceptado», y un árbol de
+    dependencias no lo es AUNQUE esté versionado.
+
+    La lista no se escribe a mano: se resta `dependency_dirs()`, la MISMA
+    declaración por runtime que ya usan `sync_to_head(preserve=...)` y la
+    exclusión del commit.
+    """
+    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+
+    assert "vendor" not in entries, (
+        "`vendor` se anuncia como versionado: la guarda del ADR 0164 lo blindará "
+        "otra ejecución entera y la tarea seguirá sin poder andamiar"
+    )
+    assert sorted(entries) == ["app", "composer.json"], (
+        "el filtro se llevó por delante deliverable de verdad"
+    )
+
+
+def test_la_guarda_del_runtime_suelta_vendor_y_sigue_protegiendo_app(
+    worktree_con_vendor_versionado: Path,
+) -> None:
+    """El síntoma medido, de punta a punta: worker → contrato → guarda.
+
+    Con la lista que tendría la ejecución siguiente, `file_delete(vendor,
+    recursive)` devolvía «refusing to recursively delete 'vendor': it is tracked
+    in this branch». Se ejercita la guarda de verdad (`WorkspaceFiles`), no una
+    aserción sobre la lista, porque el defecto está justo en la junta entre las
+    dos mitades.
+    """
+    from agent_runtime.file_tools import WorkspaceFiles
+
+    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+    files = WorkspaceFiles(
+        root=str(worktree_con_vendor_versionado),
+        tracked_paths="\n".join(entries),
+    )
+
+    suelta = files.file_delete({"path": "vendor", "recursive": True})
+    assert suelta.ok, f"la guarda sigue blindando vendor/: {suelta.error}"
+    assert not (worktree_con_vendor_versionado / "vendor").exists()
+
+    protegida = files.file_delete({"path": "app", "recursive": True})
+    assert not protegida.ok, "app/ es el entregable de la tarea anterior y NO se suelta"
+    assert "tracked in this branch" in (protegida.error or "")
+    assert (worktree_con_vendor_versionado / "app" / "Controllers" / "Home.php").is_file()
+
+
+def test_los_nombres_salen_del_catalogo_y_no_de_una_lista_a_mano(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Añadir un runtime al catálogo tiene que bastar.
+
+    Se sustituye la fuente por un nombre que no existe en ninguna parte del
+    código: si desaparece de la lista, es que se restó de verdad; y `vendor`
+    tiene que volver a aparecer, porque ya no lo declara nadie.
+    """
+    from shared_test_runtimes import catalog
+
+    monkeypatch.setattr(catalog, "dependency_dirs", lambda: ("cachorros",))
+    work = tmp_path / "otro-stack"
+    (work / "cachorros").mkdir(parents=True)
+    (work / "cachorros" / "instalado.txt").write_text("x\n", encoding="utf-8")
+    (work / "vendor").mkdir()
+    (work / "vendor" / "autoload.php").write_text("<?php\n", encoding="utf-8")
+    (work / "src").mkdir()
+    (work / "src" / "App.php").write_text("<?php\n", encoding="utf-8")
+    _git("init", "-q", "-b", "main", cwd=work)
+    _git("add", "-A", cwd=work)
+    _git("commit", "-qm", "init", cwd=work)
+
+    entries = compute_tracked_top_level_paths(str(work))
+
+    assert "cachorros" not in entries
+    assert sorted(entries) == ["src", "vendor"], (
+        "la lista de directorios de dependencias está escrita a mano en algún sitio"
+    )
+
+
+def test_si_el_catalogo_no_se_puede_leer_se_protege_de_mas_y_no_de_menos(
+    worktree_con_vendor_versionado: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El degradado tiene un lado correcto, y es el conservador.
+
+    Si el catálogo revienta, la respuesta es la lista COMPLETA: se protege de más
+    (una tarea se queja de que no puede borrar `vendor/`) en vez de dejar de
+    proteger `app/` (85 ficheros perdidos, el incidente del 2026-08-31).
+    """
+    from shared_test_runtimes import catalog
+
+    def _boom() -> tuple[str, ...]:
+        raise RuntimeError("el manifiesto de release no está")
+
+    monkeypatch.setattr(catalog, "dependency_dirs", _boom)
+
+    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+
+    assert sorted(entries) == ["app", "composer.json", "vendor"]
