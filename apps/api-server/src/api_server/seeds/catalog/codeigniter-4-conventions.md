@@ -200,6 +200,165 @@ Convenciones:
 - **No** edites los _baselines_ para silenciar problemas preexistentes: sólo los
   problemas nuevos de PHPStan/Psalm deben fallar.
 
+## Instalar el esqueleto sobre un workspace que ya existe
+
+`composer create-project codeigniter4/framework .` **exige que el directorio
+esté COMPLETAMENTE VACÍO**, no «sin `.git`». Cualquier entrada lo aborta,
+ocultas incluidas:
+
+```text
+Project directory "." is not empty.
+```
+
+De esa premisa sale todo lo demás. Medido el 2026-08-31 en el proyecto «Hello
+World CI4 v3»: el agente quitó `.git` y el comando **siguió** fallando
+—quedaban `README.md` y `composer.log`—; sólo entró cuando el directorio quedó
+a cero. Sin la premisa delante, la estrategia que se deduce es «vaciar el
+directorio», y en el segundo intento eso se llevó `app/` con 85 ficheros que
+eran el deliverable ya commiteado de la tarea anterior. El camino que sí existe
+es el de abajo.
+
+**El worktree de una tarea casi nunca está vacío.** Tres motivos, y ninguno es
+una anomalía del proyecto:
+
+- Trae el `README` (y lo que lleve) de la rama base: un repositorio recién
+  creado ya tiene contenido.
+- En un **reintento** trae el deliverable entero de la tarea anterior, ya
+  commiteado en la rama del plan.
+- Trae el `.git` del worktree. El worker lo **esconde** mientras corre el agente
+  (ADR 0163) para que no puedas borrarlo, así que no lo verás en `list_files`;
+  eso desatasca el primer andamiaje sobre un worktree virgen y nada más. El
+  resto de entradas siguen ahí y siguen bloqueando `create-project`.
+
+### Procedimiento: andamiar en un temporal y mover
+
+1. **Comprueba antes si ya hay CodeIgniter**: `list_files` con `path: "."` (una
+   cadena vacía también vale: significa `.`). Si aparecen `app/`, `system/`,
+   `spark` y un `composer.json` que requiere `codeigniter4/framework`, **no
+   andamies**: salta a «Si el proyecto ya tiene CodeIgniter instalado».
+2. **Instala en un subdirectorio del propio workspace**:
+   `composer create-project codeigniter4/framework _skel --no-interaction`.
+   Composer crea `_skel` él solo: no necesitas `mkdir` —y probablemente no lo
+   tengas, porque `mkdir ci4tmp` rebotó contra la allowlist (ADR 0093)—.
+3. **Lista lo instalado**: `list_files` con `path: "_skel"`. La lista trae
+   también las entradas que empiezan por punto, que son las que se olvidan al
+   mover a mano.
+4. **Mueve entrada por entrada a la raíz** con `move_file`
+   (`{"source": "_skel/app", "destination": "app"}`). Un directorio viaja
+   entero en una sola llamada. Si el destino ya existe la llamada se
+   **rechaza**: sobrescribir es la variante destructiva y se pide aparte.
+5. **Retira el temporal**: `delete_file` con
+   `{"path": "_skel", "recursive": true}`. Aquí sí es legítimo: `_skel` lo
+   creaste tú en este run y no está versionado, así que la guarda de «Lo que NO
+   se hace» no aplica.
+
+Detalle del paso 4, que es donde se decide si esto sale bien. Para un fichero
+suelto en el que el del framework deba ganar —`README.md` es el caso típico—
+añade `"overwrite": true`. Para un directorio de primer nivel **ya versionado**
+(`app/` en un reintento) no lo intentes ni con `overwrite`: la tool lo rechaza
+por el mismo motivo que el borrado recursivo, y con razón — mueve dentro sólo
+los ficheros que de verdad quieras, y no vacíes el destino para hacer sitio.
+
+Los pasos 1, 3, 4 y 5 son de la familia de tools `file`, que **no** depende de
+la allowlist de comandos del proyecto: siguen estando disponibles aunque
+`stack_exec` te niegue medio toolchain.
+
+Antes de dar la tarea por hecha: escribe el `.gitignore` («Qué NO se versiona»)
+y
+comprueba que el esqueleto responde, por ejemplo con `php spark routes`. Si no
+moviste `vendor/`, un `composer install` en la raíz lo reconstruye desde el
+`composer.lock` que sí moviste.
+
+Y un atajo que no lo es: `composer require codeigniter4/framework` **no
+andamia**. Deja la librería bajo `vendor/`, sin `app/`, sin `public/` y sin
+`spark` — es decir, sin lo único que la tarea pide.
+
+### Lo que NO se hace: vaciar el workspace
+
+Borrar lo que estorba para que el andamiador arranque **destruye trabajo de
+otras tareas**. No es un riesgo teórico, es lo que pasó:
+
+```text
+delete_file {"path": "app", "recursive": true}   ->  ok, entries=85
+```
+
+Esas 85 entradas eran el deliverable commiteado de la tarea anterior. `app/` no
+tenía ningún significado especial: era la entrada más grande de la lista.
+
+La plataforma ahora lo **rechaza**. Saberlo ahorra iteraciones contra la puerta:
+
+- `delete_file` recursivo sobre un directorio de primer nivel **versionado**
+  devuelve error: _«refusing to recursively delete 'app': it is tracked in this
+  branch…»_. Vale para cualquier entrada que ya esté en la rama.
+- `delete_file` sobre la **raíz**, también: no es podar un subárbol, es borrar
+  el deliverable entero.
+- `.git` no se toca: la tool lo rechaza (ADR 0163). Sin él tu trabajo no se
+  puede commitear y quedaría hecho, en disco y fuera de toda rama — el desenlace
+  del primer run.
+- Por `stack_exec` tampoco: `rm -rf ./* ./.??*` rebotó contra la allowlist. Y
+  donde `rm` estuviera autorizado sería el mismo destrozo: la razón para no
+  hacerlo es el deliverable ajeno, no la guarda.
+
+No insistas con la misma llamada: repetirla con los mismos argumentos dispara
+la guarda de bucle —la cuarta idéntica corta el run—, y salta igual aunque la
+tool sea de lectura. Relanzar `create-project .` tras borrar un fichero suelto
+no es una estrategia nueva; el procedimiento de arriba sí.
+
+### Si el proyecto ya tiene CodeIgniter instalado
+
+No re-andamies. Es el caso del reintento, y es el que costó el deliverable: el
+worktree ya traía CI4 de la tarea anterior y aun así se lanzó `create-project`
+cuatro veces más.
+
+- Que falte `vendor/` **no** significa que no esté instalado: `vendor/` no se
+  versiona («Qué NO se versiona»). Se reconstruye con `composer install`, que
+  respeta las versiones exactas del `composer.lock`. `composer update` no:
+  reescribe el lock y mete en tu tarea un diff de dependencias que nadie pidió.
+- Que falte un directorio concreto (`app/Modules/{Zona}/{Modulo}/…`) es trabajo
+  de desarrollo normal: se crea con `write_file`, no reinstalando el framework.
+- Trabaja sobre lo que hay. El esqueleto es el deliverable de otra tarea y su
+  commit forma parte del plan; tu diff debe ser lo que añades, no una
+  reinstalación que reescribe ficheros ajenos.
+
+## Qué NO se versiona
+
+`composer create-project codeigniter4/framework .` **no deja un `.gitignore` en
+la raíz**. Comprobado el 2026-08-31 sobre una instalación intacta: los únicos
+`.gitignore` del árbol son los que traen dentro los paquetes de `vendor/`.
+
+Consecuencia si nadie lo escribe: el primer commit se lleva `vendor/` entero.
+Medido en ese mismo proyecto — 4.442 ficheros de dependencias en la rama del
+plan, sobre un total de 5.192. El diff de revisión de la tarea siguiente y el PR
+del plan quedan ilegibles, y cada worktree posterior arrastra la copia.
+
+**Escribe el `.gitignore` en la misma tarea que instala el esqueleto**, antes de
+dar la tarea por hecha:
+
+```gitignore
+/vendor/
+/writable/cache/
+/writable/logs/
+/writable/session/
+/writable/uploads/
+/writable/debugbar/
+.env
+/.php-cs-fixer.php
+/.phpunit.cache
+/phpunit.xml
+/tests/coverage*
+```
+
+Tres notas sobre por qué esa lista y no otra:
+
+- **`/vendor/`** lo reconstruye `composer install` desde `composer.lock`, que sí
+  se versiona. Versionar ambos es guardar dos veces lo mismo, y sólo uno de los
+  dos manda.
+- **`/writable/`** se versiona en su _estructura_ pero no en su contenido: CI4
+  necesita que los directorios existan, así que ignora los subdirectorios de
+  runtime uno a uno en vez de la carpeta entera.
+- **`.env`** nunca; commitea `env` (el ejemplo que ya trae el framework). Es la
+  misma regla que está en la skill de seguridad de este stack.
+
 ## Autenticación y seguridad
 
 La autenticación se gestiona con **`daycry/auth`** (config `Config/Auth.php`):

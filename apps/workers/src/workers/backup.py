@@ -134,10 +134,31 @@ class SubprocessRunner:
         import os
 
         full_env = {**os.environ, **(env or {})}
+        # `errors="replace"` es la mitad SUSTANTIVA (2026-08-31). Con
+        # decodificación estricta —lo que hace `text=True` a secas— un solo byte
+        # que no case con el códec revienta con `UnicodeDecodeError` DENTRO del
+        # hilo lector de `subprocess.run`, no en el código de aquí. En POSIX un
+        # nombre de fichero es una ristra de bytes cualquiera, y `tar` los mete
+        # tal cual en sus avisos: un fichero exótico bajo un bind path no da un
+        # backup degradado, da una noche SIN bundle. El proceso cuyo trabajo es
+        # sobrevivir a lo inesperado no puede caerse por un nombre raro.
+        #
+        # `encoding="utf-8"` es la mitad menor, y el argumento NO es el mismo que
+        # en `git_repos._run_git`: git emite UTF-8 pase lo que pase, mientras que
+        # tar y pg_dump sí traducen sus mensajes según el locale. Se fija igual
+        # porque el bundle se captura en el contenedor (LANG=C.UTF-8) y las rutas
+        # del data-root son UTF-8, así que pinearlo hace que un dev host lea lo
+        # MISMO que producción en vez de `documentaciÃ³n`. Es seguro hacerlo
+        # porque aquí nadie parsea la salida: el motor ramifica por `returncode`
+        # y sólo incrusta este texto en el mensaje de `BackupError` — que se lee
+        # en pleno DR, el peor momento para tener que adivinar de qué fichero
+        # habla tar.
         completed = subprocess.run(  # — explicit argv, no shell
             list(args),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=full_env,
             timeout=timeout,
             check=False,

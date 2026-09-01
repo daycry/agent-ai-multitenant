@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -78,6 +78,7 @@ from workers.run_spec import (
     _resolve_tool_spec_images,
 )
 from workers.secrets import StagedSecrets
+from workers.tracked_paths import TRACKED_PATHS_ENV, compute_tracked_top_level_paths
 
 # Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
 # tasks/maintenance/tests siguen importando de workers.execution. `__all__`
@@ -154,6 +155,7 @@ def _build_runtime_env(
     reflection_assess: bool = False,
     code_diff: str | None = None,
     approved_actions: list[dict[str, Any]] | None = None,
+    tracked_paths: list[str] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -177,6 +179,10 @@ def _build_runtime_env(
     NO se mintea token — sin token el runtime salta esas familias con gracia
     (backward-compat, el comportamiento actual). El runtime también degrada con
     gracia si el token expira o el api-server no responde.
+
+    ``tracked_paths`` llega YA CALCULADO (:mod:`workers.tracked_paths`, desde la
+    provisión del workspace): esta función es PURA y no habla con git ni con
+    docker, que es lo que permite testear el spec en aislamiento.
     """
     spec = _agent_spec(
         request,
@@ -228,6 +234,18 @@ def _build_runtime_env(
         joined = ",".join(internal_mcp_hosts)
         env["NO_PROXY"] = joined
         env["no_proxy"] = joined
+    # Las entradas de PRIMER NIVEL versionadas en la rama del plan, para que el
+    # runtime no borre en bloque un árbol que es el entregable ya commiteado de
+    # otra tarea. El 2026-08-31 un `delete_file` recursivo sobre `app/` se llevó
+    # 85 ficheros del entregable anterior en «Hello World CI4 v3» (mediapro): el
+    # sandbox no puede distinguirlo de `vendor/` porque el ADR 0163 le esconde
+    # el `.git`. Separadas por `\n` — el nombre y el formato son el contrato.
+    #
+    # Lista vacía => NO se emite la clave. Un proyecto vacío (primera tarea del
+    # plan, sin commit todavía) y un worker anterior a esto tienen que verse
+    # IGUAL desde el runtime, que sin la variable no aplica la protección nueva.
+    if tracked_paths:
+        env[TRACKED_PATHS_ENV] = "\n".join(tracked_paths)
     return env
 
 
@@ -728,6 +746,24 @@ async def _provision_worktree(
         # backend PHP y frontend node) y limitarse al template por defecto del
         # proyecto seguiría arrasando los del otro.
         wt.sync_to_head(task_id, branch=branch, preserve=runtime_catalog.dependency_dirs())
+        # AQUÍ NO SE ESCRIBE NADA EN EL WORKSPACE, y en particular NO el
+        # `.gitignore` base (2026-09-01). Lo escribe `plan_git.commit_task`, al
+        # CERRAR la tarea, y la razón es el ADR 0163: lo que la plataforma deja en
+        # el workspace se lo encuentra el andamiador. Medido con la provisión real
+        # y Composer 2.9.4 — `Filesystem::isDirEmpty()` usa
+        # `ignoreDotFiles(false)`, o sea que un dotfile CUENTA:
+        #
+        #     workspace tras la provisión: ['.git', '.gitignore']
+        #     composer create-project codeigniter4/framework .  ->  rc=1
+        #         "Project directory is not empty."
+        #     (control, workspace vacío: rc=0, instala v4.7.4)
+        #
+        # Dentro del sandbox el beneficio de ese fichero es CERO —la exclusión de
+        # `commit_task` es la que protege a la plataforma— y el coste es que el
+        # andamiador canónico del proyecto del incidente no arranca. Escrito al
+        # commitear, llega igual al repositorio (que es para lo que se quería: que
+        # quien clone y trabaje fuera de la plataforma no se coma el mismo
+        # `git add -A`) sin existir nunca mientras corre el agente.
         if expect_plan_history and not any(entry.name != ".git" for entry in Path(path).iterdir()):
             raise RepoHistoryLostError(
                 f"El checkout de la rama '{branch}' está VACÍO pese a que el plan tiene "
@@ -1552,6 +1588,10 @@ class _Workspace:
     # `None` cuando no hay worktree o git no da nada — el reviewer cae entonces
     # a la cosecha de ficheros de siempre).
     code_diff: str | None = None
+    # Contrato `AGENT_TRACKED_PATHS`: las entradas de primer nivel VERSIONADAS en
+    # la rama del plan. Vacía = sin protección (proyecto sin commits, run sin
+    # worktree, workspace read-only o fallo de git).
+    tracked_paths: list[str] = field(default_factory=list)
 
 
 async def _provision_workspace(
@@ -1610,6 +1650,18 @@ async def _provision_workspace(
         # ya hecho en el prompt del reviewer, igual que el `<test-report>`: al
         # sandbox no se le da git (principio 2).
         ws.code_diff = compute_task_review_diff(ws.host_path, str(task_id))
+    # Contrato `AGENT_TRACKED_PATHS`: qué parte de `/workspace` está versionada.
+    # Se calcula AQUÍ por la misma razón que el diff del reviewer —es el único
+    # punto con worktree y git a la vez— y además porque justo después
+    # `conduct_execution` esconde el `.git` (ADR 0163): dentro del sandbox ya no
+    # queda a quién preguntar.
+    #
+    # Sólo cuando el workspace es ESCRIBIBLE. En un run de review el worktree del
+    # implementador se monta read-only (ADR 0095), así que el agente no puede
+    # borrar nada y no hay protección que publicar; el mismo criterio que usa la
+    # guarda de `git_link_hidden`.
+    if ws.host_path is not None and not ws.read_only and ws.error is None:
+        ws.tracked_paths = compute_tracked_top_level_paths(ws.host_path)
     return ws
 
 
@@ -1775,6 +1827,10 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             # ADR 0135: lo que un humano ya aprobó en esta task — el gate del
             # sandbox lo canjea en vez de volver a aparcar la misma acción.
             approved_actions=prepared.approved_actions,
+            # Qué hay VERSIONADO en `/workspace`, calculado por la provisión (el
+            # único punto con git). Sin esto el runtime no puede distinguir el
+            # entregable commiteado de otra tarea de un artefacto reconstruible.
+            tracked_paths=workspace.tracked_paths,
         ),
         labels={"com.agentic-platform.execution-id": exec_id},
         workspace_host_path=workspace.host_path,

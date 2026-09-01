@@ -272,3 +272,93 @@ def test_los_agentes_van_antes_que_sus_capacidades() -> None:
         "la pertenencia al equipo se siembra antes de crear los agentes: "
         "fallará contra `team_members.agent_id`"
     )
+
+
+# ---------------------------------------------------------------------------
+# El CATÁLOGO en sí, no sólo el cableado
+# ---------------------------------------------------------------------------
+#: Los dos seeds que crean las filas de `tools` y `skills`. Son la mitad que
+#: faltaba: el refresco re-aplicaba las junctions (`agent_tools`,
+#: `agent_skills`) sobre un catálogo que nadie volvía a tocar.
+#:
+#: Medido el 2026-08-31. Se añadió el parámetro `recursive` al esquema de
+#: `delete-file` y, tras desplegar, la base seguía sirviendo el esquema viejo:
+#: el refresco había corrido entero y en verde. Hubo que sembrar a mano — que es
+#: EXACTAMENTE el parche que este fichero existe para no volver a necesitar.
+#:
+#: Y el modo de fallo grave no es el esquema rancio sino el siguiente: una tool
+#: NUEVA se reparte a un rol en el código, el catálogo no la tiene, y el paso de
+#: cableado revienta contra la FK `agent_tools.tool_id`. El roster entero se
+#: queda sin re-aplicar por una tool que nadie sembró.
+_SEEDS_DEL_CATALOGO: dict[str, str] = {
+    "tools": "seed_builtin_tools",
+    "skills": "seed_builtin_skills",
+}
+
+
+def _pasos_del_refresco() -> list[str]:
+    """Los nombres de paso del refresco, EN ORDEN.
+
+    Se leen de la tupla `pasos` porque el orden es la FK, no una preferencia, y
+    el test de abajo afirma sobre él.
+    """
+    fn = _funcion(_STARTUP, "refresh_builtin_agent_capabilities")
+    for nodo in ast.walk(fn):
+        # `pasos` lleva anotación de tipo, así que es un `AnnAssign`. Se aceptan
+        # las dos formas para que quitar la anotación no deje el test ciego.
+        if isinstance(nodo, ast.AnnAssign):
+            destinos = {nodo.target.id} if isinstance(nodo.target, ast.Name) else set()
+        elif isinstance(nodo, ast.Assign):
+            destinos = {t.id for t in nodo.targets if isinstance(t, ast.Name)}
+        else:
+            continue
+        if "pasos" not in destinos or not isinstance(nodo.value, ast.Tuple):
+            continue
+        nombres: list[str] = []
+        for elt in nodo.value.elts:
+            if isinstance(elt, ast.Tuple) and elt.elts:
+                primero = elt.elts[0]
+                if isinstance(primero, ast.Constant) and isinstance(primero.value, str):
+                    nombres.append(primero.value)
+        return nombres
+    raise AssertionError("no se encontró la tupla `pasos` en el refresco")
+
+
+def test_el_refresco_siembra_tambien_el_catalogo() -> None:
+    """Las tools y skills EN SÍ, no sólo a quién se le reparten.
+
+    Sin esto, cambiar el esquema de una tool built-in no llega nunca a la base:
+    el refresco corre entero, en verde, y sirve el esquema de hace meses.
+    """
+    referenciados = _nombres_referenciados(_funcion(_STARTUP, "refresh_builtin_agent_capabilities"))
+
+    faltan = sorted(fn for fn in _SEEDS_DEL_CATALOGO.values() if fn not in referenciados)
+    assert not faltan, (
+        f"el refresco no re-siembra {faltan}: el cableado se re-aplica sobre un "
+        "catálogo que nadie actualiza, así que un esquema de tool cambiado —o "
+        "una tool nueva— no llega a la base aunque el refresco salga en verde"
+    )
+
+
+def test_el_catalogo_se_siembra_antes_de_repartirlo() -> None:
+    """El orden es la FK: `agent_tools.tool_id` referencia a `tools.id`.
+
+    Cablear antes de sembrar revienta contra la clave ajena en cuanto se reparte
+    una tool que el catálogo todavía no tiene — y con una transacción por paso,
+    lo que se pierde es el roster entero de ese paso, no sólo la tool nueva.
+    """
+    pasos = _pasos_del_refresco()
+
+    for catalogo in _SEEDS_DEL_CATALOGO:
+        assert catalogo in pasos, f"el paso {catalogo!r} no está en la tupla `pasos` del refresco"
+
+    cableado = [p for p in pasos if p.endswith(("_tools", "_skills"))]
+    assert cableado, "no se encontró ningún paso de cableado: ¿cambió la convención?"
+
+    primero_cableado = min(pasos.index(p) for p in cableado)
+    for catalogo in _SEEDS_DEL_CATALOGO:
+        assert pasos.index(catalogo) < primero_cableado, (
+            f"el paso {catalogo!r} va DESPUÉS del primer paso de cableado "
+            f"({pasos[primero_cableado]!r}): repartir una tool que el catálogo "
+            "todavía no tiene revienta contra la FK `agent_tools.tool_id`"
+        )

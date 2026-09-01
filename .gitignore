@@ -161,6 +161,11 @@ scripts/demos/.demo_state_06_9.json
 # Claude Code internal lockfile (per-session / per-machine).
 .claude/scheduled_tasks.lock
 
+# Marcador interno de la herramienta, por sesión y por máquina. No describe el
+# repo ni lo reproduce nadie: aparecía en cada `git status` invitando a colarse
+# en un `git add -A`.
+.claude/.headroom_wrap_marker.json
+
 # Bundles de backup locales (bind de workers-aux; durabilidad 2026-07-03)
 .backups/
 

@@ -10,6 +10,7 @@ peer-review path owns it).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -42,6 +43,10 @@ async def _seed(
     *,
     reviewer_type: str | None,
     prior_output: str = "did the work",
+    prior_steps_log: list | None = None,
+    implementer_agent: bool = False,
+    reviewer_runs_after: int = 0,
+    reviewer_steps_log: list | None = None,
     acceptance_criteria: list | None = None,
     reviewer_model: dict | None = None,
     project_model: dict | None = None,
@@ -55,7 +60,13 @@ async def _seed(
     ``project_budgets`` / ``project_paused_by_budget`` set the project's
     ``execution_budgets`` override and its budget auto-pause flag (prod-06
     budget_02 / Plan 11.1 task_11_1_06)."""
-    ids = {"tenant": uuid4(), "project": uuid4(), "task": uuid4(), "reviewer": uuid4()}
+    ids = {
+        "tenant": uuid4(),
+        "project": uuid4(),
+        "task": uuid4(),
+        "reviewer": uuid4(),
+        "implementer": uuid4(),
+    }
     async with sm() as s, s.begin():
         await s.execute(
             text(
@@ -96,6 +107,21 @@ async def _seed(
             )
             await s.flush()
             reviewer_agent_id = ids["reviewer"]
+        if implementer_agent:
+            s.add(
+                Agent(
+                    id=ids["implementer"],
+                    tenant_id=ids["tenant"],
+                    name="Impl",
+                    role="backend_dev",
+                    system_prompt="build it",
+                    agent_type="ai",
+                    scope="project_local",
+                    project_id=ids["project"],
+                    model_config=_SCRIPTED,
+                )
+            )
+            await s.flush()
         s.add(
             Task(
                 id=ids["task"],
@@ -111,16 +137,40 @@ async def _seed(
         )
         await s.flush()
         # A prior implementer execution whose output the reviewer will judge.
+        # `created_at` va EXPLÍCITO: `func.now()` es de transacción en Postgres,
+        # así que dos filas sembradas aquí tendrían el mismo instante y el
+        # `ORDER BY created_at DESC` que decide «la ejecución más reciente» sería
+        # un empate — justo lo que estos tests tienen que distinguir.
+        now = datetime.now(UTC)
         s.add(
             Execution(
                 id=uuid4(),
                 tenant_id=ids["tenant"],
                 task_id=ids["task"],
+                agent_id=ids["implementer"] if implementer_agent else None,
                 status="done",
                 output=prior_output,
-                steps_log=[],
+                steps_log=prior_steps_log or [],
+                created_at=now - timedelta(minutes=2),
             )
         )
+        for nth in range(reviewer_runs_after):
+            # El ciclo real: tras el implementador corre el REVIEWER, y su fila
+            # queda en `executions` con el MISMO `task_id` y más reciente. Van
+            # varias porque el ciclo implementar → revisar → rechazar →
+            # reimplementar las acumula: en la instalación viva son tres.
+            s.add(
+                Execution(
+                    id=uuid4(),
+                    tenant_id=ids["tenant"],
+                    task_id=ids["task"],
+                    agent_id=ids["reviewer"],
+                    status="done",
+                    output="<verdict>reject</verdict>",
+                    steps_log=reviewer_steps_log or [],
+                    created_at=now - timedelta(seconds=60 - nth * 10),
+                )
+            )
     return ids
 
 
@@ -410,6 +460,180 @@ async def test_no_reviewer_is_noop(_migrated: None, admin_database_url: str) -> 
         await _dispatcher(sm).handle(_in_review_event(ids))
 
         assert await _drain(redis, "default") == []
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Los COMANDOS que el implementador ejecutó llegan al `review_context`
+# ---------------------------------------------------------------------------
+# Caso vivo 2026-09-01 (plan 01a059db, tarea «Verificar requisitos del entorno»):
+# los dos criterios eran «ejecuta X y comprueba su salida», el agente los ejecutó
+# y el hecho quedó en su `steps_log` con comando, `exit_code` y salida — pero al
+# reviewer sólo le llegaba la PROSA, así que rechazó tres veces y la tarea acabó
+# `blocked` con el trabajo bien hecho.
+_LIVE_COMMANDS = [
+    {"index": 0, "kind": "node", "node": "perceive", "summary": "…"},
+    {
+        "index": 11,
+        "kind": "tool_call",
+        "node": "act",
+        "tool": "stack_exec",
+        "args": {"command": 'php -r "echo PHP_VERSION;"', "cwd": "", "timeout_s": 600},
+        "result": {
+            "ok": True,
+            "error": None,
+            "output": {"logs": "8.3.33", "exit_code": 0, "timed_out": False},
+        },
+        "status": "ok",
+        "summary": "Tool 'stack_exec' → ok",
+    },
+    {
+        "index": 15,
+        "kind": "tool_call",
+        "node": "act",
+        "tool": "stack_exec",
+        "args": {"command": "composer --version", "cwd": "", "timeout_s": 600},
+        "result": {
+            "ok": True,
+            "error": None,
+            "output": {
+                "logs": "Composer version 2.10.2 2026-08-12 10:41:03",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        },
+        "status": "ok",
+        "summary": "Tool 'stack_exec' → ok",
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_the_commands_the_implementer_ran_reach_the_reviewer(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """El hueco del caso: la evidencia existía, estaba guardada, y el único que
+    tenía que verla no la veía."""
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm,
+            reviewer_type="ai",
+            prior_output="Verified that PHP version is 8.3.33 using stack_exec commands.",
+            prior_steps_log=_LIVE_COMMANDS,
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        block = _run_request(await _drain(redis, "default"))["review_context"]["commands_run"]
+        assert 'php -r "echo PHP_VERSION;"' in block
+        assert "8.3.33" in block, "sin la SALIDA el bloque no prueba nada"
+        assert "composer --version" in block
+        assert "Composer version 2.10.2" in block
+        assert "exit_code=0" in block
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+#: Lo que ejecuta el propio REVIEWER en sus runs. No es evidencia del
+#: implementador: es de otro agente, sobre el árbol tal como quedó.
+_REVIEWER_COMMANDS = [
+    {
+        "index": 3,
+        "kind": "tool_call",
+        "node": "act",
+        "tool": "stack_exec",
+        "args": {"command": "git log --oneline -5", "cwd": "", "timeout_s": 600},
+        "result": {
+            "ok": True,
+            "error": None,
+            "output": {"logs": "e1f2a3b wip", "exit_code": 0, "timed_out": False},
+        },
+        "status": "ok",
+        "summary": "Tool 'stack_exec' → ok",
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_the_reviewers_own_runs_do_not_crowd_out_the_implementers_commands(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Un run de REVIEWER escribe su propia fila en `executions` con el MISMO
+    `task_id`, y en el ciclo real son las MÁS RECIENTES de la tarea.
+
+    Medido en la instalación viva sobre la tarea del caso: seis ejecuciones
+    alternadas, tres del implementador (2, 2 y 4 comandos) y tres del reviewer,
+    siendo la última la del reviewer. La ventana lee `_COMMANDS_ATTEMPTS` (3)
+    filas, así que se siembran TRES del reviewer por delante: sin el filtro la
+    ventana se las lleva enteras y la evidencia del implementador no entra —
+    exactamente el fallo que este cambio viene a arreglar, reintroducido por la
+    puerta de atrás.
+
+    Las tres cosas que mueren sin el filtro, y por eso se afirman las tres: la
+    evidencia desaparece, lo que llega es de OTRO agente presentado como del
+    implementador, y el run bajo revisión se rotula «intento anterior» cuando es
+    el último que hay.
+    """
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm,
+            reviewer_type="ai",
+            prior_steps_log=_LIVE_COMMANDS,
+            implementer_agent=True,
+            reviewer_runs_after=3,
+            reviewer_steps_log=_REVIEWER_COMMANDS,
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        block = _run_request(await _drain(redis, "default"))["review_context"]["commands_run"]
+        assert "8.3.33" in block, "la evidencia del implementador no puede quedar fuera"
+        assert "git log --oneline -5" not in block, (
+            "lo que ejecutó el reviewer no es evidencia del implementador"
+        )
+        assert "[latest attempt" in block, (
+            "el run bajo revisión es el ÚLTIMO del implementador, no un intento anterior"
+        )
+        assert "earlier attempt" not in block
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_ran_no_commands_gets_an_empty_key_not_a_section(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Documentación o diseño: la clave viaja vacía y el runtime no pinta sección.
+
+    Una sección diciendo «no se ejecutó ningún comando» se leería como acusación
+    de evidencia ausente en cada review en prosa. La ausencia la explica la regla
+    del preámbulo, que sí está siempre."""
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="ai", prior_output="escribí el ADR")
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        context = _run_request(await _drain(redis, "default"))["review_context"]
+        assert context["commands_run"] == ""
     finally:
         await redis.delete("default")
         await redis.aclose()

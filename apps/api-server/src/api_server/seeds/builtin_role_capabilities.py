@@ -150,30 +150,9 @@ ROLES_THAT_EXECUTE_TOOLCHAIN: frozenset[str] = frozenset(
 # quemó 24 llamadas buscando `php`: no le falta permiso, le sobra puerta.
 ROLES_WITH_READ_ONLY_WORKSPACE: frozenset[str] = frozenset({"reviewer"})
 
-# Las tools que ESCRIBEN en el workspace. Se nombran aquí, y no dentro de cada
-# seed, para que añadir una tercera puerta de escritura no obligue a acordarse
-# de este caso: quien la añada al catálogo la añade también aquí, y la guarda
-# estructural (`tests/unit/test_builtin_prompt_tool_coherence.py`) la cubre sola.
-#
-# `shell-exec` ESTÁ en la lista, y llegó tarde (2026-08-30). Al cerrar el caso
-# del reviewer se razonó que `grep`/`cat` funcionan sobre un montaje de sólo
-# lectura y que por tanto no era la misma clase de defecto. Es falso, y lo dice
-# el propio runtime: `shell_exec` figura en `_PRODUCING_TOOLS`
-# (`agent_runtime/tool_classification.py`), junto a `write_file` y `stack_exec`,
-# porque ejecuta comandos arbitrarios y por tanto PUEDE escribir. Y el criterio
-# contrario ya estaba escrito unas líneas más abajo, en `ROLE_DEFAULT_TOOLS`:
-# el reviewer se queda en `_READ`.
-#
-# La leccion, que es la que hace falta recordar: una lista de «puertas de
-# escritura» que se construye pensando en el uso HABITUAL de cada tool deja
-# fuera justo las que escriben por accidente. La pregunta correcta no es «¿para
-# qué se usa?» sino «¿puede dejar el workspace distinto de como lo encontró?».
-WORKSPACE_MUTATING_TOOLS: frozenset[str] = frozenset(
-    {"write-file", "delete-file", "shell-exec", "stack-exec"}
-)
-
 # Las que escriben ficheros POR SU PROPIA DEFINICION, que es una propiedad
-# distinta de la de arriba y por eso vive en su propio conjunto.
+# distinta de la de abajo (`WORKSPACE_MUTATING_TOOLS`) y por eso vive en su
+# propio conjunto — el de abajo se DERIVA de éste, no al revés.
 #
 # La diferencia importa y costó un guarda mal planteado el 2026-08-30: al ver
 # `shell_exec` dentro de `_PRODUCING_TOOLS` del runtime se dedujo que un roster
@@ -191,7 +170,46 @@ WORKSPACE_MUTATING_TOOLS: frozenset[str] = frozenset(
 #     añadir lectura o red (`http-get` al devops); no puede repartir escritura
 #     por su cuenta, que es como el mismo rol acabó con capacidades distintas
 #     según por qué seed entrara — tres veces seguidas.
-FILE_WRITING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file"})
+#
+# `move-file` entra aquí el 2026-08-31 por la pregunta de la última línea, no por
+# un permiso nuevo: mover DEJA el workspace distinto de como lo encontró — un
+# `move_file("app", "app.old")` retira `app/` de su sitio igual que borrarla. Y
+# entra AQUÍ, en el conjunto de las que escriben ficheros por definición, y no
+# sólo en el derivado de abajo, porque la autoridad sobre quién escribe la tiene
+# el mapa por rol: un roster no puede repartir la capacidad de mover por su
+# cuenta, que es exactamente como el mismo rol acabó con capacidades distintas
+# según por qué seed entrara — tres veces.
+FILE_WRITING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file", "move-file"})
+
+# TODAS las tools que dejan el workspace distinto de como lo encontraron: las
+# que escriben ficheros por definición (arriba) MÁS las que ejecutan comandos
+# arbitrarios y por tanto pueden escribir de rebote. Se nombran aquí, y no dentro
+# de cada seed, para que añadir una puerta de escritura nueva no obligue a
+# acordarse de este caso: quien la añada al catálogo la añade también aquí, y la
+# guarda estructural (`tests/unit/test_builtin_prompt_tool_coherence.py`) la
+# cubre sola.
+#
+# `shell-exec` ESTÁ en la lista, y llegó tarde (2026-08-30). Al cerrar el caso
+# del reviewer se razonó que `grep`/`cat` funcionan sobre un montaje de sólo
+# lectura y que por tanto no era la misma clase de defecto. Es falso, y lo dice
+# el propio runtime: `shell_exec` figura en `_PRODUCING_TOOLS`
+# (`agent_runtime/tool_classification.py`), junto a `write_file` y `stack_exec`,
+# porque ejecuta comandos arbitrarios y por tanto PUEDE escribir. Y el criterio
+# contrario ya estaba escrito unas líneas más abajo, en `ROLE_DEFAULT_TOOLS`:
+# el reviewer se queda en `_READ`.
+#
+# La leccion, que es la que hace falta recordar: una lista de «puertas de
+# escritura» que se construye pensando en el uso HABITUAL de cada tool deja
+# fuera justo las que escriben por accidente. La pregunta correcta no es «¿para
+# qué se usa?» sino «¿puede dejar el workspace distinto de como lo encontró?».
+#
+# Se DERIVA de `FILE_WRITING_TOOLS` (2026-08-31), y ese es el cambio que hace que
+# añadir una cuarta puerta de escritura no dependa de que alguien se acuerde de
+# los dos sitios. Antes eran dos literales que repetían `write-file` y
+# `delete-file`: la misma forma —dos declaraciones del mismo hecho, ninguna
+# derivada— que este módulo lleva documentado haberse cobrado tres veces.
+_EJECUTAN_COMANDOS_ARBITRARIOS: frozenset[str] = frozenset({"shell-exec", "stack-exec"})
+WORKSPACE_MUTATING_TOOLS: frozenset[str] = FILE_WRITING_TOOLS | _EJECUTAN_COMANDOS_ARBITRARIOS
 
 # `write-file` para `security` y `researcher` (2026-08-30): no es una capacidad
 # nueva, es que sus prompts YA les ordenaban producir un fichero y no tenían con
@@ -223,9 +241,28 @@ FILE_WRITING_TOOLS: frozenset[str] = frozenset({"write-file", "delete-file"})
 # # destructiva sobre el worktree (como write_file)`. Lo único que añade retener
 # `delete-file` es un refactor que no se puede terminar.
 #
-# La regla, en una línea: quien puede escribir puede borrar; y quien no escribe
-# tampoco borra (el reviewer, `_READ`, por el ADR 0095).
-_ESCRIBE = ("write-file", "delete-file")
+# La regla que salió de ahí: quien puede escribir puede borrar; y quien no
+# escribe tampoco borra (el reviewer, `_READ`, por el ADR 0095).
+#
+# Y `move-file` viaja con las dos (2026-08-31), por la MISMA regla y con un caso
+# medido detrás. Proyecto «Hello World CI4 v3», tenant mediapro: `composer
+# create-project .` exige un directorio COMPLETAMENTE vacío, y el agente llegó
+# solo al plan correcto —instalar en `tmpci/` y mover el resultado— pero de sus
+# tres pasos el único que la plataforma sabía ejecutar era el destructivo. Borró
+# `app/` entera: 85 ficheros del deliverable ya commiteado de la tarea anterior.
+# Conceder «escribir y borrar» y retener «mover» no es una frontera de seguridad
+# —`write_file` + `delete_file` ya reproducen un move, fichero a fichero y con
+# una ventana en la que el trabajo sólo existe en el contexto del modelo—: es
+# dejar el camino legítimo cortado y el destructivo abierto.
+#
+# La regla vigente, que es la única que hay que recordar: quien puede escribir
+# puede borrar y mover; y quien no escribe, ninguna de las tres.
+#
+# `_ESCRIBE` es el ORDEN en que se reparten; el conjunto lo decide
+# `FILE_WRITING_TOOLS`, que es donde se nombran una sola vez. Derivarlo en vez de
+# volver a teclearlas es lo que hace que la cuarta puerta llegue sola a los nueve
+# roles que escriben, en lugar de a los que alguien recuerde.
+_ESCRIBE = tuple(sorted(FILE_WRITING_TOOLS))
 
 ROLE_DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
     "project_manager": _READ,

@@ -185,11 +185,44 @@ def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | No
     }
     if env_extra:
         env.update(env_extra)
+    # `encoding="utf-8"` NO es cosmético (2026-08-31). `text=True` a secas
+    # decodifica con el locale del HOST (`locale.getpreferredencoding`), y el
+    # locale del host no manda aquí: **git emite UTF-8 siempre**. Los nombres de
+    # ruta los guarda como bytes y los escupe tal cual, y los mensajes de commit
+    # los reencoda a UTF-8 salvo que se le configure `i18n.commitEncoding` — en
+    # ningún caso consulta el locale de quien lee.
+    #
+    # MEDIDO en un dev Windows (cp1252), directorio versionado `documentación`:
+    #     text=True          -> 'documentaci\xc3\xb3n'   (UTF-8 leído como cp1252)
+    #     encoding="utf-8"   -> 'documentaci\xf3n'       (= lo que da os.scandir)
+    # En el contenedor no se veía: la base python:3.12-slim fija LANG=C.UTF-8, y
+    # ahí el locale coincide por casualidad con lo que git emite.
+    #
+    # Consecuencia concreta: la protección de rutas versionadas
+    # (`workers.tracked_paths`) comparaba mojibake contra rutas reales del disco,
+    # no reconocía `documentación` y el agente podía borrarla recursivamente —
+    # funcionaba con nombres ASCII y fallaba en silencio con los acentuados, que
+    # en un repo en castellano no es el caso raro. Y no es sólo el worker: la
+    # api-server importa este mismo runner para el visor de diffs
+    # (`code_diff.py`), `kb_sync` y el visor de docs.
+    #
+    # `errors="replace"` y no el default `strict`: al fijar `encoding` los bytes
+    # que NO son UTF-8 válido (un repo antiguo con nombres latin-1 — en POSIX un
+    # nombre de fichero es una ristra de bytes cualquiera) harían saltar
+    # `UnicodeDecodeError` DENTRO de subprocess.run, y un nombre de fichero raro
+    # no puede tumbar una ejecución. Descartado también `surrogateescape`, que
+    # sería más fiel: medido, sobrevive a `json.dumps` pero revienta con
+    # `UnicodeEncodeError` en el primer `str.encode("utf-8")` aguas abajo (un
+    # log, un cuerpo HTTP, el env del contenedor), o sea que cambia un fallo
+    # ruidoso y local por otro a distancia. Con `replace` ese nombre exótico se
+    # queda sin protección —igual que hoy— pero nada se cae.
     result = subprocess.run(  # — explicit args, no shell
         ["git", *args],
         cwd=str(cwd) if cwd is not None else None,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         timeout=120,
         check=False,

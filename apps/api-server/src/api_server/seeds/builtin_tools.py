@@ -1,13 +1,19 @@
 """Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
 git family retired task_06_18_06; delete_file added R6/ADR 0089;
-stack_exec added ADR 0093).
+stack_exec added ADR 0093; move_file added 2026-08-31).
 
-Seventeen tool definitions covering file ops, code runtime, HTTP,
-knowledge, notifications and two stack commands (shell_exec +
-stack_exec). The ``git`` family was
+Tool definitions covering file ops, HTTP, knowledge, notifications and
+two stack commands (shell_exec + stack_exec). The ``git`` family was
 removed (ADR 0049): it had no runtime executor, so it could never run.
 Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
 operator which of these the agent-runtime can actually execute today.
+
+Este encabezado ya NO dice cuántas son, y es a propósito: decía
+«Seventeen» mientras la tupla tenía trece — se quedó atrás cuando los
+cuatro ``run_*`` se retiraron (F5, 2026-07-28). Un número en prosa que
+ningún test comprueba no envejece con un aviso: envejece mintiendo, y
+quien lo lee para orientarse acaba buscando cuatro filas que no existen.
+``len(BUILTIN_TOOLS)`` es la respuesta, y los tests de siembra la usan.
 
 `implementation_type` choices reflect the eventual execution path:
 
@@ -64,8 +70,8 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 17 tools (git family retired task_06_18_06; delete_file added R6;
-# stack_exec added ADR 0093)
+# Catalog (git family retired task_06_18_06; delete_file added R6;
+# stack_exec added ADR 0093; move_file added 2026-08-31)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
@@ -135,6 +141,85 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
             ["deleted"],
         ),
     ),
+    # ----- move_file (2026-08-31) -----
+    # POR QUÉ EXISTE, medido en vivo el mismo día (proyecto «Hello World CI4 v3»,
+    # tenant mediapro, modelo gpt-oss:120b): `composer create-project .` exige un
+    # directorio COMPLETAMENTE vacío, y en el paso 31 del segundo run el agente
+    # llegó SOLO a la solución correcta — instalar en `tmpci/` y mover el
+    # resultado a su sitio. No pudo terminarla: la familia `file` era exactamente
+    # read/write/delete/list, así que de los TRES pasos de su plan el único
+    # ejecutable era el destructivo. Cuatro pasos después borró `app/` entera —
+    # 85 ficheros que eran el deliverable ya commiteado de la tarea anterior.
+    #
+    # El ADR 0163 (esconder el `.git` mientras corre el agente) cubre el PRIMER
+    # andamiaje sobre un worktree vacío, y por eso el primer run sí instaló. No
+    # cubre un reintento ni un proyecto que ya tiene código: ahí el directorio
+    # nunca está vacío, y sin esta tool la única salida que le queda al agente es
+    # vaciarlo. Las guardas de `delete_file` le cierran esa puerta —correctamente—
+    # y sus propios mensajes de error ya le dicen «run it in a subdirectory and
+    # move the result in»: esta fila es lo que convierte ese consejo en algo que
+    # se puede ejecutar.
+    BuiltinTool(
+        "move-file",
+        "move_file",
+        "Move or rename a file — or a whole directory with everything inside — within the "
+        "task's worktree. Sandboxed: source AND destination must stay under the worktree. "
+        "Use it when a scaffolder demands an EMPTY directory: run it in a subdirectory "
+        "(e.g. 'composer create-project ... ci4tmp'), then move its entries into place ONE "
+        "AT A TIME (list_files on that directory gives you the list) and delete the empty "
+        "leftover. Also renames a mis-named file or module without rewriting it. Missing "
+        "parent directories of the destination are created. Refused: moving onto the "
+        "worktree root (that is merging two trees, not one move), and moving or "
+        "overwriting a whole top-level directory that is tracked in this branch (it holds "
+        "an earlier task's committed work).",
+        "file",
+        "builtin",
+        "sandboxed",
+        10,
+        _obj(
+            {
+                "source": {
+                    "type": "string",
+                    "description": "Path to move, relative to the worktree.",
+                },
+                "destination": {
+                    "type": "string",
+                    "description": (
+                        "The FULL final path, relative to the worktree — not the folder "
+                        "to drop the source into. Missing parent directories are created."
+                    ),
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": (
+                        "Required to replace a destination that ALREADY exists; without "
+                        "it the move is refused, so a rename cannot silently bury work."
+                    ),
+                },
+            },
+            ["source", "destination"],
+        ),
+        _obj(
+            {
+                "moved": {"type": "boolean"},
+                "source": {"type": "string", "description": "Resolved source path."},
+                "destination": {"type": "string", "description": "Resolved final path."},
+                "entries": {
+                    "type": "integer",
+                    "description": "How many entries the moved directory held.",
+                },
+                "replaced": {
+                    "type": "boolean",
+                    "description": "Whether an existing destination was replaced.",
+                },
+                "replaced_entries": {
+                    "type": "integer",
+                    "description": "How many entries the replaced directory held.",
+                },
+            },
+            ["moved"],
+        ),
+    ),
     BuiltinTool(
         "apply-patch",
         "apply_patch",
@@ -146,21 +231,93 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         _obj({"diff": {"type": "string", "description": "Unified diff."}}, ["diff"]),
         _obj({"applied_files": {"type": "array", "items": {"type": "string"}}}, ["applied_files"]),
     ),
+    # `pattern` y su default se reescribieron el 2026-09-01 y el motivo hay que
+    # dejarlo aquí, no sólo en el runtime: esta fila ES lo que el modelo ve, y
+    # decía dos cosas falsas a la vez. Anunciaba un filtro que `file_list` nunca
+    # leía (hacía `iterdir()`, plano y sin filtrar: 15 llamadas con patrón no
+    # trivial en un run real devolvieron todas el mismo listado, sin avisar), y
+    # anunciaba `"default": "**/*"`, que CUMPLIDO habría sido peor — la raíz de
+    # un CodeIgniter son ~5.000 ficheros de `vendor/`, y la rama de aquel plan
+    # llegó a 10.318. Por eso el default efectivo es `*` y la descripción explica
+    # la semántica entera: el modelo no tiene otro sitio donde leerla.
     BuiltinTool(
         "list-files",
         "list_files",
-        "List files matching a glob pattern under a path.",
+        (
+            "List entries under a path, filtered by a glob. 'pattern' is relative "
+            "to 'path' and is matched against each entry's RELATIVE PATH, so "
+            "'app/Config/Routes.php' and 'tests/**/*.php' both work. '*', '?' and "
+            "'[...]' never cross '/': only '**' descends, so the default '*' lists "
+            "just that one directory - use '**/*.php' to search the whole tree. "
+            "Braces list alternatives ('composer.{json,lock}'). Matching is "
+            "case-sensitive. At most 150 entries come back; when more match, "
+            "'truncated' is true and 'total_matches' says how many there were, so "
+            "you can narrow the pattern instead of assuming that is all. A pattern "
+            "that cannot be applied is rejected with an error, never ignored."
+        ),
         "file",
         "builtin",
         "safe",
         5,
         _obj(
             {
-                "path": {"type": "string", "default": "."},
-                "pattern": {"type": "string", "default": "**/*"},
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "Directory to list, relative to the workspace root.",
+                },
+                "pattern": {
+                    "type": "string",
+                    "default": "*",
+                    "description": (
+                        "Glob relative to 'path', matched against each entry's "
+                        "relative path. Only '**' descends into subdirectories."
+                    ),
+                },
             }
         ),
-        _obj({"files": {"type": "array", "items": {"type": "string"}}}, ["files"]),
+        _obj(
+            {
+                "path": {"type": "string", "description": "Directory that was listed."},
+                "pattern": {"type": "string", "description": "Glob that was applied."},
+                "entries": {
+                    "type": "array",
+                    "items": _obj(
+                        {
+                            "name": {
+                                "type": "string",
+                                "description": "Path of the entry, relative to 'path'.",
+                            },
+                            "type": {"type": "string", "enum": ["file", "dir"]},
+                            "size": {
+                                "type": ["integer", "null"],
+                                "description": "Size in bytes for files; null for directories.",
+                            },
+                        },
+                        ["name", "type"],
+                    ),
+                },
+                "truncated": {
+                    "type": "boolean",
+                    "description": (
+                        "True when more entries matched than were returned. Always "
+                        "present: false is the positive promise that this is all of them."
+                    ),
+                },
+                "total_matches": {
+                    "type": "integer",
+                    "description": "How many entries matched, counting the ones not listed.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": (
+                        "Only when the plain result would mislead: the listing was "
+                        "truncated, nothing matched, or a directory could not be read."
+                    ),
+                },
+            },
+            ["path", "pattern", "entries", "truncated", "total_matches"],
+        ),
     ),
     BuiltinTool(
         "search-code",

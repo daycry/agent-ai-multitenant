@@ -533,3 +533,58 @@ def test_reflect_producing_tool_resets_churn_streak() -> None:
     loop.read_churn_streak = 7
     loop.reflect(_state("write_file", {"path": "a.py", "content": "x"}))
     assert loop.read_churn_streak == 0
+
+
+# --- El digest de `list_files`, que llevaba muerto desde que se escribió --------
+def test_list_files_digest_uses_the_key_the_tool_actually_returns() -> None:
+    """Leía `output["files"]`, y esa clave no ha existido nunca.
+
+    Comprobado en la BD el 2026-09-01: de las 893 salidas reales de `list_files`
+    en el `steps_log`, **893 traen `entries` y ninguna trae `files`**. O sea que
+    este digest —el que le recuerda al agente qué directorios ya ha mirado, en el
+    bloque PROGRESS— no se generaba jamás, y el agente re-listaba lo mismo sin
+    tener constancia de haberlo visto.
+
+    Venía del mismo `output_schema` mentiroso que anunciaba un `pattern` que la
+    tool ignoraba: un contrato escrito y nunca contrastado con la salida real.
+    """
+    loop = _loop()
+    out = loop.reflect(
+        _state(
+            "list_files",
+            {"path": "app/Controllers"},
+            output={"path": "app/Controllers", "entries": [{"name": "A.php"}, {"name": "B.php"}]},
+        )
+    )
+    progress = out.get("progress_summary") or ""
+    assert "app/Controllers" in progress, "el listado no dejó rastro en PROGRESS"
+    assert "2 entries" in progress, (
+        f"el digest del listado no cuenta las entradas devueltas: {progress!r}"
+    )
+
+
+def test_a_truncated_listing_digest_says_how_many_there_were() -> None:
+    """«20 de 4.442» es información distinta de «20», y es la que importa.
+
+    Con el tope aplicado, un digest que sólo diga cuántas se devolvieron deja al
+    agente concluyendo que ya vio el directorio entero — que es exactamente el
+    error que el aviso de truncado viene a impedir en la respuesta de la tool.
+    """
+    loop = _loop()
+    out = loop.reflect(
+        _state(
+            "list_files",
+            {"path": "vendor"},
+            output={
+                "path": "vendor",
+                "entries": [{"name": f"p{i}"} for i in range(3)],
+                "truncated": True,
+                "total_matches": 4442,
+            },
+        )
+    )
+    progress = out.get("progress_summary") or ""
+    assert "4442" in progress, (
+        f"el digest de un listado truncado no dice cuántas entradas había en "
+        f"realidad, así que el agente creerá que vio el directorio entero: {progress!r}"
+    )

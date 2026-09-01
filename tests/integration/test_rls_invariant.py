@@ -96,6 +96,21 @@ GLOBAL_TABLES_ALLOWLIST: dict[str, str] = {
         " `test_the_backfill_table_is_unreachable_from_the_app` (en"
         " `test_stack_exec_backfill_migration.py`) lo comprueba."
     ),
+    "agent_tools_backfill_0146": (
+        "Respaldo interno de la migración 0146, gemelo del de arriba: las filas de"
+        " `agent_tools` que aquélla añadió con `move_file` a las copias de agentes"
+        " built-in que ya tenían concedidas `write_file` Y `delete_file` — la"
+        " población sobre la que mover no concede autoridad nueva, porque es"
+        " exactamente esas dos en un paso. Su `downgrade` borra EXACTAMENTE esas"
+        " filas y no las recalcula: después del `upgrade`, un grant de la migración"
+        " y uno que puso un administrador del tenant son indistinguibles. La"
+        " escribe el `upgrade` y la lee el `downgrade`, ambos como"
+        " `migrations_user`; la APLICACIÓN no la toca. No lleva `tenant_id` porque"
+        " no se le da acceso: la propia 0146 revoca todo permiso a `app_user` y"
+        " `service_user` en el mismo `upgrade` que la crea —la lección de la 0138—"
+        " y `test_the_backfill_table_is_unreachable_from_the_app` (en"
+        " `test_move_file_backfill_migration.py`) lo comprueba."
+    ),
     "organizations": (
         "ES el tenant. Su aislamiento no es `tenant_id = app.tenant_id` sino"
         " `id = app.tenant_id` (policy `org_self_only`, migración 0001)."

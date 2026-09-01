@@ -502,6 +502,40 @@ def _wire_mcp_servers(registry: Any, spec: dict[str, Any]) -> MCPWiring:
     return MCPWiring(runner=runner, failures=failures)
 
 
+# Caso vivo 2026-09-01 (plan 01a059db, tarea «Verificar requisitos del entorno»).
+# Sus dos criterios eran «ejecuta X y comprueba su salida»; el agente ejecutó los
+# comandos y sus resultados quedaron guardados, pero al reviewer sólo le llegó la
+# PROSA del implementador, así que rechazó tres veces por «no automated test
+# evidence» y la tarea acabó `blocked` con el trabajo bien hecho. El orchestrator
+# manda ahora el bloque `<commands-run>`; esta instrucción es la otra mitad,
+# porque una evidencia que el reviewer no sabe pesar no cambia el veredicto.
+#
+# Vive en la instrucción SIEMPRE presente, no dentro de la sección, y ese es el
+# punto: el caso que rompió la tarea es justo el de la sección AUSENTE. Si la
+# regla viajara con el bloque, el reviewer volvería a leer «no hay evidencia»
+# como «el criterio falla», que es el falso fallo que esto viene a cerrar — la
+# misma distinción entre ausencia y silencio que fijó el ADR 0162 para el
+# `<test-report>`, un piso más abajo.
+#
+# Las dos mitades son igual de importantes. Sin la primera el bloque no se usa;
+# sin la segunda se convierte en un cheque en blanco («el comando está en la
+# lista, luego el criterio pasa»), que sería cambiar un falso fallo por un falso
+# verde.
+_COMMANDS_EVIDENCE_INSTRUCTION = (
+    "COMMAND EVIDENCE: when the material below carries a <commands-run> block, that "
+    "is the platform's own record of the commands the implementer actually executed "
+    "— each with its exit code and its captured output, logged by the runtime, not "
+    "claimed by the agent. For an acceptance criterion of the form 'run X and check "
+    "its output', THAT BLOCK IS THE EVIDENCE: judge the criterion against the "
+    "recorded output and cite it. Two limits you must respect. (1) A command "
+    "appearing there proves only that it ran with that exit code and that output; it "
+    "does NOT prove the output satisfies the criterion — whether it does is still "
+    "yours to judge. (2) If the block is absent, or a criterion's command is not in "
+    "it, that means no such command was recorded in the run under review: treat it as "
+    "MISSING evidence for that criterion, never as the criterion having failed, and "
+    "never as a failed test."
+)
+
 # Audit cluster C1 (F51): a REVIEW run uses the SAME agent loop, so the reviewer
 # only produces a usable verdict if its system prompt carries the implementer's
 # output + the acceptance criteria + the test-report AND instructs it to finish
@@ -529,6 +563,8 @@ _REVIEW_VERDICT_INSTRUCTION = (
     # quedaría en cero para siempre.
     + "\n"
     + REJECT_TAXONOMY_INSTRUCTION
+    + "\n\n"
+    + _COMMANDS_EVIDENCE_INSTRUCTION
 )
 
 # Hallazgo H1 (refactor 2026-07-07): los preámbulos pliegan texto que un adversario
@@ -558,17 +594,20 @@ def _fence_untrusted(body: str) -> str:
 def build_review_preamble(review_context: dict[str, Any]) -> str:
     """The reviewer's system preamble for a REVIEW run (audit C1 / F51).
 
-    Folds the worker-supplied ``review_context`` (acceptance criteria + the
-    implementer's prior output + the ``<test-report>`` block) into the mandatory
-    verdict instruction. Missing pieces are simply omitted — a review with no
-    test-report still gets the criteria + output + the format instruction. The
-    context rides inside the untrusted-data fence (H1): it is what the reviewer
-    judges, never instructions to it.
+    Folds the worker-supplied ``review_context`` (acceptance criteria + the diff +
+    the ``<commands-run>`` block + the implementer's prior output + the
+    ``<test-report>`` block) into the mandatory verdict instruction. Missing
+    pieces are simply omitted — a review with no test-report still gets the
+    criteria + output + the format instruction. The context rides inside the
+    untrusted-data fence (H1): it is what the reviewer judges, never instructions
+    to it, and that includes the captured output of a command, which can print
+    anything at all.
     """
     criteria = str(review_context.get("acceptance_criteria") or "").strip()
     implementer_output = str(review_context.get("implementer_output") or "").strip()
     test_report = str(review_context.get("test_report") or "").strip()
     code_diff = str(review_context.get("code_diff") or "").strip()
+    commands_run = str(review_context.get("commands_run") or "").strip()
     sections: list[str] = []
     if criteria:
         sections.append(f"Acceptance criteria to certify against:\n{criteria}")
@@ -584,6 +623,20 @@ def build_review_preamble(review_context: dict[str, Any]) -> str:
             "acceptance criteria against these lines and cite them when you "
             "reject; use read_file for whatever surrounding context you need:\n"
             f"{code_diff}"
+        )
+    # Caso 2026-09-01: los comandos van con el diff, en el lado de los HECHOS
+    # REGISTRADOS, y por delante del resumen en prosa del implementador — el mismo
+    # orden y el mismo motivo que fijó `task_wf_60` para el diff. La diferencia
+    # con el `<test-report>`: aquél informa de una fase que lanza la plataforma;
+    # esto es lo que el agente hizo correr él mismo, así que su sitio natural es
+    # junto al cambio que produjo. Sin comandos la sección no aparece: ver
+    # `_format_commands_run_block` en el orchestrator para por qué el vacío calla.
+    if commands_run:
+        sections.append(
+            "Commands the implementer actually ran, as recorded by the platform "
+            "(command, exit code and captured output — a machine record, not the "
+            "agent's account of it):\n"
+            f"{commands_run}"
         )
     if implementer_output:
         sections.append(f"Implementer's output to review:\n{implementer_output}")

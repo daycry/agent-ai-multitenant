@@ -115,9 +115,12 @@ async def _drop_create_db() -> None:
 #:     mismo `upgrade` que crea la tabla (aprendido de la 0138: los default
 #:     privileges alcanzan a toda tabla que Alembic cree, así que revocar
 #:     «después» ya es tarde).
+#:   · `agent_tools_backfill_0146` → la migración 0146, mismo patrón que la 0145
+#:     (respaldo de los grants de `move_file` que propagó a las copias de tenant).
 _APP_REVOKED_TABLES: tuple[str, ...] = (
     "approval_policy_backfill_0133",
     "agent_tools_backfill_0145",
+    "agent_tools_backfill_0146",
 )
 
 

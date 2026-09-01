@@ -181,6 +181,11 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
 - [git-and-data-ops-belong-in-the-worker.md](./git-and-data-ops-belong-in-the-worker.md)
   — la api-server NO monta el volumen de repos: cualquier operación git o de
   `/data` se delega al worker por Celery.
+- [git-rm-aborta-si-un-pathspec-no-casa.md](./git-rm-aborta-si-un-pathspec-no-casa.md)
+  — `fatal: pathspec ':(glob)**/.venv/**' did not match any files` (rc=128) y el
+  índice intacto: `git rm` exige que TODOS los pathspecs casen y aborta entero,
+  al revés que el `git ls-files` con el que escaneaste. Filtra la lista a lo que
+  hay, no uses `--ignore-unmatch`.
 - [verify-routes-with-curl-not-app-import.md](./verify-routes-with-curl-not-app-import.md)
   — importar `api_server.main:app` en el contenedor da una app PARCIAL; verificar
   con `curl` al gateway, y leer 401 como «existe» y 404 como «no montada».

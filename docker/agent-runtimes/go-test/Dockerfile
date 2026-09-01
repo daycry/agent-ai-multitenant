@@ -57,9 +57,25 @@ ENV GOFLAGS="-mod=mod" \
 # `upgrade` de un solo paquete, no general: la base sigue pineada por digest y
 # ningun otro paquete se mueve. Cuando upstream reconstruya la imagen con el
 # parche dentro, esta capa pasa a ser un no-op y se puede retirar.
+#
+# `libexpat1` (2026-09-01): el mismo caso un paquete despues. CVE-2026-56408
+# (HIGH, desbordamiento de entero en `copyString`), instalado 2.5.0-1+deb12u2 y
+# **con fix ya publicado** en 2.5.0-1+deb12u3. Tampoco lo instalamos nosotros:
+# entra por la base. Y tampoco sirve refrescar el digest, por lo mismo que
+# arriba — la imagen upstream no se ha reconstruido desde que Debian publico el
+# parche.
+#
+# La lista crece DE UNO EN UNO a proposito. Un `apt-get -y upgrade` general
+# parchearia este y los que vengan, pero mueve todo lo demas con el, y entonces
+# el pineado por digest de la linea `FROM` deja de significar gran cosa: la base
+# quedaria fijada y su contenido flotando. Nombrar los paquetes mantiene la
+# propiedad de que lo unico que se mueve es lo que alguien decidio que se
+# moviera, y deja en el fichero el rastro de por que se movio.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends --only-upgrade libaprutil1; \
+    apt-get install -y --no-install-recommends --only-upgrade \
+        libaprutil1 \
+        libexpat1; \
     rm -rf /var/lib/apt/lists/*
 
 # go test is built in. gotestsum produces structured JSON for the

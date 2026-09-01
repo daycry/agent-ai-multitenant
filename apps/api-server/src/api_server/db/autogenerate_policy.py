@@ -62,6 +62,19 @@ TABLES_WITHOUT_A_MODEL: dict[str, str] = {
         "revoke en el arnés. Un modelo aquí sería un camino de lectura hacia "
         "un respaldo que el diseño quiere cerrado."
     ),
+    "agent_tools_backfill_0146": (
+        "Gemela de la de arriba, con la misma pareja de garantías y por el mismo "
+        "motivo estructural. La migración 0146 propaga `move_file` a las copias "
+        "de tenant de los agentes built-in que ya tenían `write_file` Y "
+        "`delete_file`, y anota fila a fila lo que insertó para que el "
+        "`downgrade` retire EXACTAMENTE eso en vez de recalcularlo — recalcular "
+        "se llevaría por delante los grants que un administrador del tenant "
+        "pusiera después, indistinguibles de los de la migración. La aplicación "
+        "no la consulta y NO debe poder: la propia 0146 le retira todo acceso al "
+        "crearla, y `tests/integration/conftest.py::_APP_REVOKED_TABLES` "
+        "reproduce ese revoke en el arnés. Un modelo aquí sería un camino de "
+        "lectura hacia un respaldo que el diseño quiere cerrado."
+    ),
 }
 
 #: Consulta las relaciones que son **partición** de otra (tablas e índices).

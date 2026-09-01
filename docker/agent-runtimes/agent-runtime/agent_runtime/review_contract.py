@@ -13,7 +13,15 @@ worker parses.
 
 from __future__ import annotations
 
-from shared_domain import reject_taxonomy as _rt
+# Import de MÓDULO, no de atributo del paquete. `from shared_domain import
+# reject_taxonomy` funciona en runtime —la maquinaria de imports resuelve el
+# submódulo— pero mypy lo rechaza: el `__init__.py` no lo importa, así que a
+# ojos del type-checker el paquete no tiene ese atributo. Era el único error
+# del gate en todo el árbol. El resto del repo usa la forma
+# `from shared_domain.reject_taxonomy import X`; aquí se importa el módulo
+# entero porque este fichero RE-EXPORTA cinco nombres y con la otra forma el
+# bloque de abajo quedaría en autoasignaciones.
+import shared_domain.reject_taxonomy as _rt
 
 # The canonical tag tokens the worker's `_VERDICT_RE` reads.
 VERDICT_APPROVE = "<verdict>approve</verdict>"

@@ -32,7 +32,7 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -440,6 +440,339 @@ def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
             _worktree_unlock(worktree_path, bare_bloqueado)
 
 
+#: El prefijo que `agent_runtime.file_tools` pone a lo que aparta antes de
+#: destruirlo. Se repite aquí a propósito y no se importa: el runtime corre
+#: DENTRO del contenedor efímero y el worker fuera, sin ningún paquete común
+#: entre los dos. Lo que ata los dos lados es
+#: `tests/unit/test_el_residuo_del_runtime_no_llega_al_commit.py`, que falla si
+#: alguien cambia uno solo.
+_PREFIJO_TRANSITORIO_RUNTIME = ".agent-runtime-tmp."
+
+
+# ---------------------------------------------------------------------------
+# Directorios de dependencias: ni entran en la rama, ni se quedan si ya entraron
+# ---------------------------------------------------------------------------
+
+
+def _nombres_de_dependencias() -> tuple[str, ...]:
+    """Los directorios de dependencias que declara el catálogo de runtimes.
+
+    **La decisión ya estaba tomada en otro sitio.** Cada plantilla declara los
+    suyos (``vendor`` en los php, ``node_modules`` en los node, ``.venv``/``venv``
+    en python) y `execution._provision_worktree` se los pasa a
+    ``sync_to_head(preserve=...)`` para que el ``clean -fdx`` NO se los lleve. O
+    sea que la plataforma **ya** trata esos árboles como «no forman parte del
+    entregable»; hasta hoy decía a la vez lo contrario, porque el ``git add -A``
+    del cierre de tarea se los llevaba a la rama del plan.
+
+    Import perezoso a propósito: la api-server importa este módulo para el visor
+    de diffs (`api_server.code_diff`) y no tiene por qué arrastrar el catálogo de
+    runtimes —cuya importación lee además el manifiesto de release—.
+
+    Los nombres se VALIDAN en vez de pasarse tal cual, igual que en
+    `git_repos.clean_args`: hoy vienen del catálogo, pero entregar cadenas sin
+    mirar a una línea de comandos de git es un agujero que no se deja abierto.
+    """
+    from shared_test_runtimes import catalog as runtime_catalog
+
+    nombres: list[str] = []
+    for crudo in runtime_catalog.dependency_dirs():
+        nombre = str(crudo).strip()
+        if (
+            not nombre
+            or nombre.startswith("-")
+            or "/" in nombre
+            or "\\" in nombre
+            or ".." in nombre
+            or "*" in nombre
+            or nombre in {".", ".git"}
+        ):
+            raise ValueError(f"nombre de directorio de dependencias inválido: {crudo!r}")
+        nombres.append(nombre)
+    return tuple(nombres)
+
+
+def _patrones_de_dependencias(nombres: Sequence[str]) -> list[str]:
+    """``**/<nombre>/**`` — el CONTENIDO de cada directorio, a cualquier profundidad.
+
+    Un solo sitio para el patrón, que se usa con dos magias de pathspec distintas:
+    ``:(glob)`` para BUSCAR lo que ya está versionado y ``:(exclude,glob)`` para
+    que el ``git add -A`` no lo meta. Escribirlo dos veces sería la forma de que
+    una mitad dejara de casar con la otra sin que nada avisara.
+
+    Dos decisiones, las dos medidas:
+
+    * El ``**/`` inicial porque un monorepo tiene ``frontend/node_modules/`` y
+      ``backend/vendor/``. Es el mismo motivo por el que `dependency_dirs()`
+      devuelve la UNIÓN de los runtimes y no los del template declarado.
+    * Sólo el CONTENIDO (``/**``) y no el nombre a secas, al revés que la
+      exclusión del residuo del runtime. Un directorio de dependencias sólo puede
+      ser un directorio, y git no versiona directorios vacíos: excluir lo de
+      dentro basta —comprobado, `git add -A` respeta el pathspec aunque el
+      directorio esté entero sin trackear—. La diferencia importa porque un
+      FICHERO llamado ``vendor`` (un script en ``bin/``) sí es deliverable, y un
+      patrón sobre el nombre se lo llevaría por delante.
+    """
+    return [f"**/{nombre}/**" for nombre in nombres]
+
+
+def _directorio_contenedor(ruta: str, nombres: frozenset[str]) -> str:
+    """``frontend/node_modules/react/index.js`` → ``frontend/node_modules``.
+
+    Para que el registro diga DE QUÉ directorio salió cada fichero y no sólo
+    cuántos: en un monorepo hay varios y no es lo mismo uno que otro.
+    """
+    partes = ruta.split("/")
+    for i, parte in enumerate(partes):
+        if parte in nombres:
+            return "/".join(partes[: i + 1])
+    return ruta  # inalcanzable: el pathspec ya garantizó el componente
+
+
+def _desversionar_dependencias(worktree_path: Path, nombres: Sequence[str]) -> int:
+    """Saca del ÍNDICE lo que ya está versionado y es dependencia. Sin tocar disco.
+
+    **Por qué no basta con excluirlas de los futuros commits.** Excluir arregla
+    las ramas nuevas; en la rama donde el artefacto YA entró, `sync_to_head` lo
+    sigue trayendo en cada tarea y la guarda de rutas versionadas (ADR 0164) lo
+    sigue blindando —«refusing to recursively delete 'vendor': it is tracked in
+    this branch»—, que es exactamente el punto muerto medido el 2026-09-01: 1.151
+    ficheros de `vendor/` en la rama, `composer create-project` rechazado por
+    directorio no vacío, `delete_file` y `move_file` rechazados por la guarda, y
+    el run muerto en `max_tokens_exceeded` porque `list_files` costaba ~9.100
+    tokens por iteración.
+
+    **`git rm --cached` y nunca un borrado.** El agente y el toolchain NECESITAN
+    ese `vendor/` para trabajar —`sync_to_head` lo preserva justamente por eso—,
+    así que esto des-versiona dejando el árbol de trabajo intacto. Es la garantía
+    que da la propia opción: «Working tree files, whether modified or not, will be
+    left alone».
+
+    El ``-f`` acompaña al ``--cached`` y no lo debilita: sólo salta el chequeo de
+    «tienes contenido estageado distinto del fichero y de HEAD», que puede darse
+    si el agente hizo su propio `git add` sobre una dependencia por `shell_exec`.
+    Ese contenido estageado es justo lo que se quiere quitar del índice, y sigue
+    en disco. Sin ``-f`` esa situación aborta el cierre entero de la tarea.
+
+    EL RIESGO, escrito donde se ve: un proyecto que versione sus dependencias A
+    PROPÓSITO verá cómo la plataforma se las des-versiona.
+
+    **Ojo con el argumento que NO vale, porque se propuso y se midió que era
+    falso** (2026-09-01): «da igual, ese proyecto ya está roto hoy porque
+    `sync_to_head` preserva esos directorios en vez de sincronizarlos». No es
+    cierto. `preserve` sólo alimenta el `git clean -fdx -e …`, que por definición
+    no toca ficheros TRACKEADOS; el `reset --hard FETCH_HEAD` los sincroniza
+    perfectamente. Medido: `t1` versiona `vendor/lib.js`=v1, `t2` lo sube a v2,
+    `t1` sincroniza y ve v2. La incoherencia que ese argumento decía resolver no
+    existía.
+
+    El argumento que SÍ sostiene la decisión es más estrecho, y conviene tenerlo
+    presente porque marca dónde deja de valer:
+
+      * el directorio está declarado como de dependencias por el runtime template
+        del propio proyecto (`shared_test_runtimes.catalog`), o sea que es la
+        plataforma reconociendo lo que el proyecto le dijo que era;
+      * versionarlo casi siempre es un ACCIDENTE —falta un `.gitignore` y el
+        `git add -A` se lo lleva— y ese accidente tuvo un coste medido: 1.151
+        ficheros en la rama, la guarda del ADR 0164 blindando un artefacto
+        reconstruible, y una tarea muerta por `max_tokens` sin poder andamiar;
+      * el contenido no se pierde: sigue en disco y sigue en la historia de la
+        rama, un commit más atrás.
+
+    **La limitación conocida, que es real:** hay proyectos que versionan un
+    directorio con ese nombre a propósito. El caso concreto es el
+    `assets/vendor/` de Symfony AssetMapper, que la documentación de Symfony
+    manda commitear, y que casa con `**/vendor/**`. Hoy NO hay forma de que un
+    proyecto lo declare. Si aparece ese caso, la salida no es quitar la
+    exclusión —volvería el punto muerto— sino darle al proyecto la misma clase de
+    declaración que ya tiene para `allowed_commands`. Queda escrito aquí para que
+    quien se lo encuentre sepa que se pensó y no se le pasó a nadie.
+
+    Devuelve cuántos ficheros salieron del índice (0 si no había nada).
+    """
+    pathspecs = [f":(glob){patron}" for patron in _patrones_de_dependencias(nombres)]
+    if not pathspecs:
+        return 0
+    try:
+        salida = _run_git("ls-files", "-z", "--", *pathspecs, cwd=worktree_path)
+    except GitCommandError as exc:
+        # Best-effort de principio a fin: sin esto el comportamiento es el de
+        # antes (la rama sigue atascada), y tumbar el cierre de la tarea sería
+        # peor que no des-versionar.
+        _log.warning(
+            "commit_task.dependency_scan_failed",
+            worktree=str(worktree_path),
+            error=str(exc)[:300],
+        )
+        return 0
+    # `-z` y no líneas: sin él git devuelve los nombres no-ASCII C-quoted y el
+    # conteo por directorio saldría mal justo en los repos en castellano.
+    versionados = [ruta for ruta in salida.split("\0") if ruta]
+    if not versionados:
+        return 0
+
+    por_directorio: dict[str, int] = {}
+    conjunto = frozenset(nombres)
+    for ruta in versionados:
+        clave = _directorio_contenedor(ruta, conjunto)
+        por_directorio[clave] = por_directorio.get(clave, 0) + 1
+
+    # SÓLO los pathspecs que de verdad casaron. `git rm` —al revés que
+    # `ls-files`— aborta con rc=128 si CUALQUIER pathspec no encuentra nada
+    # («fatal: pathspec ':(glob)**/.venv/**' did not match any files»), y en un
+    # proyecto PHP nunca hay `.venv/`. Medido: con los cuatro nombres del
+    # catálogo, el des-versionado de `vendor/` no llegaba a ocurrir NUNCA.
+    #
+    # Se filtra en vez de añadir `--ignore-unmatch` a propósito: así un rc≠0 de
+    # `git rm` sigue significando «algo ha ido mal de verdad» y se registra.
+    presentes = {parte for ruta in versionados for parte in ruta.split("/") if parte in conjunto}
+    a_retirar = [f":(glob){patron}" for patron in _patrones_de_dependencias(sorted(presentes))]
+    try:
+        # Pathspecs y NO la lista de rutas: eran 1.151 ficheros en el caso
+        # medido, y una línea de comandos con 1.151 rutas no cabe en Windows.
+        _run_git("rm", "-r", "--cached", "--quiet", "-f", "--", *a_retirar, cwd=worktree_path)
+    except GitCommandError as exc:
+        _log.error(
+            "commit_task.dependency_unversion_failed",
+            worktree=str(worktree_path),
+            files=len(versionados),
+            by_directory=por_directorio,
+            error=str(exc)[:300],
+            note=(
+                "las dependencias siguen versionadas en la rama: la tarea siguiente "
+                "seguirá sin poder retirarlas (guarda del ADR 0164)"
+            ),
+        )
+        return 0
+
+    _log.warning(
+        "commit_task.dependencies_unversioned",
+        worktree=str(worktree_path),
+        files=len(versionados),
+        by_directory=por_directorio,
+        note=(
+            "artefactos reconstruibles que habían entrado en la rama por un "
+            "`git add -A` sin `.gitignore`; salen del índice y SIGUEN en disco"
+        ),
+    )
+    return len(versionados)
+
+
+#: Cabecera del `.gitignore` base. Los nombres NO se escriben aquí: se derivan de
+#: `dependency_dirs()`, que es la fuente única.
+_CABECERA_GITIGNORE_BASE = """\
+# .gitignore base — lo escribió la plataforma agéntica al cerrar una tarea,
+# porque el proyecto no traía ninguno.
+#
+# ES TUYO: edítalo, amplíalo o déjalo vacío. Mientras este fichero exista, la
+# plataforma no lo vuelve a tocar: sólo lo escribe cuando NO hay ninguno.
+#
+# Por qué existe: casi ningún andamiador deja un `.gitignore`. `composer
+# create-project` instala desde el *dist* y los repos suelen marcar `.gitignore`
+# como `export-ignore` — comprobado sobre una instalación intacta de CodeIgniter
+# 4: 14 entradas en la raíz y ninguna es `.gitignore`. Le pasa a media Packagist,
+# y el equivalente pasa con npm, pip, go mod y maven. Sin él, un `git add -A` se
+# lleva el directorio de dependencias entero al repositorio: medido el
+# 2026-09-01, 1.151 ficheros de `vendor/` en la rama de un plan.
+#
+# Los nombres salen del catálogo de runtimes de la plataforma, la MISMA lista que
+# preserva al sincronizar el worktree entre tareas.
+
+"""
+
+
+def ensure_base_gitignore(worktree_path: Path) -> bool:
+    """Deja un `.gitignore` base en el worktree si el proyecto no trae uno.
+
+    Devuelve ``True`` sólo si lo ha escrito.
+
+    **Por qué hace falta además de la exclusión de `commit_task`.** Aquélla cierra
+    el agujero para la plataforma; éste lo cierra para las personas. Quien clone
+    el repo y trabaje fuera del sistema se come exactamente el mismo problema en
+    su primer `git add -A`, y el PR del plan se lo comería con él.
+
+    **CUÁNDO se llama es parte del diseño, no un detalle.** Sólo desde
+    `commit_task`, sólo cuando ya va a haber commit y sólo si el proyecto no se
+    queda vacío — ver :func:`_el_proyecto_tiene_contenido`. Escrito en la provisión, el
+    fichero está en el workspace mientras corre el agente y devuelve a FALLA la
+    casilla del ADR 0163: medido el 2026-09-01 con Composer 2.9.4,
+    ``composer create-project codeigniter4/framework .`` sale con rc=1 «Project
+    directory is not empty» con sólo ese dotfile delante, porque
+    ``Filesystem::isDirEmpty()`` usa ``ignoreDotFiles(false)``.
+
+    **Nunca sobrescribe.** Si hay `.gitignore` —aunque esté vacío, aunque sea peor
+    que éste— es del proyecto y se respeta. Vaciarlo es, de hecho, la vía de
+    escape documentada dentro del propio fichero.
+
+    Best-effort: cualquier fallo se registra y devuelve ``False``. Un `.gitignore`
+    que no se pudo escribir no puede tumbar el cierre de la tarea.
+    """
+    destino = worktree_path / ".gitignore"
+    try:
+        if destino.exists():
+            return False
+        nombres = _nombres_de_dependencias()
+    except (OSError, ValueError) as exc:
+        _log.warning(
+            "commit_task.base_gitignore_skipped", worktree=str(worktree_path), error=str(exc)[:300]
+        )
+        return False
+    if not nombres:
+        return False
+    cuerpo = _CABECERA_GITIGNORE_BASE + "".join(f"{nombre}/\n" for nombre in nombres)
+    try:
+        # `newline="\n"`: en Windows el default traduciría a CRLF y el fichero
+        # viajaría al PR con finales de línea que nadie pidió.
+        destino.write_text(cuerpo, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        _log.warning(
+            "commit_task.base_gitignore_failed", worktree=str(worktree_path), error=str(exc)[:300]
+        )
+        return False
+    _log.info(
+        "commit_task.base_gitignore_written",
+        worktree=str(worktree_path),
+        dirs=list(nombres),
+        note="el proyecto no traía `.gitignore`; se deja uno base, editable",
+    )
+    return True
+
+
+def _el_proyecto_tiene_contenido(worktree_path: Path) -> bool:
+    """¿Queda algo en el índice? (llamar DESPUÉS del ``git add``).
+
+    Tiene función propia porque la respuesta ``False`` es la que decide si se
+    escribe el `.gitignore` base, y la razón no se ve venir: una tarea cuyo único
+    cambio es el des-versionado de `vendor/` sobre una rama que no tenía nada más
+    deja el árbol VACÍO. Añadirle el `.gitignore` lo convertiría en «un fichero»,
+    y la tarea siguiente —la del esqueleto, en el plan del incidente— se
+    estrellaría contra `isDirEmpty()` exactamente igual que si lo hubiéramos
+    escrito en la provisión. El fallo diferido una tarea sigue siendo el fallo:
+    si el proyecto está vacío tiene que SEGUIR vacío al empezar la tarea
+    siguiente (ADR 0163).
+
+    Y ahí está la diferencia con el des-versionado, que SÍ produce commit él solo
+    (:func:`_desversionar_dependencias`): aquél RETIRA algo que atasca la rama y
+    tiene que llegar al bare para desatascarla; éste AÑADE, y un repositorio cuyo
+    único contenido fuera este fichero no gana nada con él.
+    """
+    try:
+        salida = _run_git("ls-files", "-z", cwd=worktree_path)
+    except GitCommandError:
+        return False
+    return any(ruta for ruta in salida.split("\0") if ruta)
+
+
+def _hay_cambios_estagiados(worktree_path: Path) -> bool:
+    """¿Va a haber commit de todas formas? (llamar DESPUÉS del ``git add``)."""
+    try:
+        return bool(_run_git("diff", "--cached", "--name-only", "HEAD", cwd=worktree_path).strip())
+    except GitCommandError:
+        # HEAD sin nacer (repo sin ningún commit): todo lo que hay en el índice
+        # es nuevo, así que «hay cambios» equivale a «hay contenido».
+        return _el_proyecto_tiene_contenido(worktree_path)
+
+
 def commit_task(
     worktree_path: Path,
     *,
@@ -458,11 +791,33 @@ def commit_task(
     the working tree was clean (nothing to commit) — the caller
     treats that as "the task produced no code change" and skips the
     push.
+
+    **Un des-versionado de dependencias cuenta como cambio.** Si esta llamada
+    saca `vendor/` del índice y la tarea no tocó nada más, el árbol NO está
+    limpio y aquí se produce un commit. Es deliberado: tratarlo como «limpio»
+    dejaría el des-versionado sin llegar al bare, `sync_to_head` volvería a traer
+    el artefacto en la tarea siguiente y el punto muerto seguiría idéntico. Ver
+    :func:`_desversionar_dependencias`.
+
+    **Un `.gitignore` base, en cambio, NUNCA es la única razón de un commit.**
+    Éste es además el único punto del ciclo donde se puede escribir sin que se lo
+    encuentre el agente (ADR 0163). Ver :func:`ensure_base_gitignore` y
+    :func:`_el_proyecto_tiene_contenido`.
     """
     # ANTES de cualquier git sobre el worktree: un puntero roto hace que el
     # siguiente comando dispare `worktree prune` y con él la posibilidad de
     # reparar. Ver `repair_worktree_link`.
     repair_worktree_link(worktree_path)
+
+    try:
+        nombres_dependencias = _nombres_de_dependencias()
+    except ValueError as exc:  # catálogo con un nombre que no se puede usar
+        _log.error("commit_task.dependency_names_invalid", error=str(exc))
+        nombres_dependencias = ()
+    # El des-versionado va ANTES del `git add`: en ese punto el índice todavía
+    # coincide con HEAD para esas rutas, y la exclusión de abajo impide que el
+    # `add` las vuelva a meter.
+    _desversionar_dependencias(worktree_path, nombres_dependencias)
 
     env_extra = {
         "GIT_AUTHOR_NAME": author_name,
@@ -470,7 +825,62 @@ def commit_task(
         "GIT_COMMITTER_NAME": author_name,
         "GIT_COMMITTER_EMAIL": author_email,
     }
-    _run_git("add", "-A", cwd=worktree_path, env_extra=env_extra)
+    # `-A` con exclusión: el residuo de las tools de fichero NO entra en la rama.
+    #
+    # Las tres tools destructivas de la familia `file` dejaron de destruir en su
+    # sitio (ADR 0164): apartan con un renombrado, y descartan después. Cuando el
+    # descarte no se puede —el mismo EACCES que motivaba el cambio— queda un
+    # hermano `.agent-runtime-tmp.<nombre>.<n>` en el workspace. Sin esta
+    # exclusión, `git add -A` lo commitea en la rama del plan y viaja al PR: el
+    # deliverable acaba con una copia oculta del árbol que se quiso retirar, con
+    # un nombre que no significa nada para quien lo revise.
+    #
+    # Dos patrones, y los dos hacen falta:
+    #
+    #   * el `**/` inicial porque el residuo aparece AL LADO de su objetivo, que
+    #     puede estar a cualquier profundidad
+    #     (`app/Config/.agent-runtime-tmp.cache.0`). Uno anclado a la raíz sólo
+    #     cazaría el caso fácil.
+    #   * el `/**` final porque lo apartado suele ser un DIRECTORIO: el primer
+    #     patrón excluye su nombre, pero `git add` desciende igual y mete lo de
+    #     dentro con rutas que ya no casan. Medido: sin esta segunda línea
+    #     `.agent-runtime-tmp.vendor.0/paquete/autoload.php` entraba en el commit.
+    #
+    # A la misma exclusión se suman los DIRECTORIOS DE DEPENDENCIAS del catálogo
+    # (`vendor/`, `node_modules/`, `.venv/`…). Sin ellos, una tarea que corre
+    # `composer install` para enseñarle una prueba al reviewer se lleva el árbol
+    # entero a la rama del plan — 1.151 ficheros medidos el 2026-09-01— y la deja
+    # atascada. La forma de los patrones y por qué aquí sólo se excluye el
+    # CONTENIDO (a diferencia del residuo) está en `_patrones_de_dependencias`.
+    exclusiones = [
+        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*",
+        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*/**",
+        *(f":(exclude,glob){p}" for p in _patrones_de_dependencias(nombres_dependencias)),
+    ]
+    _run_git("add", "-A", "--", ".", *exclusiones, cwd=worktree_path, env_extra=env_extra)
+
+    # «Sin cambio» se decide MIRANDO EL ÍNDICE, no leyendo la prosa de git.
+    #
+    # Medido el 2026-09-01, y es consecuencia directa de la exclusión de arriba:
+    # una tarea que corre `composer install` y no entrega nada más deja `vendor/`
+    # SIN VERSIONAR en el árbol, y entonces git no dice «nothing to commit» sino
+    # «nothing added to commit but untracked files present». Esa cadena no casa
+    # con el `if "nothing to commit"` de abajo NI con el `if "clean"` del llamador
+    # (`execution._commit_and_push_worktree`), así que el run moría con un error
+    # de git donde antes —cuando el `add -A` se llevaba `vendor/`— había un
+    # commit. Índice contra HEAD responde lo mismo sin depender de la redacción.
+    if not _hay_cambios_estagiados(worktree_path):
+        raise GitCommandError("commit_task: worktree is clean")
+
+    # Y AQUÍ el `.gitignore` base: es el único punto del ciclo donde escribirlo no
+    # se lo encuentra el agente (ADR 0163) y llega igual al repositorio, que es
+    # para lo que se quería. Va después del `add` porque necesita saber si el
+    # índice tiene contenido, y detrás de la guarda de arriba porque un
+    # `.gitignore` no puede ser la única razón de un commit: eso fabricaría uno
+    # donde el llamador espera «la tarea no produjo cambio de código». Ver
+    # `ensure_base_gitignore` y `_el_proyecto_tiene_contenido`.
+    if _el_proyecto_tiene_contenido(worktree_path) and ensure_base_gitignore(worktree_path):
+        _run_git("add", "--", ".gitignore", cwd=worktree_path, env_extra=env_extra)
     try:
         _run_git(
             "commit",
@@ -845,5 +1255,6 @@ __all__ = [
     "PrOpener",
     "PushPolicy",
     "commit_task",
+    "ensure_base_gitignore",
     "make_plan_branch_name",
 ]
