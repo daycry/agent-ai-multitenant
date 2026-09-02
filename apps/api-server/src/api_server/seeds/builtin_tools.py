@@ -518,7 +518,8 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         "Run a command INSIDE the agent's sandbox (thin utility image), restricted to the "
         "project's allowlist (deny-by-default). The command is parsed as argv (shlex) and "
         "runs with a timeout, without a shell. Use it for file utilities inside the sandbox "
-        "itself (ls, cat, grep, mv, ...). NEVER for git — the platform versions your changes "
+        "itself (ls, cat, grep, find, ...); to move or rename files use `move_file`. NEVER for "
+        "git — `.git` is not in your sandbox and the platform versions your changes "
         "automatically when you finish — and it does NOT run the stack toolchain "
         "(php/composer/phpunit/npm): those binaries are not in the sandbox; use stack_exec "
         "for them.",

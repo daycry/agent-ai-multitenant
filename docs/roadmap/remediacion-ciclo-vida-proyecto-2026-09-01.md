@@ -322,7 +322,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_32` — El destilador lee los steps reales y las memorias son sticky (E-04, E-05)
 
-- [ ] **Título**: `distillation.py` lee `note/output/content` que los steps no tienen (el fixture
+- [x] _(hecho 2026-09-02, tests en verde; el destilador lee `summary` + `result.error` + `result.output[:200]` (y el fixture del test usa ya la forma real de un step); las memorias van fuera de la ventana de pasos, valladas y acotadas a 3 x 500 chars)_ **Título**: `distillation.py` lee `note/output/content` que los steps no tienen (el fixture
       del test miente) y las memorias salen de la ventana de 8 items a los pocos turnos. Leer
       `summary` + `result.error` + `result.output[:200]`; renderizar `role=memory` como bloque
       sticky acotado (3 × 500).
@@ -350,7 +350,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_35` — Textos contradictorios y `docs_language` (F-04, F-05, F-06)
 
-- [ ] **Título**: `_CI4_STACK_HYGIENE` («donde ya está el repo»), `SHELL_ONLY_*` («git log/diff»),
+- [x] _(hecho 2026-09-02, tests en verde; las cuatro cadenas reescritas y vigiladas por `test_the_prompts_no_longer_promise_git_or_mv_inside_the_sandbox`; `resolve_agent_persona(agent, language=)` elige el prompt EN y el dispatch lo pide desde `repository_config.docs_language` porque no existe columna `docs_language` en `projects`; derivar `shell-exec` del rol (`ci4-tech-writer`) queda para `task_cv_33`)_ **Título**: `_CI4_STACK_HYGIENE` («donde ya está el repo»), `SHELL_ONLY_*` («git log/diff»),
       la descripción de `shell-exec` («mv») y `_DECIDE_SYSTEM` («a git worktree») contradicen el
       ADR 0163 y la retirada de `mv`; el prompt EN no llega nunca al modelo. Reescribir las cuatro
       cadenas, aserción en `test_builtin_prompt_tool_coherence`, y pasar `project.docs_language`

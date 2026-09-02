@@ -74,10 +74,24 @@ class FakeLLM:
 _EXECUTION = {
     "status": "done",
     "output": "Fixed the asyncpg import after psycopg3 was missing.",
+    # `task_cv_32`: la forma REAL de un step (`steps.py`): `summary` + `result`;
+    # el fixture anterior traía `note`, que ningún step tiene, y mentía.
     "steps_log": [
-        {"kind": "tool_call", "note": "tried psycopg3.connect — ImportError"},
-        {"kind": "tool_call", "note": "switched to asyncpg.connect"},
-        {"kind": "observation", "note": "tests pass"},
+        {
+            "kind": "tool_call",
+            "tool": "shell_exec",
+            "status": "error",
+            "summary": "Tool 'shell_exec' → error",
+            "result": {"ok": False, "output": None, "error": "ImportError psycopg"},
+        },
+        {
+            "kind": "tool_call",
+            "tool": "write_file",
+            "status": "ok",
+            "summary": "Tool 'write_file' → ok",
+            "result": {"ok": True, "output": {"path": "db.py"}, "error": None},
+        },
+        {"kind": "node", "node": "review", "status": "ok", "summary": "tests pass"},
     ],
     "task_title": "Add an /events endpoint",
 }
@@ -255,7 +269,7 @@ async def test_steps_log_tail_is_included() -> None:
     llm = FakeLLM(content="[]")
     await distil_execution(execution=_EXECUTION, agent=_AGENT, llm=llm)
     user_msg = llm.last_messages[-1]
-    assert "asyncpg.connect" in user_msg.content
+    assert "ImportError psycopg" in user_msg.content
     assert "tests pass" in user_msg.content
 
 
@@ -264,3 +278,21 @@ async def test_immutability_of_candidate() -> None:
     cand = MemoryCandidate(content="x", type="episodic", tags=("a",))
     with pytest.raises((AttributeError, Exception)):
         cand.content = "y"  # type: ignore[misc]
+
+
+# ------------------------------------------------------------------ task_cv_32
+# Auditoría 2026-09-01 (E-04): `_user_prompt` leía `note/output/content` de cada
+# step, claves que los steps reales no tienen (`summary` + `result`), así que el
+# destilador veía «[tool_call]» pelado y las lecciones (el ImportError, el
+# fichero escrito) nunca llegaban al LLM.
+
+
+def test_the_distiller_reads_the_real_step_fields() -> None:
+    from api_server.memorizer.distillation import _user_prompt
+
+    prompt = _user_prompt(execution=_EXECUTION, agent=_AGENT)
+
+    assert "ImportError psycopg" in prompt, "el error del step no llega al LLM"
+    assert "Tool 'shell_exec' → error" in prompt
+    assert "db.py" in prompt, "el output del step no llega al LLM"
+    assert "tests pass" in prompt

@@ -10,6 +10,7 @@ payload del run (o `None` si el agente no tiene persona con contenido).
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from api_server.agent_persona import PERSONA_MAX_CHARS, resolve_agent_persona
@@ -69,3 +70,34 @@ def test_tolerates_malformed_model_config() -> None:
     assert resolve_agent_persona(agent)["prompt"] == "flat legacy prompt"
     agent2 = _agent(model_config=None)
     assert resolve_agent_persona(agent2)["prompt"] == "flat legacy prompt"
+
+
+# ------------------------------------------------------------------ task_cv_35
+# Auditoría 2026-09-01 (F-06): el prompt EN de un agente no llegaba nunca al
+# modelo — `resolve_agent_persona` elegía ES de forma fija. El dispatch puede
+# pedir ahora el idioma del proyecto; sin preferencia, ES sigue siendo el default.
+
+
+def _bilingual_agent() -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        model_config={
+            "system_prompts": {"es": "Eres el backend dev.", "en": "You are the backend dev."}
+        },
+        system_prompt="",
+        role="backend_dev",
+        name="Backend",
+    )
+
+
+def test_the_project_language_picks_the_english_prompt() -> None:
+    persona = resolve_agent_persona(_bilingual_agent(), language="en")
+    assert persona is not None and persona["prompt"] == "You are the backend dev."
+
+
+def test_spanish_stays_the_default_and_the_fallback() -> None:
+    assert resolve_agent_persona(_bilingual_agent())["prompt"] == "Eres el backend dev."  # type: ignore[index]
+    only_es = _bilingual_agent()
+    only_es.model_config = {"system_prompts": {"es": "Sólo en español."}}
+    assert resolve_agent_persona(only_es, language="en")["prompt"] == "Sólo en español."  # type: ignore[index]

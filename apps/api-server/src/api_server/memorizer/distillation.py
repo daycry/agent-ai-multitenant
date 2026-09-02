@@ -85,6 +85,38 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _step_line(step: Any) -> str:
+    """Una línea por step con lo que un step REAL lleva (`task_cv_32`, E-04).
+
+    Los steps de `agent_runtime.steps` tienen `kind`, `tool`, `status`,
+    `summary` y, en las tool calls, `result = {ok, output, error}`. La versión
+    anterior leía `note`/`output`/`content` —claves que ningún step tiene—, así
+    que el destilador veía «[tool_call]» pelado y las lecciones (el ImportError,
+    el fichero escrito) nunca llegaban al LLM."""
+    if not isinstance(step, dict):
+        return "[step]"
+    kind = str(step.get("kind") or "step")
+    parts: list[str] = []
+    summary = step.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        parts.append(summary.strip()[:200])
+    result = step.get("result")
+    if isinstance(result, dict):
+        error = result.get("error")
+        if error:
+            parts.append(f"error: {str(error)[:200]}")
+        output = result.get("output")
+        if output not in (None, "", {}, []):
+            text = output if isinstance(output, str) else json.dumps(output, default=str)
+            parts.append(f"output: {text[:200]}")
+    # Compat con formas antiguas que sí traían texto suelto.
+    for key in ("note", "content"):
+        value = step.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip()[:200])
+    return f"[{kind}] " + " | ".join(parts) if parts else f"[{kind}]"
+
+
 def _user_prompt(*, execution: Mapping[str, Any], agent: Mapping[str, Any]) -> str:
     """Compact human-readable summary the LLM works on.
 
@@ -102,16 +134,7 @@ def _user_prompt(*, execution: Mapping[str, Any], agent: Mapping[str, Any]) -> s
     tail = steps[-6:]
     tail_lines: list[str] = []
     for step in tail:
-        kind = step.get("kind", "step") if isinstance(step, dict) else "step"
-        note = (
-            (step.get("note") or step.get("output") or step.get("content") or "")
-            if isinstance(step, dict)
-            else ""
-        )
-        if note:
-            tail_lines.append(f"  - [{kind}] {str(note)[:200]}")
-        else:
-            tail_lines.append(f"  - [{kind}]")
+        tail_lines.append(f"  - {_step_line(step)}")
     tail_block = "\n".join(tail_lines) if tail_lines else "  (no recent steps)"
 
     return (

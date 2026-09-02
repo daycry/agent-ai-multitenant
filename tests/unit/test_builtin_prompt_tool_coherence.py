@@ -578,3 +578,38 @@ def test_declaring_skills_never_silently_drops_the_roles_own() -> None:
         "añádelo al dict `permitido` de este test con el motivo escrito; si no, "
         "vuelve a listar la skill en el agente."
     )
+
+
+# ------------------------------------------------------------------ task_cv_35
+# Auditoría 2026-09-01 (F-04): cuatro textos contradecían el ADR 0163 (el `.git`
+# del worktree NO está en el sandbox mientras corre el agente) y la retirada de
+# `mv` de la base de shell (ADR 0164): prometían «donde ya está el repo», «git
+# log/diff» por shell, «mv» como utilidad y «a git worktree» como directorio.
+
+_FORBIDDEN_PHRASES: tuple[str, ...] = (
+    "donde ya está el repo",
+    "where the repo already is",
+    "git log/diff",
+    "(ls, cat, grep, mv",
+    "(a git worktree)",
+)
+
+
+def test_the_prompts_no_longer_promise_git_or_mv_inside_the_sandbox() -> None:
+    import inspect
+
+    from agent_runtime import providers
+    from api_server.seeds import builtin_tools, ci4_team, tool_usage_guidance
+
+    corpus = "\n".join(
+        [
+            ci4_team._CI4_STACK_HYGIENE_ES,
+            ci4_team._CI4_STACK_HYGIENE_EN,
+            tool_usage_guidance.SHELL_ONLY_ES,
+            tool_usage_guidance.SHELL_ONLY_EN,
+            providers._DECIDE_SYSTEM,
+            inspect.getsource(builtin_tools),
+        ]
+    )
+    found = [phrase for phrase in _FORBIDDEN_PHRASES if phrase in corpus]
+    assert not found, f"textos que contradicen el ADR 0163/0164: {found}"
