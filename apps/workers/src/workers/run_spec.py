@@ -23,15 +23,22 @@ from workers.run_contract import ExecutionRequest
 # /workspace+/tmp, internal network/no egress, no docker socket — ADR 0012/0019/0040):
 # every command is confined to the container and the task worktree.
 # NOTE (Feature D): `git` is deliberately NOT here. The agent never commits/pushes
-# (the worker owns git — principle 2, no credentials in the sandbox), and git is
-# BROKEN here anyway: the worktree's `.git` points to the bare repo's worktree
-# metadata, which is NOT mounted in the sandbox → every `git` exits 128. Exposing it
-# only made the agent waste turns on cryptic failures; the prompt tells it the
-# platform persists changes automatically.
+# (the worker owns git — principle 2, no credentials in the sandbox), and since
+# ADR 0163 the worktree's `.git` does not even exist while the agent runs.
+# Exposing git only made the agent waste turns on cryptic failures; the prompt
+# tells it the platform persists changes automatically.
+#
+# NOTE (audit 2026-09-01): `rm` and `mv` are deliberately NOT here either. ADR
+# 0164 guards the committed deliverable inside the `file` tool family
+# (`delete_file` refuses a tracked tree, `move_file` refuses to move it away or
+# over it), audited in the `steps_log` and gated as `code_changes`. With `rm`/`mv`
+# in this base, `shell_exec("rm -rf app")` did exactly what `delete_file`
+# refuses — for every Claude SDK run, regardless of the project's own allowlist.
+# The SDK keeps `delete_file`/`move_file` as host tools, so nothing legitimate is
+# lost; a project that wants raw `rm` grants it in its own `allowed_commands`,
+# which is the frontier ADR 0164 documents.
 _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
     {
-        "rm",
-        "mv",
         "cp",
         "mkdir",
         "rmdir",
@@ -46,10 +53,9 @@ _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
         "diff",
         # Read/text utilities the models reach for naturally to page/inspect
         # files (G6a, audit 2026-07-03: `sed -n` was denied live twice, forcing
-        # sterile retries). No fine-grained arg validation: writing to the
-        # worktree is ALREADY allowed (rm/mv/cp are here), so these read-oriented
-        # tools add no attack surface — the sandbox (internal net, no docker
-        # socket, cap-drop ALL, seccomp) is the real boundary, not the allowlist.
+        # sterile retries). No fine-grained arg validation: the sandbox (internal
+        # net, no docker socket, cap-drop ALL, seccomp) is the real boundary, not
+        # the allowlist — and nothing here can take a tree away in one call.
         "sed",
         "awk",
         "sort",

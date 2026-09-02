@@ -66,33 +66,38 @@ _MAX_LIST_ENTRIES = 150
 _GIT_DIR = ".git"
 
 
-def _rutas_de_primer_nivel(crudo: Iterable[str] | str) -> frozenset[str]:
+def _rutas_versionadas(crudo: Iterable[str] | str) -> set[str]:
     """Normaliza lo que llega del contrato ``AGENT_TRACKED_PATHS``.
 
-    El worker publica las entradas de PRIMER NIVEL versionadas en la rama,
-    separadas por saltos de línea (``"app\\nsystem\\npublic\\ncomposer.json"``).
-    Aquí se limpia ese bloque antes de compararlo con nada, porque una
-    comparación literal contra texto de un env es la forma barata de que la
-    guarda **pase en vacío**: ``"app/"`` no casaría con ``"app"``, el test
-    seguiría verde y el borrado también ocurriría.
+    El worker publica los DIRECTORIOS versionados en la rama, a cualquier
+    profundidad, como rutas relativas POSIX separadas por saltos de línea
+    (``"app\\napp/Config\\napp/Controllers\\nsystem"``). Aquí se limpia ese bloque
+    antes de compararlo con nada, porque una comparación literal contra texto de
+    un env es la forma barata de que la guarda **pase en vacío**: ``"app/"`` no
+    casaría con ``"app"``, el test seguiría verde y el borrado también ocurriría.
 
     Dos detalles que parecen paranoia y no lo son:
 
     * un ``str`` también es iterable, y recorrerlo daría el conjunto
       ``{'a', 'p', '\\n', …}``, que no casa con ninguna ruta. Se acepta el
       bloque crudo y se parte por líneas;
-    * si llegara una ruta profunda (``app/Config``) nos quedamos con su primer
-      segmento, que es la única unidad que :meth:`WorkspaceFiles._delete_tree`
-      sabe juzgar.
+    * un worker anterior al contrato actual publicaba sólo el primer nivel.
+      Ese bloque sigue valiendo tal cual: protege menos profundidad, no menos.
+
+    Devuelve un ``set`` mutable a propósito: la protección SIGUE AL CONTENIDO
+    cuando :meth:`WorkspaceFiles.file_move` traslada un directorio versionado
+    (:meth:`WorkspaceFiles._trasladar_proteccion`).
     """
     lineas = crudo.splitlines() if isinstance(crudo, str) else crudo
     limpias: set[str] = set()
     for entrada in lineas:
-        nombre = entrada.strip().rstrip("/").strip()
-        if not nombre or nombre in {".", ".."}:
+        ruta = entrada.strip().replace("\\", "/").strip("/")
+        while ruta.startswith("./"):
+            ruta = ruta[2:]
+        if not ruta or ruta in {".", ".."} or any(p in {".", ".."} for p in ruta.split("/")):
             continue
-        limpias.add(nombre.split("/", 1)[0])
-    return frozenset(limpias)
+        limpias.add(ruta)
+    return limpias
 
 
 #: Las ÚNICAS grafías de texto que valen como booleano. Ver :func:`_bandera`.
@@ -579,7 +584,7 @@ def _error_de_so(exc: OSError, *, operacion: str) -> ToolResult:
 #: sólo lectura o abiertos por otro proceso) se queda.
 #:
 #: **Y ese residuo tiene que quedar FUERA del commit.** El cierre de tarea hace
-#: ``git add -A`` (``apps/workers/src/workers/plan_git.py:473``), así que un
+#: ``git add -A`` (``workers.plan_git.commit_task``), así que un
 #: hermano superviviente entra en el commit del plan como si fuera deliverable.
 #: El prefijo es literal y va DELANTE justamente para que una sola línea lo
 #: excluya entero —``.agent-runtime-tmp.*``— en vez de un glob con comodín por
@@ -616,6 +621,40 @@ def _nombre_libre(objetivo: Path) -> Path:
     )
 
 
+def _dar_permiso_de_escritura(ruta: str) -> None:
+    """``chmod`` al elemento y a su padre, ignorando lo que no se pueda."""
+    escribible = stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP
+    for objetivo in (os.path.dirname(ruta) or ".", ruta):
+        try:
+            os.chmod(objetivo, escribible)
+        except OSError:
+            continue
+
+
+def _rmtree_forzado(ruta: Path) -> None:
+    """``shutil.rmtree`` que da permiso de escritura y reintenta lo que falló.
+
+    Cubre los dos motivos habituales por los que un descarte no puede: en Windows
+    un fichero de sólo lectura no se desenlaza; en POSIX un directorio sin ``w``
+    no deja desenlazar lo que contiene. Lo que siga sin poder borrarse levanta
+    la excepción original y quien llama decide.
+    """
+
+    def _reintentar(func: object, path: str, _exc: BaseException) -> None:
+        _dar_permiso_de_escritura(path)
+        func(path)  # type: ignore[operator]
+
+    shutil.rmtree(ruta, onexc=_reintentar)
+
+
+def _desenlazar_forzado(ruta: Path) -> None:
+    try:
+        ruta.unlink()
+    except PermissionError:
+        _dar_permiso_de_escritura(str(ruta))
+        ruta.unlink()
+
+
 def _apartar(objetivo: Path) -> Path:
     """Retira `objetivo` a un nombre libre A SU LADO y devuelve dónde quedó.
 
@@ -641,17 +680,17 @@ class WorkspaceFiles:
 
     root: str = "/workspace"
 
-    #: Entradas de primer nivel versionadas en la rama del plan, tal como las
-    #: publica el worker. **Vacía o ausente ⇒ sin la protección de
+    #: Directorios versionados en la rama del plan, a cualquier profundidad, tal
+    #: como los publica el worker. **Vacía o ausente ⇒ sin la protección de
     #: :meth:`_delete_tree`**: un stack a medio desplegar (worker anterior al
     #: contrato, imagen nueva) se comporta como antes en vez de rechazar
     #: borrados legítimos que nadie sabría explicar.
     tracked_paths: Iterable[str] | str = ()
 
-    _rastreadas: frozenset[str] = field(init=False, repr=False, default=frozenset())
+    _rastreadas: set[str] = field(init=False, repr=False, default_factory=set)
 
     def __post_init__(self) -> None:
-        self._rastreadas = _rutas_de_primer_nivel(self.tracked_paths)
+        self._rastreadas = _rutas_versionadas(self.tracked_paths)
 
     def _safe_path(self, raw: object) -> Path | ToolResult:
         """Resolve `raw` under the workspace root, or a failed ToolResult.
@@ -804,19 +843,40 @@ class WorkspaceFiles:
             self._descartar(transitorio)
             raise
 
+    def _motivo_versionado(self, ruta: Path, root: Path) -> tuple[str, str] | None:
+        """``(ruta, entrada versionada)`` si retirar ``ruta`` entera destruiría
+        trabajo versionado, o ``None``.
+
+        Una sola lectura de ``AGENT_TRACKED_PATHS`` para :meth:`_delete_tree` y
+        para el destino con ``overwrite`` de :meth:`file_move`: una guarda
+        duplicada envejece a media velocidad, y la mitad sin corregir pasa en
+        vacío y no lo dice.
+
+        Sólo DIRECTORIOS: de un fichero suelto ya se ocupan `write_file` /
+        `delete_file`, a los que nadie considera demolición. Y a cualquier
+        profundidad, en dos formas: el directorio ESTÁ en la lista, o CONTIENE
+        uno que está (un temporal al que se movió `app/Config`, por ejemplo:
+        borrarlo entero es el mismo destrozo en dos pasos).
+        """
+        if not ruta.is_dir():
+            return None
+        relativa = _relativa(ruta, root)
+        if relativa in self._rastreadas:
+            return relativa, relativa
+        prefijo = relativa + "/"
+        contenidas = sorted(r for r in self._rastreadas if r.startswith(prefijo))
+        if contenidas:
+            return relativa, contenidas[0]
+        return None
+
     def _arbol_versionado_de_primer_nivel(self, ruta: Path, root: Path) -> str | None:
-        """El nombre del árbol versionado de primer nivel que ``ruta`` ES, o ``None``.
+        """El árbol versionado de PRIMER NIVEL que ``ruta`` ES, o ``None``.
 
-        Extraído para que :meth:`_delete_tree` y :meth:`file_move` compartan LA
-        MISMA lectura de ``AGENT_TRACKED_PATHS`` en vez de dos copias que se
-        desincronicen. Una guarda duplicada envejece a media velocidad: el día
-        que se corrija una grafía en un sitio y no en el otro, la mitad sin
-        corregir pasa en vacío y no lo dice.
-
-        Sólo PRIMER NIVEL y sólo DIRECTORIOS, por lo que explica
-        :meth:`_delete_tree`: el contrato del worker trae únicamente entradas de
-        primer nivel, y de un fichero suelto ya se ocupan `write_file` /
-        `delete_file`, a los que nadie considera demolición.
+        Es la regla del ORIGEN de :meth:`file_move` (ADR 0164): sacar de su sitio
+        un árbol de primer nivel es la forma de vaciar la raíz para un
+        andamiador, y no tiene lectura de refactor. Un directorio versionado más
+        profundo sí se puede mover —renombrar `app/Config` es trabajo normal—,
+        y la protección lo acompaña (:meth:`_trasladar_proteccion`).
         """
         if not ruta.is_dir():
             return None
@@ -824,6 +884,21 @@ class WorkspaceFiles:
         if len(partes) == 1 and partes[0] in self._rastreadas:
             return partes[0]
         return None
+
+    def _trasladar_proteccion(self, origen: Path, destino: Path, root: Path) -> None:
+        """La protección sigue al contenido: lo versionado bajo `origen` pasa a
+        estar bajo `destino`.
+
+        Sin esto, «mover a un temporal y borrar el temporal» sería el rodeo a la
+        guarda de :meth:`_delete_tree`, y una guarda con un rodeo al lado enseña
+        el rodeo.
+        """
+        de = _relativa(origen, root)
+        a = _relativa(destino, root)
+        movidas = {r for r in self._rastreadas if r == de or r.startswith(de + "/")}
+        for ruta in movidas:
+            self._rastreadas.discard(ruta)
+            self._rastreadas.add(a + ruta[len(de) :])
 
     def _delete_tree(self, resolved: Path, *, raw: object, recursive: bool) -> ToolResult:
         """La rama de DIRECTORIO de :meth:`file_delete`, aparte por legibilidad.
@@ -892,31 +967,29 @@ class WorkspaceFiles:
         El runtime no consulta git —no tiene el binario ni la rama a mano—, así
         que el worker le pasa el dato ya resuelto en ``AGENT_TRACKED_PATHS``.
 
-        **Por qué sólo el PRIMER NIVEL, que es la parte que se puede leer mal.**
-        El contrato trae sólo entradas de primer nivel, luego de
-        ``app/Modules/Foo`` no se sabe si está versionado. Y ahí vive un caso
-        legítimo —retirar entero un módulo mal andamiado en este mismo run—:
-        bloquearlo convertiría la guarda en un estorbo, y un estorbo es lo que
-        enseña al agente a rodearla (la misma lección que ``.gitignore`` frente
-        a ``.git``). El daño medido fue el árbol de primer nivel; la guarda
-        cubre exactamente eso.
+        **A cualquier profundidad (auditoría 2026-09-01).** La primera versión
+        cubría sólo el primer nivel, y con eso el destrozo se reconstruía con una
+        llamada por subdirectorio (``app/Config``, ``app/Controllers``…). El
+        worker publica ahora TODOS los directorios versionados, y se rechaza
+        borrar cualquiera de ellos y cualquier directorio que CONTENGA uno (el
+        temporal al que se movió `app/Config`). Lo que no está en la lista no
+        está versionado —lo creó este run—, y ahí sigue viviendo el caso
+        legítimo: retirar entero un módulo mal andamiado.
 
         **Dónde ACABA esta protección: en la familia de tools ``file``.** Vive en
         :class:`WorkspaceFiles`, así que cubre ``file_delete`` y sus hermanas —
         el camino por el que el agente toca el worktree a través del registry.
-        **NO cubre ``stack_exec`` (ADR 0093)**: ese comando no corre aquí, lo
-        ejecuta el WORKER dentro del runtime-template del proyecto con el
-        worktree montado RW, y lo único que lo gatea es la allowlist de comandos
-        del proyecto. Un proyecto que tenga ``rm`` en su allowlist sigue pudiendo
-        hacer ``rm -rf app`` y llevarse por delante exactamente lo que esta
-        función rechaza.
+        **NO cubre ``stack_exec`` ni ``shell_exec``** (ADR 0093 / 0162): esos
+        comandos los filtra la allowlist del proyecto, y un proyecto que ponga
+        ``rm`` en ella sigue pudiendo hacer ``rm -rf app``. La base que la
+        plataforma añade a los runs con Claude SDK ya no trae ``rm`` ni ``mv``
+        (auditoría 2026-09-01): la frontera es la decisión del proyecto, no un
+        regalo de la plataforma.
 
-        La frontera es real y no un descuido: para cerrarla por este lado haría
+        La frontera es real y no un descuido: para cerrarla por ese lado haría
         falta que el worker entendiera qué borra cada comando de los 14
         toolchains, que es justo la clasificación que el ADR 0093 evitó al
-        delegar en una allowlist. Quien quiera la garantía completa la consigue
-        NO poniendo ``rm`` en la allowlist del proyecto — ése, y no esta
-        función, es el sitio donde se decide.
+        delegar en una allowlist.
         """
         if not recursive:
             return ToolResult(
@@ -937,12 +1010,14 @@ class WorkspaceFiles:
                 ),
             )
 
-        rastreado = self._arbol_versionado_de_primer_nivel(resolved, root)
-        if rastreado is not None:
+        motivo = self._motivo_versionado(resolved, root)
+        if motivo is not None:
+            rastreado, entrada = motivo
+            que = "it is" if rastreado == entrada else f"it contains '{entrada}', which is"
             return ToolResult(
                 ok=False,
                 error=(
-                    f"refusing to recursively delete '{rastreado}': it is tracked in "
+                    f"refusing to recursively delete '{rastreado}': {que} tracked in "
                     "this branch, so it holds work already committed by an earlier "
                     "task — removing it destroys that deliverable, not a rebuildable "
                     "artifact. Delete the specific files you actually want to retire "
@@ -999,10 +1074,11 @@ class WorkspaceFiles:
         Lo que sigue sin poder hacerse, a propósito: **vaciar la raíz del
         workspace**, y —desde el mismo día, porque la bandera se llevó por
         delante un deliverable en su primer run— **borrar entero un árbol
-        VERSIONADO de primer nivel**. Ambas son operaciones cuyo resultado no es
-        «un árbol menos» sino «el trabajo de otra tarea»; el detalle de la
-        segunda está en :meth:`_delete_tree`. Para andamiar sobre un directorio
-        limpio está el ADR 0163, que quita de en medio lo único que estorbaba.
+        VERSIONADO**, a cualquier profundidad y aunque se haya movido a un
+        temporal. Ambas son operaciones cuyo resultado no es «un árbol menos»
+        sino «el trabajo de otra tarea»; el detalle de la segunda está en
+        :meth:`_delete_tree`. Para andamiar sobre un directorio limpio está el
+        ADR 0163, que quita de en medio lo único que estorbaba.
 
         Ambos límites valen **sólo para la familia de tools ``file``**: por
         ``stack_exec`` (ADR 0093) el comando corre en el runtime-template con el
@@ -1128,11 +1204,16 @@ class WorkspaceFiles:
         :meth:`_ejecutar_movimiento` — la guarda enumera casos, y siempre queda
         uno sin enumerar.
 
-        El límite es el ÁRBOL de primer nivel, no cualquier cosa versionada.
+        El límite son los ÁRBOLES versionados, no cualquier cosa versionada.
         Sobrescribir un FICHERO versionado ya se puede con `write_file`, que es
         la forma normal de editar código: bloquearlo aquí no protegería nada y sí
         convertiría la guarda en un estorbo, que es como el agente aprende a
-        rodearla (la misma lección que `.gitignore` frente a `.git`).
+        rodearla (la misma lección que `.gitignore` frente a `.git`). Y desde la
+        auditoría del 2026-09-01 el árbol puede estar a cualquier profundidad:
+        pisar `app/Config` con `overwrite` se rechaza igual que pisar `app/`; en
+        cambio MOVER `app/Config` a otro sitio se permite —es un refactor— y la
+        protección viaja con él (:meth:`_trasladar_proteccion`). Mover un árbol
+        de PRIMER NIVEL sigue rechazado: ésa es la forma de vaciar la raíz.
 
         **Dónde ACABA esta protección.** En la familia de tools `file`, igual que
         la de `delete_file`: por `stack_exec` (ADR 0093) el comando corre en el
@@ -1239,12 +1320,14 @@ class WorkspaceFiles:
                     "not exist yet."
                 ),
             )
-        pisado = self._arbol_versionado_de_primer_nivel(destino, root)
-        if pisado is not None:
+        motivo = self._motivo_versionado(destino, root)
+        if motivo is not None:
+            pisado, entrada = motivo
+            que = "it is" if pisado == entrada else f"it contains '{entrada}', which is"
             return ToolResult(
                 ok=False,
                 error=(
-                    f"refusing to overwrite '{pisado}': it is tracked in this branch, "
+                    f"refusing to overwrite '{pisado}': {que} tracked in this branch, "
                     "so it holds work already committed by an earlier task — replacing "
                     "the whole tree destroys that deliverable exactly like deleting it "
                     "would, and does not even leave a delete in the log. Move the "
@@ -1274,9 +1357,9 @@ class WorkspaceFiles:
         borrado original, que al menos constaba en el ``steps_log`` como un
         borrado con su recuento.
 
-        La guarda de árbol versionado no lo tapa, y no es un descuido:
-        ``app/Config`` es profundidad 2 y esa guarda es de PRIMER NIVEL a
-        propósito (:meth:`_delete_tree` explica por qué). Aquí no hay red debajo.
+        La guarda de árbol versionado no basta como red: cubre ``app/Config``
+        sólo si está versionado, y un temporal recién creado en este run no lo
+        está. Para lo no versionado, aquí no hay red debajo.
 
         Los tres casos, con su salida, porque un «no» sin salida hace que el
         modelo pruebe variantes hasta agotar el presupuesto:
@@ -1391,6 +1474,9 @@ class WorkspaceFiles:
 
         if apartado is not None:
             self._descartar(apartado)
+        # Lo versionado que viajaba dentro de `origen` sigue versionado en su
+        # nueva ruta, y la guarda tiene que seguirlo. Ver `_trasladar_proteccion`.
+        self._trasladar_proteccion(origen, destino, root)
 
         # Se registran las rutas EFECTIVAS, no la grafía que mandó el modelo:
         # `./ci4tmp/` y `ci4tmp` son la misma carpeta, y el log tiene que poder
@@ -1452,12 +1538,20 @@ class WorkspaceFiles:
         resto sino una ausencia: si ``write_text`` falló al ABRIR, el temporal no
         llegó a existir. El ``unlink`` levanta ``FileNotFoundError``, que es un
         ``OSError``, y se traga por el mismo sitio.
+
+        **Antes de rendirse, da permiso y reintenta** (auditoría 2026-09-01). Los
+        dos motivos por los que un ``rmtree`` a secas no puede —un fichero de
+        sólo lectura, un directorio sin permiso de escritura dejado por otro
+        contenedor— se resuelven con un ``chmod``. Y el residuo que se dejaba en
+        su lugar tenía un precio que nadie había medido: el ``git clean`` de la
+        provisión siguiente intentaba borrarlo, no podía, y la tarea quedaba
+        `workspace_unavailable` en cada reintento.
         """
         try:
-            if apartado.is_dir():
-                shutil.rmtree(apartado)
+            if apartado.is_dir() and not apartado.is_symlink():
+                _rmtree_forzado(apartado)
             else:
-                apartado.unlink()
+                _desenlazar_forzado(apartado)
         except OSError:
             return
 

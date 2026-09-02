@@ -132,3 +132,34 @@ def test_merged_head_needs_no_rescue(tmp_path: Path) -> None:
     assert wt in removed
     refs = _git_out("for-each-ref", "refs/rescue", cwd=bare)
     assert refs == ""
+
+
+def test_a_locked_worktree_is_pruned_cleanly(tmp_path: Path) -> None:
+    """Un lock huérfano (ADR 0163: worker muerto con el puntero oculto) no puede
+    convertir el worktree en un fantasma (auditoría 2026-09-01).
+
+    Medido con git real ANTES del arreglo: `git worktree remove --force` se
+    niega sobre un worktree bloqueado, el `rmtree` de respaldo borra el disco, y
+    `git worktree prune` respeta el lock — quedaba un registro `locked`
+    permanente en el bare y un `worktree add` del mismo id fallaba con rc=128
+    («missing but locked worktree»).
+    """
+    _, bare, mgr = _setup(tmp_path)
+    wt = mgr.add("task-locked", branch="plan/hhhh-e")
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "worktree", "lock", str(wt), "--reason", "run muerto"],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    _age(wt, days=3)
+
+    removed = mgr.prune_by_policy({"task-locked": "closed"})
+
+    assert wt in removed and not wt.exists()
+    registrados = _git_out("worktree", "list", "--porcelain", cwd=bare)
+    assert "task-locked" not in registrados, (
+        "queda un registro fantasma bloqueado en el bare:\n" + registrados
+    )
+    # Y el mismo task_id se puede volver a provisionar (reintento tras la poda).
+    assert mgr.add("task-locked", branch="plan/hhhh-e").exists()
