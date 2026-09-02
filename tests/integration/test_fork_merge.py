@@ -356,10 +356,18 @@ async def _seed_tools_and_grant(dsn: str, agent_id: UUID) -> UUID:
         await engine.dispose()
     conn = await asyncpg.connect(dsn)
     try:
-        tool_id = await conn.fetchval("SELECT id FROM tools WHERE slug = 'read-file'")
+        # `tools` identifica por `name` (índice único tenant+name); la fila
+        # builtin nace en el tenant de plataforma. `agent_tools` es tenant-scoped:
+        # el tenant sale del propio agente.
+        tool_id = await conn.fetchval(
+            "SELECT id FROM tools WHERE name = 'read_file' AND is_builtin = true"
+            " AND deleted_at IS NULL ORDER BY created_at LIMIT 1"
+        )
         assert tool_id is not None
         await conn.execute(
-            "INSERT INTO agent_tools (agent_id, tool_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            "INSERT INTO agent_tools (tenant_id, agent_id, tool_id)"
+            " SELECT tenant_id, id, $2 FROM agents WHERE id = $1"
+            " ON CONFLICT DO NOTHING",
             agent_id,
             tool_id,
         )
