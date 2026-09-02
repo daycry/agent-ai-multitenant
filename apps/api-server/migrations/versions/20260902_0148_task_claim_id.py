@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0148_task_claim_id"
-down_revision: str | Sequence[str] | None = "0147_unpin_anthropic_builtin_forks"
+down_revision: str | Sequence[str] | None = "0147_unpin_anthropic_forks"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -35,7 +35,7 @@ from alembic import command
 pytestmark = [pytest.mark.integration]
 
 _REVISION_BEFORE = "0146_move_file_builtin_forks"
-_REVISION = "0147_unpin_anthropic_builtin_forks"
+_REVISION = "0147_unpin_anthropic_forks"
 _BACKFILL_TABLE = "agents_model_config_backfill_0147"
 _PLATFORM_TENANT = UUID("00000000-0000-0000-0000-000000000001")
 

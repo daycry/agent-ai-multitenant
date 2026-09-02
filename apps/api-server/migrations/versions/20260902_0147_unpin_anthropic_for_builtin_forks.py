@@ -44,7 +44,7 @@ nacería legible cross-tenant.
 
 Idempotente: re-ejecutar no encuentra a nadie con `provider = 'anthropic'`.
 
-Revision ID: 0147_unpin_anthropic_builtin_forks
+Revision ID: 0147_unpin_anthropic_forks
 Revises: 0146_move_file_builtin_forks
 Create Date: 2026-09-02
 """
@@ -55,7 +55,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0147_unpin_anthropic_builtin_forks"
+revision: str = "0147_unpin_anthropic_forks"
 down_revision: str | Sequence[str] | None = "0146_move_file_builtin_forks"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
