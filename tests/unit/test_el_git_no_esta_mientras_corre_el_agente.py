@@ -305,12 +305,102 @@ def test_reparar_suelta_el_lock_que_dejo_un_worker_muerto(worktree: Path) -> Non
     queda a salvo del reaper para siempre.
     """
     bare = worktree.parent.parent / "repos" / "app.git"
-    _git("--git-dir", str(bare), "worktree", "lock", str(worktree), "--reason", "run muerto")
+    _git(
+        "--git-dir",
+        str(bare),
+        "worktree",
+        "lock",
+        str(worktree),
+        "--reason",
+        "agent run in progress [exec-muerta]",  # el motivo que deja la plataforma
+    )
     (worktree / ".git").unlink()
 
     assert repair_worktree_link(worktree) is True
     assert not (bare / "worktrees" / worktree.name / "locked").exists(), (
         "la reparación no soltó el lock: el worktree es inmortal para el reaper"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6b. El lock tiene DUEÑO (auditoría 2026-09-01)
+# ---------------------------------------------------------------------------
+# La primera versión soltaba el lock y reponía el puntero en su `finally` sin
+# mirar de quién era el lock. Con dos ejecuciones SOLAPADAS de la misma tarea
+# —ya ocurren: la gotcha «deploy relaunches frozen tasks»— la provisión de B
+# reparaba y desbloqueaba mientras A seguía corriendo, y al terminar A reponía
+# el `.git` en mitad del run de B y le soltaba el lock: B quedaba con el puntero
+# visible y sin protección frente al `prune` de cualquier hermana.
+#
+# Ahora el motivo del lock lleva el `execution_id`, y sólo el dueño repone y
+# suelta. La provisión SIEMPRE toma el relevo (suelta un lock de la plataforma
+# aunque el puntero esté en su sitio): un worker muerto entre reponer y soltar
+# dejaba antes un lock huérfano que nadie iba a soltar jamás.
+
+
+def _motivo_del_lock(worktree: Path) -> str | None:
+    bare = worktree.parent.parent / "repos" / "app.git"
+    fichero = bare / "worktrees" / worktree.name / "locked"
+    return fichero.read_text(encoding="utf-8").strip() if fichero.exists() else None
+
+
+def test_el_lock_dice_que_ejecucion_lo_tomo(worktree: Path) -> None:
+    with git_link_hidden(worktree, owner="exec-A"):
+        motivo = _motivo_del_lock(worktree)
+        assert motivo is not None and "exec-A" in motivo, motivo
+
+
+def test_una_ejecucion_solapada_toma_el_relevo_y_la_anterior_no_le_pisa(
+    worktree: Path,
+) -> None:
+    """A corre; la provisión de B repara y toma el relevo; A termina DESPUÉS."""
+    import contextlib
+
+    with contextlib.ExitStack() as a:
+        a.enter_context(git_link_hidden(worktree, owner="exec-A"))
+        assert not (worktree / ".git").exists()
+
+        # La provisión de B: repara el enlace y libera el lock de A.
+        assert repair_worktree_link(worktree) is True
+        assert _motivo_del_lock(worktree) is None
+
+        with contextlib.ExitStack() as b:
+            b.enter_context(git_link_hidden(worktree, owner="exec-B"))
+            assert not (worktree / ".git").exists()
+            assert "exec-B" in (_motivo_del_lock(worktree) or "")
+
+            # A termina mientras B sigue corriendo: NO repone ni suelta lo de B.
+            a.close()
+            assert not (worktree / ".git").exists(), (
+                "A repuso el puntero en mitad del run de B: el andamiador de B vuelve a fallar"
+            )
+            assert "exec-B" in (_motivo_del_lock(worktree) or ""), (
+                "A soltó el lock de B: el prune de una hermana puede podar a B"
+            )
+
+    assert (worktree / ".git").is_file(), "B no repuso el puntero al terminar"
+    assert _motivo_del_lock(worktree) is None, "B no soltó su lock"
+
+
+def test_la_provision_suelta_un_lock_huerfano_aunque_el_puntero_este(worktree: Path) -> None:
+    """Muerte dura entre reponer el `.git` y soltar el lock: el puntero está, el
+    lock también, y nadie lo iba a soltar. `repair_worktree_link` no tiene nada
+    que reparar, pero sí toma el relevo."""
+    bare = worktree.parent.parent / "repos" / "app.git"
+    _git(
+        "--git-dir",
+        str(bare),
+        "worktree",
+        "lock",
+        str(worktree),
+        "--reason",
+        "agent run in progress [exec-muerta]",
+    )
+    assert (worktree / ".git").is_file()
+
+    assert repair_worktree_link(worktree) is False  # no había puntero que reparar
+    assert _motivo_del_lock(worktree) is None, (
+        "el lock huérfano sigue ahí: el worktree es inmortal para el reaper"
     )
 
 

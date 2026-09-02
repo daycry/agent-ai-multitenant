@@ -321,6 +321,23 @@ class AgentContainerRunner:
                 exited.append((container.id, execution_id))
         return exited
 
+    def read_exited_container(self, container_id: str) -> tuple[str, int | None] | None:
+        """Logs completos y código de salida de un contenedor gestionado que ya
+        terminó (`task_cv_12`, auditoría 2026-09-01 A-04). Es lo que permite al
+        sweeper finalizar una fila `running` con el resultado REAL del run cuando
+        el proceso worker murió antes de leerlo: el runtime escribe su
+        `execution.finished` en stdout y Docker lo conserva hasta el `remove`.
+        Best-effort: ``None`` si el contenedor ya no existe o el daemon no responde."""
+        try:
+            container = self.client.containers.get(container_id)
+            raw = container.logs(stdout=True, stderr=True)
+            logs = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+            state = (getattr(container, "attrs", None) or {}).get("State") or {}
+            exit_code = state.get("ExitCode")
+            return logs, (int(exit_code) if exit_code is not None else None)
+        except Exception:
+            return None
+
     def remove_container(self, container_id: str) -> bool:
         """Elimina un contenedor por id (force). Best-effort e idempotente."""
         with contextlib.suppress(Exception):

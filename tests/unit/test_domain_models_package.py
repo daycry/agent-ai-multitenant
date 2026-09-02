@@ -530,10 +530,12 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
     # digest sin este comentario sería indistinguible de subir un número para poner
     # CI en verde, que es justo lo que este fichero existe para impedir.
     "tasks": (
-        "e655b88501a42815",  # era 399389c271c05b23 antes de declarar el CHECK
+        # era e655b88501a42815 antes de `claim_id` (0148); 399389c271c05b23 antes del CHECK.
+        "0930dadce60810ff",
         (
             "acceptance_criteria",
             "assigned_agent_id",
+            "claim_id",  # `task_cv_13`, migración 0148
             "completed_at",
             "created_at",
             "description",

@@ -44,6 +44,15 @@ profile agent-runtime flags=(attach_disconnected,mediate_deleted) {
   /sbin/**                  rix,
   /lib/**                   rix,
   /lib64/**                 rix,
+  # Toolchains that live OUTSIDE the FHS roots above (audit 2026-09-01, B-03):
+  # the eclipse-temurin / gradle bases put the JDK and Gradle under /opt
+  # (JAVA_HOME=/opt/java/openjdk, /opt/gradle/lib), and the Playwright images
+  # put Chromium under /ms-playwright. Without `x` here java, gradle and chrome
+  # die with EACCES at execve in every host that pins this profile — which is
+  # what the installer generates — and never in dev (WSL2 has no AppArmor).
+  # `ix` inherits this profile: nothing runs unconfined.
+  /opt/**                   rix,
+  /ms-playwright/**         rix,
   /etc/**                   r,
 
   # The ONLY writable locations the untrusted code gets.

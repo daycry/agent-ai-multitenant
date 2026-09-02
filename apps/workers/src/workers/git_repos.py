@@ -42,6 +42,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -577,6 +578,13 @@ class WorktreeManager:
 
         ``preserve`` are dependency directories kept across the clean
         (task_wf_24, C-06). See :func:`clean_args`.
+
+        Los residuos del runtime (``.agent-runtime-tmp.*``) se barren ANTES del
+        ``clean`` y con :func:`rmtree_forzado`: un residuo que ``git clean`` no
+        puede borrar hace que salga con rc=1 y la provisión falle en cada
+        reintento (auditoría 2026-09-01). Lo que ni así se puede borrar se
+        preserva del ``clean`` y se registra: es un fallo menor comparado con una
+        tarea que no vuelve a arrancar.
         """
         wt = self._layout.worktree_path(task_id)
         if not wt.exists():
@@ -585,7 +593,8 @@ class WorktreeManager:
         # whether the bare is a real remote or a local on-disk repo.
         _run_git("fetch", str(self._repo_path), branch, cwd=wt)
         _run_git("reset", "--hard", "FETCH_HEAD", cwd=wt)
-        _run_git(*clean_args(preserve), cwd=wt)
+        imborrables = barrer_residuos_del_runtime(wt)
+        _run_git(*clean_args((*preserve, *(r.name for r in imborrables))), cwd=wt)
         _log.info(
             "worktree.sync",
             tenant=self._layout.tenant_slug,
@@ -741,15 +750,101 @@ class WorktreeManager:
         plain ``shutil.rmtree`` + ``git worktree prune`` if git still
         refuses.
         """
-        import shutil
-
+        # Un lock (ADR 0163: worker muerto con el puntero oculto) haría que
+        # `remove --force` se negara, y `prune` respeta los locks: quedaba un
+        # registro fantasma bloqueado para siempre y un `worktree add` del mismo
+        # id fallaba con rc=128 (auditoría 2026-09-01). El reaper es el dueño
+        # legítimo de lo que poda, así que suelta el lock antes.
+        with contextlib.suppress(GitCommandError):
+            _run_git("worktree", "unlock", str(path), cwd=self._repo_path)
         try:
             _run_git("worktree", "remove", "--force", str(path), cwd=self._repo_path)
         except GitCommandError:
-            shutil.rmtree(path, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                rmtree_forzado(path)
             # Ask git to forget the now-missing entry.
             with contextlib.suppress(GitCommandError):
                 _run_git("worktree", "prune", cwd=self._repo_path)
+
+
+#: El prefijo con el que `agent_runtime.file_tools` aparta lo que va a destruir
+#: (ADR 0164: apartar, hacer, descartar). Se repite aquí a propósito y no se
+#: importa: el runtime corre DENTRO del contenedor efímero y el worker fuera, sin
+#: ningún paquete común. Lo que ata los dos lados es
+#: `tests/unit/test_el_residuo_del_runtime_no_llega_al_commit.py`.
+RUNTIME_SCRATCH_PREFIX = ".agent-runtime-tmp."
+
+
+def barrer_residuos_del_runtime(worktree: Path) -> list[Path]:
+    """Borra los residuos ``.agent-runtime-tmp.*`` del worktree, a cualquier profundidad.
+
+    Devuelve los que NO se pudieron borrar ni con :func:`rmtree_forzado`, para
+    que quien llama los preserve del ``git clean`` en vez de dejar que lo tumbe.
+    No entra en ``.git`` ni desciende dentro de un residuo (se borra entero).
+    """
+    import os
+
+    imborrables: list[Path] = []
+    pendientes = [worktree]
+    while pendientes:
+        directorio = pendientes.pop()
+        try:
+            with os.scandir(directorio) as hijos:
+                entradas = list(hijos)
+        except OSError:
+            continue
+        for hijo in entradas:
+            if hijo.name == ".git":
+                continue
+            ruta = Path(hijo.path)
+            if hijo.name.startswith(RUNTIME_SCRATCH_PREFIX):
+                try:
+                    if hijo.is_dir(follow_symlinks=False):
+                        rmtree_forzado(ruta)
+                    else:
+                        ruta.unlink()
+                except OSError as exc:
+                    _log.warning(
+                        "worktree.runtime_residue_not_removable",
+                        worktree=str(worktree),
+                        residue=str(ruta.relative_to(worktree)),
+                        error=str(exc)[:200],
+                        note="se preserva del `git clean` para que la provisión siga",
+                    )
+                    imborrables.append(ruta)
+                continue
+            try:
+                if hijo.is_dir(follow_symlinks=False):
+                    pendientes.append(ruta)
+            except OSError:
+                continue
+    return imborrables
+
+
+def rmtree_forzado(ruta: Path) -> None:
+    """``shutil.rmtree`` que vuelve a intentar tras dar permiso de escritura.
+
+    Los dos casos que un ``rmtree`` a secas no puede: en Windows un fichero de
+    sólo lectura no se desenlaza, y en POSIX un directorio sin ``w`` no deja
+    desenlazar lo que contiene. Los dos los deja el toolchain de un proyecto con
+    facilidad (``composer install`` en otro contenedor, un ``chmod`` de un
+    instalador), y los dos se resuelven dando permiso al padre y al propio
+    elemento y repitiendo la operación. Lo que siga sin poder borrarse levanta
+    la excepción original: quien llama decide si es fatal.
+    """
+    import os
+    import shutil
+    import stat
+
+    def _reintentar(func: Any, path: str, _exc: BaseException) -> None:
+        escribible = stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP
+        with contextlib.suppress(OSError):
+            os.chmod(os.path.dirname(path) or ".", escribible)
+        with contextlib.suppress(OSError):
+            os.chmod(path, escribible)
+        func(path)
+
+    shutil.rmtree(ruta, onexc=_reintentar)
 
 
 __all__ = [

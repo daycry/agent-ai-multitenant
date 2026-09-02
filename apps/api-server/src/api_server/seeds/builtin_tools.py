@@ -112,7 +112,10 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         "Delete a file — or a whole directory with recursive=true — from the task's "
         "worktree. Sandboxed: only under the worktree. Use it to remove stale or "
         "duplicate files from previous attempts, and to drop a dependency directory "
-        "(vendor/, node_modules/) or a mis-scaffolded module before redoing it.",
+        "(vendor/, node_modules/) or a mis-scaffolded module before redoing it. "
+        "Refused: the worktree root, and any directory that is tracked in this branch "
+        "or contains one (it holds an earlier task's committed work) — retire its files "
+        "one by one instead.",
         "file",
         "builtin",
         "sandboxed",
@@ -124,7 +127,8 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                     "type": "boolean",
                     "description": (
                         "Required to delete a DIRECTORY: removes it with everything "
-                        "inside. Refused on the worktree root itself."
+                        "inside. Refused on the worktree root and on directories "
+                        "tracked in this branch."
                     ),
                 },
             },
@@ -169,9 +173,10 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         "AT A TIME (list_files on that directory gives you the list) and delete the empty "
         "leftover. Also renames a mis-named file or module without rewriting it. Missing "
         "parent directories of the destination are created. Refused: moving onto the "
-        "worktree root (that is merging two trees, not one move), and moving or "
-        "overwriting a whole top-level directory that is tracked in this branch (it holds "
-        "an earlier task's committed work).",
+        "worktree root (that is merging two trees, not one move), moving a whole "
+        "top-level directory that is tracked in this branch, and overwriting any tracked "
+        "directory (it holds an earlier task's committed work). Moving a nested tracked "
+        "directory is allowed as a rename; it stays protected at its new path.",
         "file",
         "builtin",
         "sandboxed",

@@ -190,6 +190,12 @@ CORE_SERVICES: tuple[str, ...] = (
     "api-server",
     "orchestrator",
     "workers",
+    # Auditoría 2026-09-01 (A-02): la lane que drena `test`/`review` sin servir
+    # `default`, para que la espera síncrona de la fase de tests no se
+    # inanicione en el pool genérico. Va en el NÚCLEO por el mismo motivo que
+    # `workers-marketplace`: sin ella la fase de tests depende de que el pool
+    # genérico tenga un slot libre justo cuando otro run lo ocupa esperando.
+    "workers-aux",
     "workers-privileged",
     # prod-13 task_prod13_01: la lane de las puertas del marketplace. Va en el
     # NÚCLEO porque su cola se declara en `QUEUE_NAMES`: dejarla fuera dejaría
@@ -915,21 +921,32 @@ def _docker_socket_proxy_service(
     the raw ``/var/run/docker.sock`` is a full host-root escape (Principio 2). So
     this proxy holds the socket (read-only mount) and exposes a TCP API on a
     DEDICATED internal network with a per-endpoint ACL: containers/images/
-    networks + POST are allowed (create + wire runtimes); exec/volumes/swarm and
-    everything else are denied (no `docker exec`, no host bind-mounts, no swarm).
+    networks + POST + EXEC are allowed (create + wire runtimes, and run the
+    acceptance checks / `pre_install` / `stack_exec` bridge INSIDE them, ADR
+    0093); volumes/swarm and everything else are denied.
+
+    EXEC=1 is not a relaxation added lightly (audit 2026-09-01, B-01): with
+    EXEC=0 every `exec_run` of `TestRuntimeRunner` answered 403 in a
+    wizard-generated stack — checks came back as `runtime_launch_failed`,
+    `stack_exec` errored, sidecars never passed their healthcheck — and this
+    generator's own test pinned the broken value while
+    `docker-compose.manuals.yml` had already learnt the lesson. The ACL is
+    still least-privilege: the proxy lives on `agentic-docker` (workers only)
+    and the agent-runtime never touches the socket (Principio 2).
     """
 
     svc: dict[str, Any] = {
         "image": IMAGE_DOCKER_SOCKET_PROXY,
         "environment": {
-            # Allow only what launching a sandbox runtime needs.
+            # Allow only what launching a sandbox runtime — and running the
+            # toolchain inside it — needs.
             "CONTAINERS": "1",
             "IMAGES": "1",
             "NETWORKS": "1",
             "POST": "1",
+            "EXEC": "1",
             # Deny the dangerous surface explicitly (defaults are 0, pinned for
             # clarity + as a regression guard).
-            "EXEC": "0",
             "VOLUMES": "0",
             "SWARM": "0",
             "SECRETS": "0",
@@ -1243,6 +1260,14 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 # ADR 0083 (prod-06 colas_02) — dead lanes on a single host.
 _WORKER_GENERIC_QUEUES = "default,ingestion,test,review"
 _WORKER_PRIVILEGED_QUEUE = "privileged"
+# Auditoría 2026-09-01 (A-02): la fase de tests espera de forma SÍNCRONA
+# (`AsyncResult.get()` bajo `allow_join_result`) dentro del task `run_execution`
+# de la lane `default`. Si la cola `test` la sirviera SÓLO el pool genérico, dos
+# runs esperando a la vez ocuparían los dos slots y la fase de tests no tendría
+# dónde correr: inanición hasta agotar el presupuesto. El compose de dev lleva
+# `workers-aux` (`--queues=test,review`) por ese mismo motivo, medido (run
+# 019f252e); el generado por el instalador —el de producción— no lo tenía.
+_WORKER_AUX_QUEUES = "test,review"
 # prod-13 task_prod13_01: la lane de las puertas de seguridad del marketplace
 # (bandit + semgrep + prueba de humo del sandbox). Lane propia porque un trabajo
 # de ~4 min no cabe en los pools de arriba sin arriesgar la inanición que
@@ -1415,6 +1440,20 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
 #: Lo que se captura ahora son bind paths que emite `config_generators._backup_env`,
 #: que es quien conoce el layout. El worker sigue necesitando root para leerlos
 #: (uid 999 de redis, uid 100 de vault, modo 0700).
+
+
+def _workers_aux_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """La lane que drena `test` y `review` SIN servir `default`.
+
+    Misma imagen, env, volúmenes, redes y endurecimiento que `workers` —se
+    deriva de él para que un cambio en la envoltura no se olvide aquí— y sólo
+    cambia el `command`. Es lo que hace segura la espera síncrona de la fase de
+    tests: el slot que espera (lane `default`) nunca es el slot que la fase
+    necesita (lane `test`). Ver `_WORKER_AUX_QUEUES`.
+    """
+    svc = _workers_service(cfg, prod=prod)
+    svc["command"] = f"celery -A workers.celery_app worker --queues={_WORKER_AUX_QUEUES}"
+    return svc
 
 
 def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
@@ -2123,6 +2162,7 @@ _BUILDERS = {
     BOOTSTRAP_SERVICE: _bootstrap_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
+    "workers-aux": _workers_aux_service,
     "workers-privileged": _workers_privileged_service,
     "workers-marketplace": _workers_marketplace_service,
     "cortex-beat": _cortex_beat_service,
@@ -2323,6 +2363,7 @@ def generate_compose(
         "api-server",
         "orchestrator",
         "workers",
+        "workers-aux",
         "workers-privileged",
         "workers-marketplace",
         "cortex-beat",

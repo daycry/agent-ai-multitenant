@@ -186,6 +186,15 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
   índice intacto: `git rm` exige que TODOS los pathspecs casen y aborta entero,
   al revés que el `git ls-files` con el que escaneaste. Filtra la lista a lo que
   hay, no uses `--ignore-unmatch`.
+- [git-clean-falla-si-no-puede-borrar.md](./git-clean-falla-si-no-puede-borrar.md)
+  — `git clean -fdx` sale con rc=1 si no puede borrar UNA entrada, y la
+  provisión aborta en cada reintento. Un residuo `.agent-runtime-tmp.*`
+  imborrable lo provoca: el worker barre antes con `chmod`+reintento y
+  preserva del `clean` lo que ni así se borra.
+- [celery-result-get-dentro-de-un-task-prefork.md](./celery-result-get-dentro-de-un-task-prefork.md)
+  — `AsyncResult.get()` dentro de un task prefork lanza `RuntimeError` antes de
+  tocar el backend; hace falta `allow_join_result()` Y una lane distinta para
+  la cola esperada. Un doble de `get()` sin la guarda real tapa el defecto.
 - [verify-routes-with-curl-not-app-import.md](./verify-routes-with-curl-not-app-import.md)
   — importar `api_server.main:app` en el contenedor da una app PARCIAL; verificar
   con `curl` al gateway, y leer 401 como «existe» y 404 como «no montada».

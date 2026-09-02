@@ -979,13 +979,38 @@ def test_docker_socket_proxy_has_minimal_acl_and_mounts_the_socket() -> None:
     proxy = generate_compose(_config())["services"]["docker-socket-proxy"]
     env = proxy["environment"]
     # The worker needs to create/list containers, reference images, attach
-    # networks — and POST to create them. Everything else is denied.
-    for on in ("CONTAINERS", "IMAGES", "NETWORKS", "POST"):
+    # networks, POST to create them — and EXEC: it runs the acceptance checks,
+    # `pre_install` and the `stack_exec` bridge (ADR 0093) INSIDE the runtime
+    # templates it launches, through `exec_run`. With EXEC=0 every one of those
+    # answered 403 in a wizard-generated stack (audit 2026-09-01, B-01) while
+    # this very test pinned the broken value. Volumes/swarm stay denied.
+    for on in ("CONTAINERS", "IMAGES", "NETWORKS", "POST", "EXEC"):
         assert str(env.get(on)) == "1", f"socket-proxy ACL should allow {on}"
-    for off in ("EXEC", "VOLUMES", "SWARM"):
+    for off in ("VOLUMES", "SWARM"):
         assert str(env.get(off)) == "0", f"socket-proxy ACL must deny {off}"
     vols = " ".join(proxy.get("volumes", []))
     assert "/var/run/docker.sock" in vols, "socket-proxy must mount the docker socket"
+
+
+def test_docker_socket_proxy_acl_matches_the_dev_compose() -> None:
+    """The generator and `docker-compose.manuals.yml` must agree on the ACL.
+
+    The dev compose learnt the hard way that `exec_run` needs EXEC=1 (its
+    comment records the 403s); the generator — the production path (ADR 0061)
+    — silently kept EXEC=0 for months because nothing crossed the two. A
+    divergence here is a production-only failure that dev never sees.
+    """
+    root = Path(__file__).resolve().parents[2]
+    manuals = yaml.safe_load(
+        (root / "docker" / "docker-compose.manuals.yml").read_text(encoding="utf-8")
+    )
+    dev_env = manuals["services"]["docker-socket-proxy"]["environment"]
+    gen_env = generate_compose(_config())["services"]["docker-socket-proxy"]["environment"]
+    for key in ("CONTAINERS", "IMAGES", "NETWORKS", "POST", "EXEC", "VOLUMES", "SWARM"):
+        assert str(gen_env.get(key)) == str(dev_env.get(key)), (
+            f"socket-proxy {key}: generator={gen_env.get(key)!r}"
+            f" vs manuals.yml={dev_env.get(key)!r}"
+        )
 
 
 def test_socket_proxy_lives_on_a_dedicated_internal_network_only() -> None:
@@ -1827,4 +1852,24 @@ def test_el_bootstrap_puede_escribir_los_artefactos_del_marketplace() -> None:
     assert not any(v.split(":")[1] == "/data/agent-platform" for v in volumenes if ":" in v), (
         "monta la raíz de datos entera. La api-server no la monta por decisión "
         "documentada y este one-shot usa su imagen: monta sólo el subárbol."
+    )
+
+
+def test_the_test_lane_is_drained_by_a_worker_that_is_not_the_generic_pool() -> None:
+    """Auditoría 2026-09-01 (A-02). La fase de tests espera de forma SÍNCRONA
+    (`AsyncResult.get()` bajo `allow_join_result`) dentro del task `run_execution`
+    de la lane `default`. Si la cola `test` la sirviera SÓLO el pool genérico, dos
+    runs esperando a la vez ocuparían los dos slots y la fase de tests no tendría
+    dónde correr: inanición hasta el presupuesto (1 h). El compose de dev ya tiene
+    `workers-aux` (`--queues=test,review`) por exactamente ese motivo, medido; el
+    generado por el instalador —el de producción— no lo tenía."""
+    services = generate_compose(_config())["services"]
+    aux = [
+        name
+        for name, svc in services.items()
+        if _queues_of(svc) and "test" in _queues_of(svc) and "default" not in _queues_of(svc)
+    ]
+    assert aux, (
+        "ninguna lane sirve la cola `test` sin servir también `default`: la espera "
+        "síncrona de la fase de tests puede inanicionarse en el pool genérico"
     )

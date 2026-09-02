@@ -130,9 +130,6 @@ QA_E2E_AUTOMATOR = BuiltinAgent(
     memory_scope="team_shared",
     review_capability=True,
     max_concurrent_tasks=3,
-    model_provider="anthropic",
-    model_name="claude-sonnet-4-6",
-    temperature=0.2,
     system_prompt_es=_SYSTEM_PROMPT_ES,
     system_prompt_en=_SYSTEM_PROMPT_EN,
     # Explícitas en vez de heredadas del rol `qa`, por una sola razón:

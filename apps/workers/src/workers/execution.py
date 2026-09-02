@@ -47,7 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.config import Settings
-from workers.container import AgentContainerRunner, ContainerSpec
+from workers.container import AgentContainerRunner, ContainerResult, ContainerSpec
 from workers.memorizer import trigger_memorize
 from workers.model_resolver import (
     ModelResolutionError,
@@ -78,7 +78,7 @@ from workers.run_spec import (
     _resolve_tool_spec_images,
 )
 from workers.secrets import StagedSecrets
-from workers.tracked_paths import TRACKED_PATHS_ENV, compute_tracked_top_level_paths
+from workers.tracked_paths import TRACKED_PATHS_ENV, compute_tracked_paths
 
 # Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
 # tasks/maintenance/tests siguen importando de workers.execution. `__all__`
@@ -126,6 +126,26 @@ _LAUNCHABLE_STATUS_BY_KIND: dict[bool, str] = {
     False: TaskStatus.IN_PROGRESS.value,  # implementer run
     True: TaskStatus.IN_REVIEW.value,  # reviewer run
 }
+
+
+@dataclass(frozen=True)
+class _SkippedRun:
+    """`_prepare_run` decidió NO correr y quiere decir por qué (`task_cv_13`)."""
+
+    abort_code: str
+
+
+def _claim_is_current(*, task_claim_id: str | None, request_claim_id: str | None) -> bool:
+    """¿Es este mensaje el de la reclamación VIGENTE de la tarea? (`task_cv_13`, A-05)
+
+    Un mensaje sin `claim_id` (orquestador anterior al campo, invocación manual)
+    se acepta: no hay con qué comparar y se conserva el comportamiento previo,
+    lo que hace seguro desplegar el worker antes que el orquestador. Un mensaje
+    CON `claim_id` sólo corre si coincide con el de la tarea; si la tarea no
+    tiene ninguno (la reclamación se revirtió y se limpió) tampoco es vigente."""
+    if request_claim_id is None:
+        return True
+    return task_claim_id == request_claim_id
 
 
 def _task_is_launchable(status: str, *, is_review: bool) -> bool:
@@ -234,12 +254,13 @@ def _build_runtime_env(
         joined = ",".join(internal_mcp_hosts)
         env["NO_PROXY"] = joined
         env["no_proxy"] = joined
-    # Las entradas de PRIMER NIVEL versionadas en la rama del plan, para que el
-    # runtime no borre en bloque un árbol que es el entregable ya commiteado de
-    # otra tarea. El 2026-08-31 un `delete_file` recursivo sobre `app/` se llevó
-    # 85 ficheros del entregable anterior en «Hello World CI4 v3» (mediapro): el
-    # sandbox no puede distinguirlo de `vendor/` porque el ADR 0163 le esconde
-    # el `.git`. Separadas por `\n` — el nombre y el formato son el contrato.
+    # Los DIRECTORIOS versionados en la rama del plan, a cualquier profundidad,
+    # para que el runtime no borre en bloque un árbol que es el entregable ya
+    # commiteado de otra tarea. El 2026-08-31 un `delete_file` recursivo sobre
+    # `app/` se llevó 85 ficheros del entregable anterior en «Hello World CI4 v3»
+    # (mediapro): el sandbox no puede distinguirlo de `vendor/` porque el ADR
+    # 0163 le esconde el `.git`. Separados por `\n` — el nombre y el formato son
+    # el contrato.
     #
     # Lista vacía => NO se emite la clave. Un proyecto vacío (primera tarea del
     # plan, sin commit todavía) y un worker anterior a esto tienen que verse
@@ -287,6 +308,73 @@ async def _load_project(session: AsyncSession, task_id: UUID) -> Project | None:
     if task is None:
         return None
     return await session.get(Project, task.project_id)
+
+
+def _review_run_policy() -> dict[str, Any]:
+    """La política de aprobación que recibe un run de REVIEW (`task_cv_15`, A-08).
+
+    Ninguna categoría gatea y las no listadas tampoco (`unlisted_category:
+    auto`, ADR 0153). No es una relajación de seguridad: el workspace del
+    review se monta de sólo lectura (ADR 0095) y su único producto es el
+    veredicto, así que no hay acción sensible que proteger — y un review que
+    aparca en `awaiting_human_approval` no lo reanuda nadie: quedaba no
+    terminal para siempre consumiendo `retry_count`. `human_question` sigue
+    siendo siempre humana por diseño (ADR 0114); si un reviewer pregunta, el
+    run se sella (`_seal_invalid_park`) y el veredicto cuenta como
+    inconcluyente."""
+    from api_server.db.approval_repo import UNLISTED_CATEGORY_KEY
+    from shared_domain.approval_categories import APPROVAL_CATEGORIES
+
+    return {
+        "categories": dict.fromkeys(APPROVAL_CATEGORIES, "auto"),
+        UNLISTED_CATEGORY_KEY: "auto",
+    }
+
+
+def _seal_invalid_park(
+    *,
+    is_review: bool,
+    result: _RuntimeResult,
+    approval: dict[str, Any] | None,
+    exec_id: str | None = None,
+) -> _RuntimeResult:
+    """Sella como `failed` con nombre un `awaiting_human_approval` que nadie puede
+    reanudar; devuelve el resultado intacto en cualquier otro caso.
+
+    * **F12** (implementador sin payload): el runtime aparcó pero no emitió la
+      acción, así que no hay `ApprovalRequest` que crear; caer al camino del
+      implementador dejaría la tarea `in_progress` sin nada en la bandeja.
+    * **A-08** (`task_cv_15`, review): un run de review no se reanuda —su
+      workspace es de sólo lectura y su producto es el veredicto—; aparcado
+      quedaba no terminal para siempre. Sellado, `_apply_review_verdict` lo
+      cuenta como inconcluyente (acotado por `retry_count`)."""
+    if result.status != _AWAITING_APPROVAL:
+        return result
+    if is_review:
+        abort_code = "review_parked"
+        output = (
+            (result.output or "")
+            + "\n\n[review run parked on a sensitive action: a review cannot wait for"
+            " approval — its workspace is read-only and its only product is the verdict]"
+        ).strip()
+    elif not approval:
+        abort_code = "approval_payload_missing"
+        output = "runtime reported awaiting_human_approval but emitted no approval payload"
+    else:
+        return result
+    _log.error(f"workers.{abort_code}", execution_id=exec_id)
+    return _RuntimeResult(
+        status="failed",
+        abort_code=abort_code,
+        output=output,
+        iterations=result.iterations,
+        steps=result.steps,
+        usage=result.usage,
+        finish_status=result.finish_status,
+        guardrail_events=result.guardrail_events,
+        prompt_version=result.prompt_version,
+        runtime_image_digest=result.runtime_image_digest,
+    )
 
 
 async def _resolve_effective_approval_policy(
@@ -984,7 +1072,10 @@ async def _mark_commit_failed(
     execution_id: UUID,
     abort_code: str = "commit_failed",
     conflict_context: dict[str, Any] | None = None,
-) -> None:
+    *,
+    task_id: UUID | None = None,
+    tenant_id: UUID | None = None,
+) -> tuple[Any, str, str] | None:
     """Stamp a visible ``abort_code`` marker on a finalised execution whose
     worktree commit/push hit a real git error (P2.3(b)/F13, P7).
 
@@ -992,6 +1083,15 @@ async def _mark_commit_failed(
     surface that on the execution row (``abort_code`` + an appended ``output`` note)
     instead of silently reporting success with an empty diff. ``rebase_conflict``
     (P7) is escalatable — it lands on the escalation panel with a resolution note.
+    **Y bloquea la tarea** (`task_cv_11`, auditoría 2026-09-01 A-06/C-04). La
+    transición a `in_review` se persistió en la fase 4, ANTES del commit; con el
+    marcador solo, el reviewer revisaba un worktree cuyo trabajo no está en la
+    rama del plan, podía aprobar a `done` y el siguiente `sync_to_head` lo
+    borraba. Con ``task_id``, en la MISMA transacción: si la tarea sigue
+    `in_review`, pasa a `blocked` con un evento de auditoría escalado, y se
+    devuelve ``(task, old, new)`` para que SUSTITUYA al evento `in_review` que el
+    caller aún no ha publicado (H1). Si otro camino ya la movió, no se toca.
+
     Best-effort: opens its own short txn on the BYPASSRLS worker engine; a failure
     here never breaks the run.
     """
@@ -999,7 +1099,7 @@ async def _mark_commit_failed(
         async with sessionmaker() as session, session.begin():
             execution = await get_execution(session, execution_id)
             if execution is None:
-                return
+                return None
             execution.abort_code = abort_code
             note, conflict_step = _conflict_note(
                 abort_code, conflict_context, steps_len=len(execution.steps_log or [])
@@ -1018,10 +1118,48 @@ async def _mark_commit_failed(
                 # tiene que ser cierta por construcción, no por casualidad del
                 # `kind` que hoy usa `_conflict_note`.
                 apply_steps_rollup(execution, execution.steps_log)
+            if task_id is None or tenant_id is None:
+                return None
+            return await _block_task_with_lost_work(
+                session, task_id=task_id, tenant_id=tenant_id, abort_code=abort_code, note=note
+            )
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning(
             "workers.commit_failed_marker_error", execution_id=str(execution_id), error=str(exc)
         )
+        return None
+
+
+async def _block_task_with_lost_work(
+    session: AsyncSession, *, task_id: UUID, tenant_id: UUID, abort_code: str, note: str
+) -> tuple[Any, str, str] | None:
+    """`in_review → blocked` para una tarea cuyo entregable no llegó a la rama del
+    plan (`task_cv_11`). Sólo si sigue `in_review`: un humano o el reviewer
+    pueden haberla movido antes, y entonces manda lo que hicieron."""
+    from api_server.db.task_audit_repo import append_audit_event
+    from api_server.task_state_machine import transition_task_status
+
+    task = await session.get(Task, task_id, with_for_update=True)
+    if task is None or task.status != TaskStatus.IN_REVIEW.value:
+        return None
+    old_status = task.status
+    transition_task_status(task, TaskStatus.BLOCKED.value)
+    await append_audit_event(
+        session,
+        tenant_id=tenant_id,
+        task_id=task_id,
+        kind="review_comment",
+        actor="worker",
+        payload={
+            "escalated": True,
+            "reason": "deliverable_not_on_plan_branch",
+            "abort_code": abort_code,
+            "note": note,
+        },
+    )
+    await session.flush()
+    _log.warning("workers.task_blocked_lost_work", task_id=str(task_id), abort_code=abort_code)
+    return (task, old_status, task.status)
 
 
 # ---------------------------------------------------------------------------
@@ -1442,7 +1580,7 @@ async def _prepare_run(
     tenant_id: UUID,
     vault_store: Any | None,
     celery_task_id: str | None,
-) -> _PreparedRun | None:
+) -> _PreparedRun | _SkippedRun | None:
     """Fase 1 (P3): frontera de tenant, idempotencia, elegibilidad, fila `running`
     y resolución de insumos — DENTRO de la txn del caller.
 
@@ -1461,6 +1599,20 @@ async def _prepare_run(
             actual_tenant_id=(str(task.tenant_id) if task is not None else None),
         )
         raise CrossTenantExecutionError(f"task {task_id} does not belong to tenant {tenant_id}")
+    # `task_cv_13` (A-05): un mensaje de una reclamación que ya no es la vigente
+    # se descarta ANTES de tocar nada — ni el supersede (cerraría la fila viva
+    # de la reclamación actual), ni fila, ni worktree. Sólo el camino
+    # implementador reclama; un review no lleva claim.
+    if not request.review and not _claim_is_current(
+        task_claim_id=getattr(task, "claim_id", None), request_claim_id=request.claim_id
+    ):
+        _log.warning(
+            "workers.stale_claim_skipped",
+            task_id=str(task_id),
+            task_claim_id=getattr(task, "claim_id", None),
+            request_claim_id=request.claim_id,
+        )
+        return _SkippedRun(abort_code="stale_claim")
     # Idempotency: if this task is re-delivered (acks_late + a worker
     # crash), close out the crashed run's orphan `running` row so we
     # never accumulate duplicate live executions (task_06_14_04).
@@ -1496,7 +1648,14 @@ async def _prepare_run(
         celery_task_id=celery_task_id,
     )
     project = await session.get(Project, task.project_id)
-    approval_policy = await _resolve_effective_approval_policy(session, project)
+    # `task_cv_15` (A-08): un run de REVIEW recibe una política que no aparca.
+    # Su workspace es de sólo lectura y su único producto es el veredicto; un
+    # review parado en `awaiting_human_approval` no lo reanuda nadie.
+    approval_policy = (
+        _review_run_policy()
+        if request.review
+        else await _resolve_effective_approval_policy(session, project)
+    )
     guardrails_config = await _resolve_effective_guardrails(session, project)
     # ADR 0135: lo que un humano ya autorizó en esta task viaja al run siguiente.
     # SOLO al implementador: un run de REVIEW propone sus propias acciones y
@@ -1588,9 +1747,9 @@ class _Workspace:
     # `None` cuando no hay worktree o git no da nada — el reviewer cae entonces
     # a la cosecha de ficheros de siempre).
     code_diff: str | None = None
-    # Contrato `AGENT_TRACKED_PATHS`: las entradas de primer nivel VERSIONADAS en
-    # la rama del plan. Vacía = sin protección (proyecto sin commits, run sin
-    # worktree, workspace read-only o fallo de git).
+    # Contrato `AGENT_TRACKED_PATHS`: los directorios VERSIONADOS en la rama del
+    # plan, a cualquier profundidad. Vacía = sin protección (proyecto sin
+    # commits, run sin worktree, workspace read-only o fallo de git).
     tracked_paths: list[str] = field(default_factory=list)
 
 
@@ -1661,7 +1820,7 @@ async def _provision_workspace(
     # borrar nada y no hay protección que publicar; el mismo criterio que usa la
     # guarda de `git_link_hidden`.
     if ws.host_path is not None and not ws.read_only and ws.error is None:
-        ws.tracked_paths = compute_tracked_top_level_paths(ws.host_path)
+        ws.tracked_paths = compute_tracked_paths(ws.host_path)
     return ws
 
 
@@ -1706,7 +1865,7 @@ def _stage_model_credentials(
     return public_model, staged
 
 
-async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll de cancelación
+async def _launch_and_stream(  # noqa: PLR0912, PLR0915 - lanzamiento + streaming + poll de cancelación
     request: ExecutionRequest,
     *,
     settings: Settings,
@@ -1851,43 +2010,123 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
     async def _watch_for_cancel() -> None:
         """Poll ``cancel_requested_at`` while the container runs; on an operator
         cancel, kill the container (the LLM-cost source) so ``run_streamed`` exits
-        and the run finalises as ``cancelled``."""
+        and the run finalises as ``cancelled``.
+
+        El vigía es un ACCESORIO del run, no su dueño (auditoría 2026-09-01,
+        A-03): son ~2.400 consultas en un run de dos horas, y un blip de BD en
+        cualquiera de ellas no puede costar el run. Antes la excepción subía sin
+        capturar y el `finally` de abajo la re-lanzaba al `await watcher` justo
+        cuando el contenedor acababa de terminar bien: `execution.finished`
+        descartado, fila `running` hasta que el sweeper la sellaba con una
+        etiqueta falsa, tarea `blocked` y la credencial staged en disco. Ahora un
+        sondeo que falla se registra y se reintenta en el siguiente tick."""
         nonlocal cancel_seen
         while True:
             await asyncio.sleep(cancel_poll_interval_s)
-            async with sessionmaker() as cancel_session:
-                ex = await get_execution(cancel_session, prepared.execution_id)
+            try:
+                async with sessionmaker() as cancel_session:
+                    ex = await get_execution(cancel_session, prepared.execution_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.warning(
+                    "workers.cancel_watch_poll_failed",
+                    execution_id=exec_id,
+                    error=str(exc)[:200],
+                    note="se reintenta en el siguiente sondeo; el run sigue",
+                )
+                continue
             if ex is not None and ex.cancel_requested_at is not None:
                 cancel_seen = True
                 await asyncio.to_thread(active_runner.kill_by_label, exec_id)
                 return
 
     watcher = asyncio.create_task(_watch_for_cancel())
+    # `task_cv_15` (A-07): un `APIError` del daemon al crear/arrancar el contenedor
+    # salía de aquí sin capturar — fila `running`, mensaje a la DLQ y, cinco
+    # minutos después, un sello falso de «worker loss». El lanzamiento que falla
+    # es un resultado `failed` con nombre y se finaliza como cualquier otro. El
+    # `SoftTimeLimitExceeded` de Celery NO se captura: tiene su propio camino en
+    # `tasks.run_cycle` (`_finalize_soft_timeout`).
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    launch_error: Exception | None = None
+    container_result: ContainerResult | None = None
     try:
         # `container_timeout` = the per-kind budget + grace (F19): the hard
         # backstop, set ABOVE the loop's internal wall-clock so the clean abort wins.
         container_result = await asyncio.to_thread(
             active_runner.run_streamed, container_spec, on_line, timeout=container_timeout
         )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        launch_error = exc
     finally:
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
         # El staging del secreto se borra SIEMPRE — timeout, cancelación,
-        # excepción del daemon. Un `finally` y no el camino feliz porque el
-        # camino feliz es justo el que no deja ficheros olvidados; los deja el
-        # otro (prod-07 task_prod07_10).
-        if staged_credentials is not None:
-            staged_credentials.cleanup()
+        # excepción del daemon — y ANTES de esperar al vigía: un `finally` propio
+        # que no dependa de nada más, porque lo que deja ficheros olvidados es
+        # justamente el camino que revienta (prod-07 task_prod07_10; A-03).
+        try:
+            if staged_credentials is not None:
+                staged_credentials.cleanup()
+        finally:
+            watcher.cancel()
+            # Sólo la cancelación es esperable aquí. Cualquier otra excepción del
+            # vigía es un defecto suyo, y se registra en vez de propagarse por
+            # encima del resultado real del contenedor.
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                _log.error(
+                    "workers.cancel_watch_crashed",
+                    execution_id=exec_id,
+                    error=str(exc)[:200],
+                    note="el resultado del contenedor manda; el vigía no",
+                )
     await queue.put(None)
     await drainer
+    if launch_error is not None or container_result is None:
+        _log.error(
+            "workers.container_launch_failed",
+            execution_id=exec_id,
+            task_id=request.task_id,
+            error_type=type(launch_error).__name__ if launch_error else "no_result",
+            error=str(launch_error)[:300],
+        )
+        failed = _RuntimeResult(
+            status="failed",
+            abort_code="container_launch_failed",
+            output=(
+                "el contenedor del run no pudo lanzarse: "
+                f"{type(launch_error).__name__}: {launch_error}"
+                if launch_error
+                else "el contenedor del run no devolvió resultado"
+            )[:2000],
+            iterations=0,
+            steps=steps,
+            usage={},
+        )
+        return failed, None, _declared_checks_from_result(None)
 
     # P3.3/F15: a cancel sealed between the watcher's last poll and the
     # container exit is missed by the watcher. Do a final one-shot read of
     # `cancel_requested_at` so an operator cancel is never lost to that race.
     if not cancel_seen:
-        async with sessionmaker() as cancel_session:
-            ex = await get_execution(cancel_session, prepared.execution_id)
+        # Misma regla que el vigía (A-03): un blip de BD en esta lectura no
+        # puede costar el resultado real del contenedor. Si no se puede leer, se
+        # asume «no cancelado»: el sello de `finalize_execution` es quien manda,
+        # y un cancel llegado tan tarde lo recoge el reconciler.
+        try:
+            async with sessionmaker() as cancel_session:
+                ex = await get_execution(cancel_session, prepared.execution_id)
+        except Exception as exc:
+            _log.warning(
+                "workers.cancel_final_read_failed", execution_id=exec_id, error=str(exc)[:200]
+            )
+            ex = None
         if ex is not None and ex.cancel_requested_at is not None:
             cancel_seen = True
 
@@ -1933,10 +2172,16 @@ async def _finalize_and_transition(
     tenant_id: UUID,
     result: _RuntimeResult,
     approval: dict[str, Any] | None,
+    approval_policy: dict[str, Any] | None = None,
 ) -> tuple[tuple[Any, str, str] | None, bool]:
     """Fase 4 (P3): finaliza la fila + persiste guardrails + transiciona la task,
     TODO en una txn (P0.5 — un crash aquí no puede dejar la execution terminal
     con la task `in_progress` para siempre).
+
+    ``approval_policy`` es la política EFECTIVA con la que se lanzó el run (la
+    misma que recibió el runtime, ADR 0104). El gate tiene dos mitades —el
+    runtime aparca, el worker crea la solicitud— y las dos tienen que leer la
+    misma política (auditoría 2026-09-01, A-01).
 
     Devuelve ``(task_event, implementer_path)``: el evento de cambio de estado a
     publicar (el caller decide CUÁNDO — el camino implementador lo difiere hasta
@@ -1983,14 +2228,41 @@ async def _finalize_and_transition(
             task = await session.get(Task, task_id)
             if execution is not None and project is not None and task is not None:
                 old_status = task.status
-                await request_approval_if_needed(
+                created = await request_approval_if_needed(
                     session,
                     execution=execution,
                     project=project,
                     category=str(approval.get("category", "")),
                     action=dict(approval.get("action") or {}),
+                    policy=approval_policy,
                 )
-                if task.status != old_status:
+                if created is None:
+                    # El runtime aparcó y el worker decide que no hacía falta: las
+                    # dos mitades del gate discrepan. Antes esto dejaba la fila
+                    # `awaiting_human_approval` sin solicitud y la tarea
+                    # `in_progress` para siempre (auditoría 2026-09-01, A-01):
+                    # ninguna red lo recupera. Se falla CERRADO y con nombre, como
+                    # F12 hace con un aparcado sin payload, para que la tarea siga
+                    # su curso y el motivo quede escrito.
+                    _log.error(
+                        "workers.approval_policy_mismatch",
+                        execution_id=str(execution_id),
+                        task_id=str(task_id),
+                        category=str(approval.get("category", "")),
+                    )
+                    execution.status = "failed"
+                    execution.abort_code = "approval_policy_mismatch"
+                    execution.completed_at = datetime.now(UTC)
+                    note = (
+                        "[approval_policy_mismatch] el runtime aparcó la acción "
+                        f"'{approval.get('category', '')}' pero la política con la que se "
+                        "evaluó al cerrar no la exige; se falla cerrado en vez de dejar la "
+                        "ejecución esperando una aprobación que nadie va a crear"
+                    )
+                    execution.output = f"{execution.output}\n{note}" if execution.output else note
+                    implementer_path = True
+                    task_event = await transition_task_after_run(session, task_id, "failed")
+                elif task.status != old_status:
                     task_event = (task, old_status, task.status)
         else:
             # P0.5: transition ATOMICALLY with finalize (crash-safe). The resulting
@@ -2012,7 +2284,7 @@ async def _implementer_post_process(
     tenant_id: UUID,
     exec_id: str,
     check_declarations: list[dict[str, Any]],
-) -> None:
+) -> tuple[Any, str, str] | None:
     """Fase 5 (P3): post-proceso del camino implementador (prod-18) — commit +
     tests ANTES de que el evento de estado sea visible (ya persistido en fase 4;
     lo publica el caller de conduct_execution tras soltar el run-lock, H1).
@@ -2086,12 +2358,17 @@ async def _implementer_post_process(
             # deliverable with an empty diff. Anticipo ADR 0099: el contexto
             # estructurado del conflicto viaja junto al código.
             code, conflict_context = commit_abort_code
-            await _mark_commit_failed(
+            # `task_cv_11`: el marcador también bloquea la tarea; su evento
+            # sustituye al `in_review` pendiente (lo devuelve al caller).
+            return await _mark_commit_failed(
                 sessionmaker,
                 prepared.execution_id,
                 code,
                 conflict_context=conflict_context,
+                task_id=task_id,
+                tenant_id=tenant_id,
             )
+    return None
     # The deferred state-change event is NOT published here (H1): it travels on
     # the ExecutionOutcome so the caller publishes it after releasing the
     # run-lock. The prod-18 ordering still holds — the commit above exists
@@ -2230,9 +2507,11 @@ async def conduct_execution(
             vault_store=vault_store,
             celery_task_id=celery_task_id,
         )
-    if prepared is None:
+    if prepared is None or isinstance(prepared, _SkippedRun):
         return ExecutionOutcome(
-            execution_id="", status="skipped", abort_code="ineligible_task_status"
+            execution_id="",
+            status="skipped",
+            abort_code=prepared.abort_code if prepared is not None else "ineligible_task_status",
         )
     exec_id = str(prepared.execution_id)
     _log.info("workers.execution_started", execution_id=exec_id, task_id=request.task_id)
@@ -2294,21 +2573,30 @@ async def conduct_execution(
         )
     else:
         # ADR 0163: el `.git` del worktree NO existe mientras corre el agente.
-        # Dentro del sandbox es inutil (apunta a metadatos no montados: todo git
-        # sale 128), y en cambio estorba a los andamiadores que exigen directorio
-        # vacio. El 2026-08-31 un agente lo borro para poder ejecutar
-        # `composer create-project`, instalo CodeIgniter correctamente y el cierre
-        # murio con `fatal: not a git repository`.
+        # Dentro del sandbox es inutil (apunta a metadatos no montados), y en
+        # cambio estorba a los andamiadores que exigen directorio vacio. El
+        # 2026-08-31 un agente lo borro para poder ejecutar `composer
+        # create-project`, instalo CodeIgniter correctamente y el cierre murio con
+        # `fatal: not a git repository`.
         #
         # Solo cuando el workspace es ESCRIBIBLE. En un run de review el worktree
         # del implementador se monta de solo lectura (ADR 0095), asi que el agente
         # no puede romperlo y no hay nada que proteger; tocarlo ahi ademas
         # arriesgaria pisar a un run concurrente sobre el mismo worktree.
+        #
+        # `owner` es esta ejecucion: el lock del worktree lleva su id, y solo ella
+        # repone el puntero y suelta el lock. Con ejecuciones solapadas de la
+        # misma tarea (gotcha «deploy relaunches frozen tasks»), la vieja no puede
+        # pisar a la nueva (auditoria 2026-09-01).
         from workers.plan_git import git_link_hidden
 
         ocultar = workspace.host_path is not None and not workspace.read_only
         wt_path = Path(workspace.host_path) if workspace.host_path else None
-        with git_link_hidden(wt_path) if ocultar and wt_path else contextlib.nullcontext():
+        with (
+            git_link_hidden(wt_path, owner=str(exec_id))
+            if ocultar and wt_path
+            else contextlib.nullcontext()
+        ):
             result, approval, check_declarations = await _launch_and_stream(
                 request,
                 settings=settings,
@@ -2321,27 +2609,11 @@ async def conduct_execution(
                 cancel_poll_interval_s=cancel_poll_interval_s,
             )
 
-    # F12: the runtime parked on `awaiting_human_approval` but emitted NO approval
-    # payload, so we cannot build an ApprovalRequest. Falling to the implementer path
-    # would strand the task `in_progress` with no inbox item. Treat the combination as
-    # invalid: rewrite the result to `failed` with an explicit abort_code so the run
-    # finalises failed and the task is blocked with a motive — never a silent stall.
-    if not request.review and result.status == _AWAITING_APPROVAL and not approval:
-        _log.error(
-            "workers.approval_payload_missing", execution_id=exec_id, task_id=request.task_id
-        )
-        result = _RuntimeResult(
-            status="failed",
-            abort_code="approval_payload_missing",
-            output="runtime reported awaiting_human_approval but emitted no approval payload",
-            iterations=result.iterations,
-            steps=result.steps,
-            usage=result.usage,
-            finish_status=result.finish_status,
-            guardrail_events=result.guardrail_events,
-            prompt_version=result.prompt_version,
-            runtime_image_digest=result.runtime_image_digest,
-        )
+    # F12 + A-08: un aparcamiento que no puede reanudarse se sella con nombre en
+    # vez de dejar el run no terminal (ver `_seal_invalid_park`).
+    result = _seal_invalid_park(
+        is_review=request.review, result=result, approval=approval, exec_id=exec_id
+    )
 
     # P0.5: for the implementer path the task transition is persisted ATOMICALLY with
     # finalize (same txn) so a crash here can never leave the execution terminal but
@@ -2356,6 +2628,9 @@ async def conduct_execution(
         tenant_id=tenant_id,
         result=result,
         approval=approval,
+        # La MISMA política que recibió el runtime (A-01): sin ella la mitad del
+        # worker evaluaba la cruda del proyecto y no creaba la solicitud.
+        approval_policy=prepared.approval_policy,
     )
 
     # H1: NO event is published here (neither path). The finish event travels on
@@ -2364,7 +2639,7 @@ async def conduct_execution(
     # dispatch (reviewer on in_review, re-dispatch on reject→backlog) otherwise
     # lands while the lock is still held and is dropped (`concurrent_run_locked`).
     if implementer_path:
-        await _implementer_post_process(
+        blocked_event = await _implementer_post_process(
             settings,
             sessionmaker,
             prepared=prepared,
@@ -2375,6 +2650,11 @@ async def conduct_execution(
             exec_id=exec_id,
             check_declarations=check_declarations,
         )
+        if blocked_event is not None:
+            # `task_cv_11`: el trabajo no llegó a la rama del plan y la tarea
+            # quedó `blocked`; publicar el `in_review` de la fase 4 haría que el
+            # orquestador despachara un reviewer sobre trabajo perdido.
+            task_event = blocked_event
 
     # prod-06 task_prod06_budget_01: now that the run's cost is persisted
     # (finalize_execution above), re-derive the tenant's budget auto-pause +

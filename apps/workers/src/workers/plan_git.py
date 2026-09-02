@@ -31,16 +31,22 @@ from __future__ import annotations
 
 import contextlib
 import re
-import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import structlog
 
+from workers import dependency_dirs
 from workers.git_identity import PLATFORM_GIT_EMAIL, PLATFORM_GIT_NAME, git_identity_env
-from workers.git_repos import BareRepoLayout, GitCommandError, _run_git
+from workers.git_repos import (
+    RUNTIME_SCRATCH_PREFIX,
+    BareRepoLayout,
+    GitCommandError,
+    _run_git,
+    rmtree_forzado,
+)
 
 # Optimistic-concurrency retries for the worktree→bare push: sibling tasks of the
 # same plan push to the SAME plan branch, so a losing task must rebase onto the
@@ -228,10 +234,38 @@ def _bare_de(worktree_path: Path) -> Path | None:
     return None
 
 
+#: Prefijo del motivo con el que la plataforma bloquea un worktree mientras corre
+#: un agente. Sirve para reconocer un lock NUESTRO —vivo o huérfano— frente a uno
+#: que haya puesto una persona a mano, que no se toca.
+_LOCK_MOTIVO_PREFIJO = "agent run in progress"
+
+
+def _motivo_de_lock(owner: str | None) -> str:
+    """El motivo lleva el `execution_id`: es lo que convierte al lock en propiedad."""
+    return f"{_LOCK_MOTIVO_PREFIJO} [{owner}]" if owner else _LOCK_MOTIVO_PREFIJO
+
+
+def _lock_actual(worktree_path: Path, bare: Path) -> str | None:
+    """El motivo del lock vigente, o ``None`` si el worktree no está bloqueado.
+
+    Se lee el fichero ``locked`` de los metadatos del bare en vez de parsear
+    ``worktree list --porcelain``: es exactamente donde git guarda el motivo, y
+    una lectura de fichero no depende del formato de una salida.
+    """
+    fichero = bare / "worktrees" / worktree_path.name / "locked"
+    try:
+        return fichero.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+
+
 def _worktree_lock(worktree_path: Path, *, motivo: str) -> Path | None:
     """Marca el worktree como bloqueado para que ``git worktree prune`` lo respete.
 
-    Devuelve el bare sobre el que se tomó el lock, o ``None`` si no se pudo.
+    Devuelve el bare sobre el que se tomó el lock, o ``None`` si no se pudo —
+    también cuando el lock ya lo tiene OTRA ejecución: un lock ajeno no se
+    hereda, porque quien no es su dueño no podrá reponer el puntero al salir
+    (auditoría 2026-09-01, ejecuciones solapadas de la misma tarea).
     """
     bare = _bare_de(worktree_path)
     if bare is None:
@@ -239,35 +273,144 @@ def _worktree_lock(worktree_path: Path, *, motivo: str) -> Path | None:
     try:
         _run_git("--git-dir", str(bare), "worktree", "lock", str(worktree_path), "--reason", motivo)
     except GitCommandError as exc:
-        # Ya bloqueado (un reintento tras un worker muerto) no es un fallo.
         if "already locked" in str(exc).lower():
-            return bare
+            vigente = _lock_actual(worktree_path, bare)
+            if vigente == motivo:
+                return bare  # reentrada de la MISMA ejecución
+            _log.warning(
+                "worktree.lock_held_by_other",
+                worktree=str(worktree_path),
+                holder=vigente,
+                note="otra ejecución tiene el worktree: no se oculta el `.git`",
+            )
+            return None
         _log.warning("worktree.lock_failed", worktree=str(worktree_path), error=str(exc))
         return None
     return bare
 
 
-def _worktree_unlock(worktree_path: Path, bare: Path) -> None:
-    with contextlib.suppress(GitCommandError):
+def _worktree_unlock(worktree_path: Path, bare: Path, *, solo_si_motivo: str | None = None) -> bool:
+    """Suelta el lock. Con ``solo_si_motivo`` sólo si el vigente es exactamente ése."""
+    if solo_si_motivo is not None and _lock_actual(worktree_path, bare) != solo_si_motivo:
+        return False
+    try:
         _run_git("--git-dir", str(bare), "worktree", "unlock", str(worktree_path))
+    except GitCommandError:
+        return False
+    return True
+
+
+def _tomar_el_relevo(worktree_path: Path, bare: Path) -> bool:
+    """Suelta cualquier lock que haya puesto la PLATAFORMA sobre este worktree.
+
+    Lo llama la reparación, que corre al provisionar y al cerrar: en los dos
+    momentos la ejecución que llama es la dueña legítima del worktree, y un lock
+    de una ejecución anterior sólo puede ser huérfano (worker muerto entre reponer
+    el puntero y soltar) o de un run solapado al que se está relevando. Un lock
+    con otro motivo lo puso una persona a mano y NO se toca.
+    """
+    vigente = _lock_actual(worktree_path, bare)
+    if vigente is None or not vigente.startswith(_LOCK_MOTIVO_PREFIJO):
+        return False
+    if not _worktree_unlock(worktree_path, bare):
+        return False
+    _log.warning(
+        "worktree.lock_released_on_takeover",
+        worktree=str(worktree_path),
+        previous_holder=vigente,
+        note="lock de una ejecución anterior; esta ejecución toma el relevo del worktree",
+    )
+    return True
+
+
+def _bare_del_puntero(worktree_path: Path, bares: Sequence[Path]) -> Path | None:
+    """El bare al que apunta un ``.git`` VÁLIDO del worktree, o ``None``.
+
+    Válido = un fichero ``gitdir: <ruta>`` cuya ruta es
+    ``<bare>/worktrees/<nombre>`` de uno de los bares del proyecto y existe. Un
+    ``.git`` que sea un directorio (el repo que deja ``cargo new .``) o que
+    apunte a otro sitio NO es nuestro puntero, aunque exista.
+    """
+    enlace = worktree_path / ".git"
+    if not enlace.is_file():
+        return None
+    try:
+        texto = enlace.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not texto.startswith("gitdir:"):
+        return None
+    destino = Path(texto[len("gitdir:") :].strip())
+    if not destino.is_absolute():
+        destino = worktree_path / destino
+    try:
+        resuelto = destino.resolve()
+    except OSError:
+        return None
+    for bare in bares:
+        metadatos = bare / "worktrees" / worktree_path.name
+        try:
+            if metadatos.is_dir() and metadatos.resolve() == resuelto:
+                return bare
+        except OSError:
+            continue
+    return None
+
+
+def _descartar_git_intruso(worktree_path: Path) -> None:
+    """Retira un ``.git`` que no es nuestro puntero, diciendo qué era.
+
+    Un ``.git`` ajeno sólo puede haberlo puesto algo de dentro del sandbox (el
+    andamiador) o ser un puntero corrupto. El versionado lo lleva el worktree del
+    plan; descartar el repo que otra herramienta creyó dejar hecho no debe ser
+    silencioso, pero tampoco puede impedir que se repare el enlace.
+    """
+    enlace = worktree_path / ".git"
+    intruso = "directorio" if enlace.is_dir() and not enlace.is_symlink() else "fichero"
+    try:
+        if intruso == "directorio":
+            rmtree_forzado(enlace)
+        else:
+            enlace.unlink()
+    except OSError as exc:
+        _log.error(
+            "worktree.link_intruder_not_removable",
+            worktree=str(worktree_path),
+            kind=intruso,
+            error=str(exc)[:200],
+        )
+        return
+    _log.warning(
+        "worktree.link_intruder_discarded",
+        worktree=str(worktree_path),
+        kind=intruso,
+        note=(
+            "había un `.git` que no era el puntero del worktree (repo de un "
+            "andamiador o puntero corrupto); se descarta y se reconstruye el enlace"
+        ),
+    )
 
 
 def repair_worktree_link(worktree_path: Path) -> bool:
-    """Restaura ``<worktree>/.git`` si falta. Devuelve ``True`` si reparó.
+    """Deja ``<worktree>/.git`` VÁLIDO y toma el relevo del worktree. ``True`` si reparó.
 
     **Por qué el worker no puede confiar en ese fichero.** Es un puntero de una
     línea (``gitdir: <bare>/worktrees/<id>``) que vive DENTRO del workspace
     montado en escritura para el agente, y del que depende todo el
-    ``git add -A`` del cierre de tarea. El agente puede borrarlo sin querer y
-    sin saberlo: medido el 2026-08-31, uno lo hizo para que
-    ``composer create-project`` aceptara el directorio —esa herramienta EXIGE
-    uno vacío— instaló CodeIgniter 4.7.4 correctamente, y el cierre murió con
-    ``fatal: not a git repository``. El deliverable quedó en disco y fuera de
-    toda rama.
+    ``git add -A`` del cierre de tarea. Mientras corre el agente ni siquiera
+    existe (ADR 0163, :func:`git_link_hidden`), y una muerte dura del worker lo
+    deja sin reponer; antes de eso, un agente lo borró a mano el 2026-08-31 para
+    que ``composer create-project`` aceptara el directorio, y el cierre murió con
+    ``fatal: not a git repository``.
 
-    Cerrar la tool de borrado no basta y conviene decir por qué: la allowlist
-    base del SDK incluye ``rm``, así que ``shell_exec("rm .git")`` hace lo mismo.
-    Una guarda por puerta deja las otras abiertas; ésta cubre el resultado.
+    **Validez, no existencia (auditoría 2026-09-01).** La primera versión hacía
+    ``if exists(): return False``. Con un ``.git`` que fuera un DIRECTORIO —el
+    repo que deja ``cargo new .`` si el restore no pudo retirarlo, o un worker
+    muerto entre esconder y reponer— decía «nada que reparar» y ``commit_task``
+    commiteaba en el repo del andamiador: devolvía un sha que no existía en el
+    bare del plan. Reproducido con git real. Ahora se comprueba que el puntero
+    apunta a los metadatos de este worktree en un bare del proyecto; lo que no
+    lo sea se descarta antes de reparar.
 
     **El orden importa, y es la parte que se descubrió midiendo.**
     ``git worktree repair`` reconstruye el puntero SÓLO mientras sobrevivan los
@@ -278,13 +421,25 @@ def repair_worktree_link(worktree_path: Path) -> bool:
         .git borrado, metadatos intactos  -> repair lo restaura, el commit entra
         .git borrado, metadatos podados   -> repair no puede hacer nada
 
-    Por eso esto se llama al PRINCIPIO de ``commit_task``, antes de cualquier
-    otra invocación de git sobre el worktree.
+    Por eso esto se llama al PRINCIPIO de ``commit_task`` y de la provisión,
+    antes de cualquier otra invocación de git sobre el worktree.
+
+    **Y toma el relevo.** Haya o no reparado, suelta cualquier lock que la
+    plataforma dejara sobre el worktree (:func:`_tomar_el_relevo`): quien
+    provisiona o cierra es el dueño legítimo, y un lock anterior sólo puede ser
+    huérfano o de un run solapado. Sin esto, un worker muerto entre reponer el
+    puntero y soltar el lock dejaba el worktree inmortal para el reaper.
     """
-    if (worktree_path / ".git").exists():
+    bares = _bares_candidatos(worktree_path)
+    bare_valido = _bare_del_puntero(worktree_path, bares)
+    if bare_valido is not None:
+        _tomar_el_relevo(worktree_path, bare_valido)
         return False
 
-    bares = _bares_candidatos(worktree_path)
+    enlace = worktree_path / ".git"
+    if enlace.exists() or enlace.is_symlink():
+        _descartar_git_intruso(worktree_path)
+
     if not bares:
         _log.warning(
             "worktree.link_missing_no_bare",
@@ -300,24 +455,17 @@ def repair_worktree_link(worktree_path: Path) -> bool:
         # «error: unable to locate repository; .git file broken» —que describe el
         # estado que viene a arreglar— y reconstruye el puntero igualmente.
         # Medido: la primera versión trataba ese rc como fallo y abortaba antes
-        # de mirar el resultado. Es juzgar por la intención en vez de por el
-        # efecto, que es justo lo que este arreglo persigue. Se ejecuta, se
-        # ignora el código de salida y se COMPRUEBA el fichero.
+        # de mirar el resultado. Se ejecuta, se ignora el código de salida y se
+        # COMPRUEBA el fichero.
         with contextlib.suppress(GitCommandError):
             _run_git("--git-dir", str(bare), "worktree", "repair", str(worktree_path))
-        if (worktree_path / ".git").exists():
-            # Un lock superviviente es la huella de un worker que murió con el
-            # puntero oculto. Se suelta al reparar: si no, ese worktree quedaría
-            # a salvo del reaper para siempre.
-            _worktree_unlock(worktree_path, bare)
+        if _bare_del_puntero(worktree_path, [bare]) is not None:
+            _tomar_el_relevo(worktree_path, bare)
             _log.warning(
                 "worktree.link_repaired",
                 worktree=str(worktree_path),
                 bare=str(bare),
-                note=(
-                    "el `.git` del worktree faltaba y se ha reconstruido; "
-                    "algo dentro del sandbox lo borró"
-                ),
+                note="el `.git` del worktree faltaba o no era válido y se ha reconstruido",
             )
             return True
 
@@ -333,38 +481,36 @@ def repair_worktree_link(worktree_path: Path) -> bool:
 
 
 @contextlib.contextmanager
-def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
+def git_link_hidden(worktree_path: Path, *, owner: str | None = None) -> Iterator[bool]:
     """Retira ``<worktree>/.git`` mientras dura el bloque y lo repone al salir.
 
     ADR 0163. El puntero del worktree es, dentro del sandbox del agente, un
-    fichero **inútil** (apunta a metadatos que no se montan: todo git sale 128),
-    **imprescindible** para el worker (que commitea a través de él) y **un
-    obstáculo** (``composer create-project`` se niega a andamiar en un directorio
-    no vacío). Con esas tres a la vez y ``rm`` en la allowlist, que el agente lo
-    corte no es un accidente raro: es lo que va a pasar — y pasó el 2026-08-31,
-    dejando CodeIgniter instalado y fuera de toda rama.
-
-    Quitarlo de en medio elimina la clase entera en vez de taparla: no hay nada
-    que borrar, y el andamiador canónico de cada stack funciona.
+    fichero **inútil** (apunta a metadatos que no se montan), **imprescindible**
+    para el worker (que commitea a través de él) y **un obstáculo**
+    (``composer create-project`` se niega a andamiar en un directorio no vacío).
+    Con esas tres a la vez, que el agente lo corte no es un accidente raro: es lo
+    que va a pasar — y pasó el 2026-08-31, dejando CodeIgniter instalado y fuera
+    de toda rama. Quitarlo de en medio elimina la clase entera en vez de taparla.
 
     Garantías, que son las que hacen esto seguro:
 
-    * **Se repone SIEMPRE**, también si el run revienta o lo cancelan: el
-      ``finally`` es la razón de que esto sea un gestor de contexto y no dos
-      llamadas sueltas que alguien pueda desemparejar.
-    * **Se repone el contenido EXACTO** que había, leído antes de retirarlo. No
-      se reconstruye por convención: si mañana git cambia el formato del puntero,
-      esto sigue siendo correcto.
+    * **El lock tiene DUEÑO.** ``owner`` es el `execution_id`, y viaja en el
+      motivo del lock. Sólo el dueño repone el puntero y suelta el lock; si otra
+      ejecución tomó el relevo (:func:`repair_worktree_link` desde la provisión
+      de un run solapado), al salir no se toca nada y se registra. Sin esto, la
+      ejecución vieja reponía el ``.git`` en mitad del run nuevo y le soltaba el
+      lock (auditoría 2026-09-01).
+    * **Se repone SIEMPRE que seguimos siendo el dueño**, también si el run
+      revienta: el ``finally`` es la razón de que esto sea un gestor de contexto.
+    * **Se repone el contenido EXACTO** que había, leído antes de retirarlo.
     * **Si el andamiador dejó su PROPIO ``.git``** —``cargo new`` lo hace— se
-      retira antes de reponer el nuestro. El versionado lo lleva el worktree, no
-      el scaffolder; es lo que hace ``--remove-vcs`` de composer. Se registra,
-      porque descartar el repo que otra herramienta creyó dejar hecho no debe
-      ser silencioso.
+      retira antes de reponer el nuestro. El versionado lo lleva el worktree.
 
     ``yield`` devuelve ``True`` si de verdad se retiró algo. Con un worktree sin
     puntero (o un directorio que no lo es) no hace nada y devuelve ``False``.
     """
     enlace = worktree_path / ".git"
+    motivo = _motivo_de_lock(owner)
     contenido: bytes | None = None
     bare_bloqueado: Path | None = None
 
@@ -372,14 +518,11 @@ def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
         # EL LOCK VA PRIMERO, y es lo que hace segura toda la maniobra. Sin el
         # puntero, git considera el worktree `prunable`: el `git worktree prune`
         # que dispara una tarea hermana al arrancar —o el reaper programado—
-        # borraría sus metadatos, y entonces reponer el puntero no sirve de nada
-        # porque ya no hay a dónde apuntar. Sería EXACTAMENTE el incidente que
-        # esto viene a evitar, provocado por la propia cura.
-        #
+        # borraría sus metadatos, y entonces reponer el puntero no sirve de nada.
         # `git worktree lock` es el mecanismo que git prevé para un worktree
         # temporalmente no disponible. Medido: con lock, un `prune` concurrente
         # deja los metadatos intactos y el commit posterior entra.
-        bare_bloqueado = _worktree_lock(worktree_path, motivo="agent run in progress")
+        bare_bloqueado = _worktree_lock(worktree_path, motivo=motivo)
         if bare_bloqueado is None:
             # Sin lock no se oculta: preferimos que `composer create-project`
             # falle a arriesgar el deliverable de la tarea.
@@ -397,56 +540,42 @@ def git_link_hidden(worktree_path: Path) -> Iterator[bool]:
                     "worktree.link_hide_failed", worktree=str(worktree_path), error=str(exc)
                 )
                 contenido = None
-                _worktree_unlock(worktree_path, bare_bloqueado)
+                _worktree_unlock(worktree_path, bare_bloqueado, solo_si_motivo=motivo)
                 bare_bloqueado = None
 
     try:
         yield contenido is not None
     finally:
-        if contenido is not None:
-            try:
-                # Un `.git` que NO es el nuestro sólo puede haberlo puesto algo de
-                # dentro del sandbox. Se retira: el worktree es quien versiona.
-                if enlace.exists():
-                    intruso = "directorio" if enlace.is_dir() else "fichero"
-                    if enlace.is_dir():
-                        shutil.rmtree(enlace, ignore_errors=True)
-                    else:
-                        with contextlib.suppress(OSError):
-                            enlace.unlink()
-                    _log.warning(
-                        "worktree.scaffolder_git_discarded",
-                        worktree=str(worktree_path),
-                        kind=intruso,
-                        note=(
-                            "el andamiador dejó su propio `.git` y se descarta: "
-                            "el versionado lo lleva el worktree del plan"
-                        ),
-                    )
-                enlace.write_bytes(contenido)
-            except OSError as exc:
-                # No se puede tirar el run por esto: `commit_task` repara.
-                _log.error(
-                    "worktree.link_restore_failed",
+        if contenido is not None and bare_bloqueado is not None:
+            vigente = _lock_actual(worktree_path, bare_bloqueado)
+            if vigente is not None and vigente != motivo:
+                # Otra ejecución tomó el relevo del worktree: el puntero y el lock
+                # son suyos ahora. Reponer aquí sería meterle el `.git` en mitad
+                # de su run; soltar el lock, dejarla sin la red del prune.
+                _log.warning(
+                    "worktree.link_restore_skipped_not_owner",
                     worktree=str(worktree_path),
-                    error=str(exc),
-                    note="`repair_worktree_link` intentará reconstruirlo al commitear",
+                    holder=vigente,
+                    note="otra ejecución tomó el relevo; ella repone y suelta",
                 )
-        if bare_bloqueado is not None:
-            # El lock se suelta SIEMPRE. Un worktree que queda bloqueado tras un
-            # run muerto nunca lo podaría el reaper, y el disco crecería sin que
-            # nadie lo notara. Si el proceso muere antes de llegar aquí, el lock
-            # sobrevive a propósito: es lo que permite que el reintento repare.
-            _worktree_unlock(worktree_path, bare_bloqueado)
-
-
-#: El prefijo que `agent_runtime.file_tools` pone a lo que aparta antes de
-#: destruirlo. Se repite aquí a propósito y no se importa: el runtime corre
-#: DENTRO del contenedor efímero y el worker fuera, sin ningún paquete común
-#: entre los dos. Lo que ata los dos lados es
-#: `tests/unit/test_el_residuo_del_runtime_no_llega_al_commit.py`, que falla si
-#: alguien cambia uno solo.
-_PREFIJO_TRANSITORIO_RUNTIME = ".agent-runtime-tmp."
+            else:
+                try:
+                    if enlace.exists() or enlace.is_symlink():
+                        _descartar_git_intruso(worktree_path)
+                    enlace.write_bytes(contenido)
+                except OSError as exc:
+                    # No se puede tirar el run por esto: `commit_task` repara.
+                    _log.error(
+                        "worktree.link_restore_failed",
+                        worktree=str(worktree_path),
+                        error=str(exc),
+                        note="`repair_worktree_link` intentará reconstruirlo al commitear",
+                    )
+                # El lock se suelta SIEMPRE que sea nuestro. Si el proceso muere
+                # antes de llegar aquí, sobrevive a propósito: es lo que permite
+                # que el reintento repare en vez de encontrarse los metadatos
+                # podados, y la provisión del reintento lo suelta al tomar el relevo.
+                _worktree_unlock(worktree_path, bare_bloqueado, solo_si_motivo=motivo)
 
 
 # ---------------------------------------------------------------------------
@@ -454,83 +583,15 @@ _PREFIJO_TRANSITORIO_RUNTIME = ".agent-runtime-tmp."
 # ---------------------------------------------------------------------------
 
 
-def _nombres_de_dependencias() -> tuple[str, ...]:
-    """Los directorios de dependencias que declara el catálogo de runtimes.
+def _desversionar_dependencias(
+    worktree_path: Path, nombres: Sequence[str]
+) -> dependency_dirs.Clasificacion:
+    """Saca del ÍNDICE los directorios de dependencias que la PLATAFORMA versionó.
 
-    **La decisión ya estaba tomada en otro sitio.** Cada plantilla declara los
-    suyos (``vendor`` en los php, ``node_modules`` en los node, ``.venv``/``venv``
-    en python) y `execution._provision_worktree` se los pasa a
-    ``sync_to_head(preserve=...)`` para que el ``clean -fdx`` NO se los lleve. O
-    sea que la plataforma **ya** trata esos árboles como «no forman parte del
-    entregable»; hasta hoy decía a la vez lo contrario, porque el ``git add -A``
-    del cierre de tarea se los llevaba a la rama del plan.
-
-    Import perezoso a propósito: la api-server importa este módulo para el visor
-    de diffs (`api_server.code_diff`) y no tiene por qué arrastrar el catálogo de
-    runtimes —cuya importación lee además el manifiesto de release—.
-
-    Los nombres se VALIDAN en vez de pasarse tal cual, igual que en
-    `git_repos.clean_args`: hoy vienen del catálogo, pero entregar cadenas sin
-    mirar a una línea de comandos de git es un agujero que no se deja abierto.
-    """
-    from shared_test_runtimes import catalog as runtime_catalog
-
-    nombres: list[str] = []
-    for crudo in runtime_catalog.dependency_dirs():
-        nombre = str(crudo).strip()
-        if (
-            not nombre
-            or nombre.startswith("-")
-            or "/" in nombre
-            or "\\" in nombre
-            or ".." in nombre
-            or "*" in nombre
-            or nombre in {".", ".git"}
-        ):
-            raise ValueError(f"nombre de directorio de dependencias inválido: {crudo!r}")
-        nombres.append(nombre)
-    return tuple(nombres)
-
-
-def _patrones_de_dependencias(nombres: Sequence[str]) -> list[str]:
-    """``**/<nombre>/**`` — el CONTENIDO de cada directorio, a cualquier profundidad.
-
-    Un solo sitio para el patrón, que se usa con dos magias de pathspec distintas:
-    ``:(glob)`` para BUSCAR lo que ya está versionado y ``:(exclude,glob)`` para
-    que el ``git add -A`` no lo meta. Escribirlo dos veces sería la forma de que
-    una mitad dejara de casar con la otra sin que nada avisara.
-
-    Dos decisiones, las dos medidas:
-
-    * El ``**/`` inicial porque un monorepo tiene ``frontend/node_modules/`` y
-      ``backend/vendor/``. Es el mismo motivo por el que `dependency_dirs()`
-      devuelve la UNIÓN de los runtimes y no los del template declarado.
-    * Sólo el CONTENIDO (``/**``) y no el nombre a secas, al revés que la
-      exclusión del residuo del runtime. Un directorio de dependencias sólo puede
-      ser un directorio, y git no versiona directorios vacíos: excluir lo de
-      dentro basta —comprobado, `git add -A` respeta el pathspec aunque el
-      directorio esté entero sin trackear—. La diferencia importa porque un
-      FICHERO llamado ``vendor`` (un script en ``bin/``) sí es deliverable, y un
-      patrón sobre el nombre se lo llevaría por delante.
-    """
-    return [f"**/{nombre}/**" for nombre in nombres]
-
-
-def _directorio_contenedor(ruta: str, nombres: frozenset[str]) -> str:
-    """``frontend/node_modules/react/index.js`` → ``frontend/node_modules``.
-
-    Para que el registro diga DE QUÉ directorio salió cada fichero y no sólo
-    cuántos: en un monorepo hay varios y no es lo mismo uno que otro.
-    """
-    partes = ruta.split("/")
-    for i, parte in enumerate(partes):
-        if parte in nombres:
-            return "/".join(partes[: i + 1])
-    return ruta  # inalcanzable: el pathspec ya garantizó el componente
-
-
-def _desversionar_dependencias(worktree_path: Path, nombres: Sequence[str]) -> int:
-    """Saca del ÍNDICE lo que ya está versionado y es dependencia. Sin tocar disco.
+    Sin tocar el disco, y sólo los suyos. Devuelve la clasificación completa
+    —accidentes retirados y directorios respetados— porque `commit_task` necesita
+    las dos mitades: los respetados hay que commitearlos como cualquier otro
+    árbol del proyecto.
 
     **Por qué no basta con excluirlas de los futuros commits.** Excluir arregla
     las ramas nuevas; en la rama donde el artefacto YA entró, `sync_to_head` lo
@@ -541,6 +602,14 @@ def _desversionar_dependencias(worktree_path: Path, nombres: Sequence[str]) -> i
     directorio no vacío, `delete_file` y `move_file` rechazados por la guarda, y
     el run muerto en `max_tokens_exceeded` porque `list_files` costaba ~9.100
     tokens por iteración.
+
+    **Sólo los accidentes de la propia plataforma.** La primera versión retiraba
+    TODO directorio con nombre de dependencia, y la auditoría del mismo día lo
+    reprodujo borrando del PR el `vendor/` de un proyecto Go que lo versiona a
+    propósito. El criterio pasó a ser la AUTORÍA, y vive en
+    :func:`workers.dependency_dirs.clasificar_versionados`: un directorio que
+    sólo ha tocado la plataforma es un accidente suyo y lo deshace; uno que ha
+    tocado una persona es del proyecto y se respeta.
 
     **`git rm --cached` y nunca un borrado.** El agente y el toolchain NECESITAN
     ese `vendor/` para trabajar —`sync_to_head` lo preserva justamente por eso—,
@@ -554,108 +623,60 @@ def _desversionar_dependencias(worktree_path: Path, nombres: Sequence[str]) -> i
     Ese contenido estageado es justo lo que se quiere quitar del índice, y sigue
     en disco. Sin ``-f`` esa situación aborta el cierre entero de la tarea.
 
-    EL RIESGO, escrito donde se ve: un proyecto que versione sus dependencias A
-    PROPÓSITO verá cómo la plataforma se las des-versiona.
-
     **Ojo con el argumento que NO vale, porque se propuso y se midió que era
-    falso** (2026-09-01): «da igual, ese proyecto ya está roto hoy porque
-    `sync_to_head` preserva esos directorios en vez de sincronizarlos». No es
+    falso** (2026-09-01): «un proyecto que versione sus dependencias ya está roto
+    hoy porque `sync_to_head` las preserva en vez de sincronizarlas». No es
     cierto. `preserve` sólo alimenta el `git clean -fdx -e …`, que por definición
     no toca ficheros TRACKEADOS; el `reset --hard FETCH_HEAD` los sincroniza
     perfectamente. Medido: `t1` versiona `vendor/lib.js`=v1, `t2` lo sube a v2,
-    `t1` sincroniza y ve v2. La incoherencia que ese argumento decía resolver no
-    existía.
-
-    El argumento que SÍ sostiene la decisión es más estrecho, y conviene tenerlo
-    presente porque marca dónde deja de valer:
-
-      * el directorio está declarado como de dependencias por el runtime template
-        del propio proyecto (`shared_test_runtimes.catalog`), o sea que es la
-        plataforma reconociendo lo que el proyecto le dijo que era;
-      * versionarlo casi siempre es un ACCIDENTE —falta un `.gitignore` y el
-        `git add -A` se lo lleva— y ese accidente tuvo un coste medido: 1.151
-        ficheros en la rama, la guarda del ADR 0164 blindando un artefacto
-        reconstruible, y una tarea muerta por `max_tokens` sin poder andamiar;
-      * el contenido no se pierde: sigue en disco y sigue en la historia de la
-        rama, un commit más atrás.
-
-    **La limitación conocida, que es real:** hay proyectos que versionan un
-    directorio con ese nombre a propósito. El caso concreto es el
-    `assets/vendor/` de Symfony AssetMapper, que la documentación de Symfony
-    manda commitear, y que casa con `**/vendor/**`. Hoy NO hay forma de que un
-    proyecto lo declare. Si aparece ese caso, la salida no es quitar la
-    exclusión —volvería el punto muerto— sino darle al proyecto la misma clase de
-    declaración que ya tiene para `allowed_commands`. Queda escrito aquí para que
-    quien se lo encuentre sepa que se pensó y no se le pasó a nadie.
-
-    Devuelve cuántos ficheros salieron del índice (0 si no había nada).
+    `t1` sincroniza y ve v2.
     """
-    pathspecs = [f":(glob){patron}" for patron in _patrones_de_dependencias(nombres)]
-    if not pathspecs:
-        return 0
-    try:
-        salida = _run_git("ls-files", "-z", "--", *pathspecs, cwd=worktree_path)
-    except GitCommandError as exc:
-        # Best-effort de principio a fin: sin esto el comportamiento es el de
-        # antes (la rama sigue atascada), y tumbar el cierre de la tarea sería
-        # peor que no des-versionar.
-        _log.warning(
-            "commit_task.dependency_scan_failed",
+    clasificacion = dependency_dirs.clasificar_versionados(worktree_path, nombres)
+    if clasificacion.respetados:
+        _log.info(
+            "commit_task.dependencies_respected",
             worktree=str(worktree_path),
-            error=str(exc)[:300],
+            by_directory=clasificacion.respetados,
+            note="directorios de dependencias versionados por una persona: son del proyecto",
         )
-        return 0
-    # `-z` y no líneas: sin él git devuelve los nombres no-ASCII C-quoted y el
-    # conteo por directorio saldría mal justo en los repos en castellano.
-    versionados = [ruta for ruta in salida.split("\0") if ruta]
-    if not versionados:
-        return 0
+    if not clasificacion.accidentes:
+        return clasificacion
 
-    por_directorio: dict[str, int] = {}
-    conjunto = frozenset(nombres)
-    for ruta in versionados:
-        clave = _directorio_contenedor(ruta, conjunto)
-        por_directorio[clave] = por_directorio.get(clave, 0) + 1
-
-    # SÓLO los pathspecs que de verdad casaron. `git rm` —al revés que
-    # `ls-files`— aborta con rc=128 si CUALQUIER pathspec no encuentra nada
-    # («fatal: pathspec ':(glob)**/.venv/**' did not match any files»), y en un
-    # proyecto PHP nunca hay `.venv/`. Medido: con los cuatro nombres del
-    # catálogo, el des-versionado de `vendor/` no llegaba a ocurrir NUNCA.
-    #
-    # Se filtra en vez de añadir `--ignore-unmatch` a propósito: así un rc≠0 de
-    # `git rm` sigue significando «algo ha ido mal de verdad» y se registra.
-    presentes = {parte for ruta in versionados for parte in ruta.split("/") if parte in conjunto}
-    a_retirar = [f":(glob){patron}" for patron in _patrones_de_dependencias(sorted(presentes))]
+    # Un pathspec LITERAL por directorio, y sólo los que existen en el índice:
+    # `git rm` —al revés que `ls-files`— aborta con rc=128 si CUALQUIER pathspec
+    # no casa («fatal: pathspec ... did not match any files»). Se filtra en vez
+    # de añadir `--ignore-unmatch` a propósito: así un rc≠0 sigue significando
+    # «algo ha ido mal de verdad» y se registra. Y directorios, no ficheros: eran
+    # 1.151 en el caso medido, y esa línea de comandos no cabe en Windows.
+    a_retirar = dependency_dirs.pathspecs_literales(clasificacion.accidentes)
+    ficheros = sum(clasificacion.accidentes.values())
     try:
-        # Pathspecs y NO la lista de rutas: eran 1.151 ficheros en el caso
-        # medido, y una línea de comandos con 1.151 rutas no cabe en Windows.
         _run_git("rm", "-r", "--cached", "--quiet", "-f", "--", *a_retirar, cwd=worktree_path)
     except GitCommandError as exc:
         _log.error(
             "commit_task.dependency_unversion_failed",
             worktree=str(worktree_path),
-            files=len(versionados),
-            by_directory=por_directorio,
+            files=ficheros,
+            by_directory=clasificacion.accidentes,
             error=str(exc)[:300],
             note=(
                 "las dependencias siguen versionadas en la rama: la tarea siguiente "
                 "seguirá sin poder retirarlas (guarda del ADR 0164)"
             ),
         )
-        return 0
+        return dependency_dirs.Clasificacion(respetados=clasificacion.respetados)
 
     _log.warning(
         "commit_task.dependencies_unversioned",
         worktree=str(worktree_path),
-        files=len(versionados),
-        by_directory=por_directorio,
+        files=ficheros,
+        by_directory=clasificacion.accidentes,
         note=(
-            "artefactos reconstruibles que habían entrado en la rama por un "
+            "artefactos reconstruibles que la plataforma metió en la rama por un "
             "`git add -A` sin `.gitignore`; salen del índice y SIGUEN en disco"
         ),
     )
-    return len(versionados)
+    return clasificacion
 
 
 #: Cabecera del `.gitignore` base. Los nombres NO se escriben aquí: se derivan de
@@ -676,12 +697,14 @@ _CABECERA_GITIGNORE_BASE = """\
 # 2026-09-01, 1.151 ficheros de `vendor/` en la rama de un plan.
 #
 # Los nombres salen del catálogo de runtimes de la plataforma, la MISMA lista que
-# preserva al sincronizar el worktree entre tareas.
+# preserva al sincronizar el worktree entre tareas. Si el proyecto versiona a
+# propósito un directorio con uno de estos nombres (Go, Laravel, Symfony...), la
+# plataforma lo respeta y ese nombre no aparece aquí.
 
 """
 
 
-def ensure_base_gitignore(worktree_path: Path) -> bool:
+def ensure_base_gitignore(worktree_path: Path, *, respetar: Iterable[str] = ()) -> bool:
     """Deja un `.gitignore` base en el worktree si el proyecto no trae uno.
 
     Devuelve ``True`` sólo si lo ha escrito.
@@ -693,12 +716,27 @@ def ensure_base_gitignore(worktree_path: Path) -> bool:
 
     **CUÁNDO se llama es parte del diseño, no un detalle.** Sólo desde
     `commit_task`, sólo cuando ya va a haber commit y sólo si el proyecto no se
-    queda vacío — ver :func:`_el_proyecto_tiene_contenido`. Escrito en la provisión, el
-    fichero está en el workspace mientras corre el agente y devuelve a FALLA la
-    casilla del ADR 0163: medido el 2026-09-01 con Composer 2.9.4,
-    ``composer create-project codeigniter4/framework .`` sale con rc=1 «Project
-    directory is not empty» con sólo ese dotfile delante, porque
+    queda vacío — ver :func:`_el_proyecto_tiene_contenido`. Escrito en la
+    provisión, el fichero estaría en el workspace desde la primera tarea y
+    devolvería a FALLA la casilla del ADR 0163: medido el 2026-09-01 con Composer
+    2.9.4, ``composer create-project codeigniter4/framework .`` sale con rc=1
+    «Project directory is not empty» con sólo ese dotfile delante, porque
     ``Filesystem::isDirEmpty()`` usa ``ignoreDotFiles(false)``.
+
+    Lo que esto NO consigue, dicho sin adornos: una vez commiteado, el fichero
+    forma parte de la rama y `sync_to_head` lo materializa en el worktree de
+    TODAS las tareas siguientes (verificado en la auditoría del 2026-09-01). Es
+    aceptable porque para entonces el árbol ya tiene contenido y ningún
+    andamiador estricto arrancaría igualmente; el camino para andamiar sobre un
+    árbol no vacío es el de la skill del stack (instalar en un subdirectorio y
+    mover). Lo que se garantiza es más estrecho: un proyecto que sigue VACÍO
+    sigue vacío.
+
+    ``respetar`` son los NOMBRES de directorios de dependencias que este proyecto
+    versiona a propósito (:attr:`dependency_dirs.Clasificacion.nombres_respetados`).
+    Listarlos aquí sería escribir en el repo una contradicción: git seguiría
+    rastreando lo ya versionado, pero cualquier fichero nuevo bajo ellos
+    desaparecería del `git add` de quien clone.
 
     **Nunca sobrescribe.** Si hay `.gitignore` —aunque esté vacío, aunque sea peor
     que éste— es del proyecto y se respeta. Vaciarlo es, de hecho, la vía de
@@ -708,10 +746,11 @@ def ensure_base_gitignore(worktree_path: Path) -> bool:
     que no se pudo escribir no puede tumbar el cierre de la tarea.
     """
     destino = worktree_path / ".gitignore"
+    excluidos = frozenset(respetar)
     try:
         if destino.exists():
             return False
-        nombres = _nombres_de_dependencias()
+        nombres = tuple(n for n in dependency_dirs.nombres() if n not in excluidos)
     except (OSError, ValueError) as exc:
         _log.warning(
             "commit_task.base_gitignore_skipped", worktree=str(worktree_path), error=str(exc)[:300]
@@ -810,14 +849,15 @@ def commit_task(
     repair_worktree_link(worktree_path)
 
     try:
-        nombres_dependencias = _nombres_de_dependencias()
+        nombres_dependencias = dependency_dirs.nombres()
     except ValueError as exc:  # catálogo con un nombre que no se puede usar
         _log.error("commit_task.dependency_names_invalid", error=str(exc))
         nombres_dependencias = ()
     # El des-versionado va ANTES del `git add`: en ese punto el índice todavía
     # coincide con HEAD para esas rutas, y la exclusión de abajo impide que el
-    # `add` las vuelva a meter.
-    _desversionar_dependencias(worktree_path, nombres_dependencias)
+    # `add` las vuelva a meter. Devuelve también los directorios RESPETADOS —los
+    # que versionó una persona—, que se stagean aparte más abajo.
+    clasificacion = _desversionar_dependencias(worktree_path, nombres_dependencias)
 
     env_extra = {
         "GIT_AUTHOR_NAME": author_name,
@@ -851,13 +891,26 @@ def commit_task(
     # `composer install` para enseñarle una prueba al reviewer se lleva el árbol
     # entero a la rama del plan — 1.151 ficheros medidos el 2026-09-01— y la deja
     # atascada. La forma de los patrones y por qué aquí sólo se excluye el
-    # CONTENIDO (a diferencia del residuo) está en `_patrones_de_dependencias`.
+    # CONTENIDO (a diferencia del residuo) está en `dependency_dirs.patrones`.
     exclusiones = [
-        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*",
-        f":(exclude,glob)**/{_PREFIJO_TRANSITORIO_RUNTIME}*/**",
-        *(f":(exclude,glob){p}" for p in _patrones_de_dependencias(nombres_dependencias)),
+        f":(exclude,glob)**/{RUNTIME_SCRATCH_PREFIX}*",
+        f":(exclude,glob)**/{RUNTIME_SCRATCH_PREFIX}*/**",
+        *(f":(exclude,glob){p}" for p in dependency_dirs.patrones(nombres_dependencias)),
     ]
     _run_git("add", "-A", "--", ".", *exclusiones, cwd=worktree_path, env_extra=env_extra)
+    # Y los directorios de dependencias que una PERSONA versionó a propósito se
+    # stagean aparte: la exclusión de arriba es por nombre y no sabe distinguirlos,
+    # pero un `vendor/` del proyecto es deliverable, cambios incluidos. Sin esta
+    # línea, el `go mod vendor` que actualiza el agente se perdería en silencio.
+    if clasificacion.respetados:
+        _run_git(
+            "add",
+            "-A",
+            "--",
+            *dependency_dirs.pathspecs_literales(clasificacion.respetados),
+            cwd=worktree_path,
+            env_extra=env_extra,
+        )
 
     # «Sin cambio» se decide MIRANDO EL ÍNDICE, no leyendo la prosa de git.
     #
@@ -872,14 +925,16 @@ def commit_task(
     if not _hay_cambios_estagiados(worktree_path):
         raise GitCommandError("commit_task: worktree is clean")
 
-    # Y AQUÍ el `.gitignore` base: es el único punto del ciclo donde escribirlo no
-    # se lo encuentra el agente (ADR 0163) y llega igual al repositorio, que es
+    # Y AQUÍ el `.gitignore` base: escrito al cerrar la tarea no está en el
+    # workspace de ESTA ejecución (ADR 0163) y llega igual al repositorio, que es
     # para lo que se quería. Va después del `add` porque necesita saber si el
     # índice tiene contenido, y detrás de la guarda de arriba porque un
     # `.gitignore` no puede ser la única razón de un commit: eso fabricaría uno
     # donde el llamador espera «la tarea no produjo cambio de código». Ver
     # `ensure_base_gitignore` y `_el_proyecto_tiene_contenido`.
-    if _el_proyecto_tiene_contenido(worktree_path) and ensure_base_gitignore(worktree_path):
+    if _el_proyecto_tiene_contenido(worktree_path) and ensure_base_gitignore(
+        worktree_path, respetar=clasificacion.nombres_respetados
+    ):
         _run_git("add", "--", ".gitignore", cwd=worktree_path, env_extra=env_extra)
     try:
         _run_git(

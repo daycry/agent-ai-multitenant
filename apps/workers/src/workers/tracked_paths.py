@@ -13,18 +13,23 @@ que con el diff del reviewer (:mod:`workers.review_diff`). Calcula la lista aqu�
 y la entrega ya hecha en el env del contenedor; al sandbox no se le da git
 (principio 2).
 
-**Sólo el PRIMER NIVEL.** En ese mismo proyecto el árbol versionado eran 5.192
-ficheros: el env de un contenedor no es sitio para eso, y para la decisión que el
-runtime tiene que tomar —«¿este directorio que me piden borrar entero es un
-entregable?»— basta con la raíz. Un `git ls-tree` no recursivo es además una
-sola lectura de árbol, no un recorrido del índice.
+**Todos los DIRECTORIOS versionados, con presupuesto.** La primera versión
+publicaba sólo el primer nivel («para la decisión basta con la raíz»), y la
+auditoría del 2026-09-01 midió lo que eso dejaba abierto: el mismo destrozo de
+los 85 ficheros con una llamada por subdirectorio (`app/Config`,
+`app/Controllers`…). Ahora viaja la lista de directorios (`git ls-tree -r -d`,
+no los ficheros: en ese proyecto eran 5.192 ficheros y ~300 directorios fuera de
+`vendor/`), y si no cabe en el env se recorta POR NIVELES, nunca a mitad de uno,
+avisando: la protección degrada en profundidad, no en anchura, y el primer nivel
+no se pierde jamás.
 
 **Versionado no basta: además tiene que ser TRABAJO.** El criterio del ADR 0164
-es «versionado = trabajo aceptado por una tarea anterior», y un directorio de
-dependencias no lo es aunque esté versionado — de hecho la plataforma ya lo
-afirma en otros dos sitios (`sync_to_head(preserve=...)` y la exclusión del
-`git add -A` de `commit_task`). Por eso esta lista los RESTA. Ver
-:func:`_directorios_de_dependencias`.
+es «versionado = trabajo aceptado», y un directorio de dependencias que la propia
+plataforma metió en la rama por accidente —un `commit_task` sin `.gitignore`— no
+lo es aunque esté versionado. Esta lista RESTA esos accidentes, y sólo ésos: un
+`vendor/` que una persona commiteó a propósito (Go, Laravel, Symfony…) es del
+proyecto y se protege como cualquier otro árbol. El criterio, y por qué es la
+autoría y no el nombre, está en :mod:`workers.dependency_dirs`.
 
 Best-effort de principio a fin: cualquier fallo devuelve la lista vacía, que el
 runtime interpreta como «sin protección nueva» (compat hacia atrás). Perder la
@@ -44,13 +49,22 @@ _log = structlog.get_logger("workers.tracked_paths")
 # aquí para que el productor tenga un único sitio donde escribirlo.
 TRACKED_PATHS_ENV = "AGENT_TRACKED_PATHS"
 
+#: Tope en bytes de la lista que viaja por el env del contenedor. Un directorio
+#: ocupa ~30 B de media, así que 48 KiB dan para ~1.600: cubre entero cualquier
+#: proyecto sin dependencias vendorizadas (el árbol del incidente tenía ~300
+#: directorios fuera de `vendor/`). Cuando no cabe, :func:`_recortar_por_niveles`
+#: quita niveles enteros empezando por el más profundo y lo registra.
+_PRESUPUESTO_BYTES = 48 * 1024
 
-def compute_tracked_top_level_paths(worktree_path: str | None) -> list[str]:
-    """Las entradas de primer nivel versionadas en la rama, o lista vacía.
+
+def compute_tracked_paths(worktree_path: str | None) -> list[str]:
+    """Los directorios versionados en la rama, a cualquier profundidad, o lista vacía.
 
     Vacía en los tres casos en que no hay nada que proteger o no se puede saber:
     run sin worktree, worktree sin commit todavía (proyecto vacío, primera tarea
-    del plan) y fallo de git.
+    del plan) y fallo de git. Los directorios de dependencias que la propia
+    plataforma versionó por accidente se restan, con todo lo que cuelga de
+    ellos (:func:`_accidentes_de_la_plataforma`).
     """
     if not worktree_path:
         return []
@@ -59,10 +73,11 @@ def compute_tracked_top_level_paths(worktree_path: str | None) -> list[str]:
     path = Path(worktree_path)
     try:
         # `-z` NO es cosmético: sin él git devuelve los nombres no-ASCII
-        # C-quoted (`"\303\261andu.txt"`), y el runtime compara contra rutas
-        # reales del disco — esas entradas no casarían con ningún fichero y la
-        # protección se perdería en silencio justo en los nombres acentuados.
-        raw = _run_git("ls-tree", "--name-only", "-z", "HEAD", cwd=path)
+        # C-quoted (`"\303\261andu"`), y el runtime compara contra rutas reales
+        # del disco — esas entradas no casarían con nada y la protección se
+        # perdería en silencio justo en los nombres acentuados. `-r -d`: todos
+        # los directorios, y sólo los directorios.
+        raw = _run_git("ls-tree", "-r", "-d", "--name-only", "-z", "HEAD", cwd=path)
     except GitCommandError as exc:
         _log_git_failure(path, str(exc))
         return []
@@ -74,14 +89,58 @@ def compute_tracked_top_level_paths(worktree_path: str | None) -> list[str]:
             detail="el run sigue SIN protección de rutas versionadas",
         )
         return []
-    dependencias = _directorios_de_dependencias()
-    entries = [entry for entry in raw.split("\0") if entry and entry not in dependencias]
-    _log.info("tracked_paths.resolved", worktree=worktree_path, entries=len(entries))
+    directorios = [entry for entry in raw.split("\0") if entry]
+    accidentes = _accidentes_de_la_plataforma(path)
+    fuera_de_accidentes = [d for d in directorios if not _bajo_alguno(d, accidentes)]
+    entries, profundidad, recortado = _recortar_por_niveles(fuera_de_accidentes)
+    _log.info(
+        "tracked_paths.resolved",
+        worktree=worktree_path,
+        entries=len(entries),
+        depth=profundidad,
+        platform_accidents_excluded=sorted(accidentes),
+    )
+    if recortado:
+        _log.warning(
+            "tracked_paths.truncated_by_depth",
+            worktree=worktree_path,
+            directories=len(fuera_de_accidentes),
+            kept=len(entries),
+            depth_kept=profundidad,
+            detail="la protección cubre hasta esa profundidad; más abajo no",
+        )
     return entries
 
 
-def _directorios_de_dependencias() -> frozenset[str]:
-    """Los directorios que NUNCA son trabajo aceptado, estén versionados o no.
+def _bajo_alguno(ruta: str, raices: frozenset[str]) -> bool:
+    return ruta in raices or any(ruta.startswith(raiz + "/") for raiz in raices)
+
+
+def _recortar_por_niveles(directorios: list[str]) -> tuple[list[str], int, bool]:
+    """Quita niveles enteros, del más profundo hacia arriba, hasta caber en el env.
+
+    Devuelve ``(lista, profundidad máxima conservada, se recortó)``. El primer
+    nivel se conserva siempre: es el que cubre el incidente medido, y un env que
+    no pueda con él tiene un problema más grave que esta lista.
+    """
+    por_nivel: dict[int, list[str]] = {}
+    for d in directorios:
+        por_nivel.setdefault(d.count("/") + 1, []).append(d)
+    conservados: list[str] = []
+    ocupado = 0
+    profundidad = 0
+    for nivel in sorted(por_nivel):
+        coste = sum(len(d.encode("utf-8")) + 1 for d in por_nivel[nivel])
+        if nivel > 1 and ocupado + coste > _PRESUPUESTO_BYTES:
+            return conservados, profundidad, True
+        conservados.extend(por_nivel[nivel])
+        ocupado += coste
+        profundidad = nivel
+    return conservados, profundidad, False
+
+
+def _accidentes_de_la_plataforma(path: Path) -> frozenset[str]:
+    """Los directorios de dependencias que la PLATAFORMA versionó, a cualquier profundidad.
 
     **Por qué hay que restarlos y no basta con que no lleguen a versionarse.**
     Esta lista se calcula en la PROVISIÓN, desde el HEAD de la rama; el
@@ -91,26 +150,23 @@ def _directorios_de_dependencias() -> frozenset[str]:
     en la que `vendor` sigue estando en HEAD: sin esta resta,
     `file_delete('vendor', recursive)` seguiría respondiendo «refusing to
     recursively delete 'vendor': it is tracked in this branch» y la tarea
-    seguiría sin poder andamiar. Comprobado con la lista que tendría esa
-    ejecución siguiente.
+    seguiría sin poder andamiar.
 
-    **No es una lista nueva escrita a mano.** Es la MISMA declaración por runtime
-    del catálogo (`vendor` en los php, `node_modules` en los node, `.venv`/`venv`
-    en python) que la plataforma ya usa dos veces: `sync_to_head(preserve=...)`
-    la respeta al limpiar el worktree entre tareas, y la exclusión del
-    `git add -A` de `plan_git.commit_task` impide que vuelvan a entrar. Una
-    tercera copia a mano sería la forma de que se desincronizara de las otras dos
-    sin que nada avisara.
+    **Y sólo los accidentes.** Un `vendor/` que commiteó una persona NO se resta:
+    es trabajo del proyecto (auditoría 2026-09-01, reproducido con un proyecto Go
+    que vendoriza a propósito). El criterio de autoría vive en
+    :func:`workers.dependency_dirs.clasificar_versionados`, el mismo que usa
+    `commit_task` para decidir qué des-versiona: una sola decisión, tomada en un
+    solo sitio, leída por los dos.
 
-    Import perezoso y degradado CONSERVADOR: si el catálogo no se puede leer se
-    devuelve el conjunto vacío, o sea que no se resta nada y se protege de MÁS.
-    Pasarse cuesta que una tarea se queje de no poder borrar `vendor/`; quedarse
-    corto costó los 85 ficheros de `app/` del 2026-08-31.
+    Degradado CONSERVADOR: si el catálogo o git no contestan, no se resta nada y
+    se protege de MÁS. Pasarse cuesta que una tarea se queje de no poder borrar
+    `vendor/`; quedarse corto costó los 85 ficheros de `app/` del 2026-08-31.
     """
     try:
-        from shared_test_runtimes import catalog as runtime_catalog
+        from workers import dependency_dirs
 
-        return frozenset(runtime_catalog.dependency_dirs())
+        clasificacion = dependency_dirs.clasificar_versionados(path, dependency_dirs.nombres())
     except Exception as exc:  # catálogo ausente, manifiesto de release ilegible…
         _log.warning(
             "tracked_paths.dependency_dirs_unavailable",
@@ -118,6 +174,7 @@ def _directorios_de_dependencias() -> frozenset[str]:
             detail="no se resta nada: se protege de más, nunca de menos",
         )
         return frozenset()
+    return frozenset(clasificacion.accidentes)
 
 
 def _log_git_failure(path: Path, error: str) -> None:

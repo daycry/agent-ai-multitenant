@@ -39,21 +39,33 @@ from typing import Any
 
 import pytest
 from shared_test_runtimes import catalog
+from workers.git_identity import PLATFORM_GIT_EMAIL, PLATFORM_GIT_NAME
 from workers.git_repos import GitCommandError
 from workers.plan_git import CommitTrailers, commit_task
 
 pytestmark = pytest.mark.unit
 
+#: Una PERSONA: quien clona el repo y commitea fuera de la plataforma.
+_PERSONA = ("harness", "harness@example.com")
+#: La PLATAFORMA: la identidad con la que `commit_task` firma cada commit de tarea.
+_PLATAFORMA = (PLATFORM_GIT_NAME, PLATFORM_GIT_EMAIL)
 
-def _git(*args: str, cwd: Path | None = None) -> str:
-    """git con identidad fija: el arnés no depende del ~/.gitconfig del host."""
+
+def _git(*args: str, cwd: Path | None = None, identidad: tuple[str, str] = _PERSONA) -> str:
+    """git con identidad fija: el arnés no depende del ~/.gitconfig del host.
+
+    La identidad NO es cosmética desde el 2026-09-01: la plataforma sólo deshace
+    los directorios de dependencias que commiteó ELLA MISMA, así que quién firma
+    un commit decide si su `vendor/` se respeta o se des-versiona.
+    """
+    nombre, email = identidad
     proc = subprocess.run(
         [
             "git",
             "-c",
-            "user.email=harness@example.com",
+            f"user.email={email}",
             "-c",
-            "user.name=harness",
+            f"user.name={nombre}",
             "-c",
             "safe.bareRepository=all",
             *args,
@@ -104,12 +116,27 @@ def _versiona_como_antes(worktree_path: Path, rutas: dict[str, str]) -> None:
 
     No usa `commit_task` a propósito: el estado de partida que hay que desatascar
     lo dejaron ramas commiteadas con el código anterior, y un test que lo
-    fabricase con el código nuevo no probaría nada.
+    fabricase con el código nuevo no probaría nada. Pero SÍ firma como la
+    plataforma, porque eso es lo que era el accidente: un `commit_task` viejo.
     """
     for ruta, contenido in rutas.items():
         _escribe(worktree_path, ruta, contenido)
-    _git("add", "-A", cwd=worktree_path)
-    _git("commit", "-qm", "la tarea anterior se llevo vendor/ por delante", cwd=worktree_path)
+    _git("add", "-A", cwd=worktree_path, identidad=_PLATAFORMA)
+    _git(
+        "commit",
+        "-qm",
+        "la tarea anterior se llevo vendor/ por delante",
+        cwd=worktree_path,
+        identidad=_PLATAFORMA,
+    )
+
+
+def _versiona_una_persona(worktree_path: Path, rutas: dict[str, str], mensaje: str) -> None:
+    """Lo que hace un humano en su clon: versiona a propósito y empuja."""
+    for ruta, contenido in rutas.items():
+        _escribe(worktree_path, ruta, contenido)
+    _git("add", "-A", cwd=worktree_path, identidad=_PERSONA)
+    _git("commit", "-qm", mensaje, cwd=worktree_path, identidad=_PERSONA)
 
 
 def _ficheros_del_commit(worktree_path: Path, sha: str) -> list[str]:
@@ -432,12 +459,132 @@ def test_un_vendor_con_nombres_acentuados_tambien_sale_del_indice(worktree: Path
     assert "app/Home.php" in ficheros and "app/Nuevo.php" in ficheros
 
 
+# ---------------------------------------------------------------------------
+# 3. La plataforma deshace SUS accidentes, no las decisiones de las personas
+# ---------------------------------------------------------------------------
+# Auditoría del 2026-09-01. La primera versión de esto des-versionaba TODO
+# directorio con nombre de dependencia, en TODOS los proyectos, y lo justificaba
+# con «lo declara el runtime template del propio proyecto». Era falso: la lista
+# es la UNIÓN de los 14 templates. Reproducido con un proyecto Go que versiona
+# `vendor/` a propósito (`go mod vendor`, el flujo canónico, y `go-test` no
+# declara `vendor`): el primer commit de la plataforma lo sacaba del índice,
+# escribía un `.gitignore` con `vendor/` y dejaba de protegerlo. Lo mismo le pasa
+# a `public/vendor/` de Laravel, `assets/vendor/` de Symfony o `vendor/cache` de
+# Ruby, que sus propios frameworks mandan commitear.
+#
+# El criterio que sí separa las dos poblaciones no es el NOMBRE sino la AUTORÍA:
+# un `vendor/` que entró por un `commit_task` sin `.gitignore` lo firmó la
+# plataforma, y un `vendor/` que una persona commiteó es una decisión. La
+# plataforma deshace lo primero y respeta lo segundo.
+
+
+def test_un_vendor_versionado_por_una_persona_no_se_desversiona(worktree: Path) -> None:
+    """El caso Go, reproducido: `go mod vendor` commiteado a propósito."""
+    _versiona_una_persona(
+        worktree,
+        {
+            "go.mod": "module example.com/app\n",
+            "vendor/modules.txt": "# github.com/x/y v1.0.0\n",
+            "vendor/github.com/x/y/y.go": "package y\n",
+        },
+        "vendoriza las dependencias (go mod vendor)",
+    )
+    _escribe(worktree, "main.go", "package main\n")
+
+    sha = _commit(worktree)
+
+    ficheros = _ficheros_del_commit(worktree, sha)
+    assert "vendor/modules.txt" in ficheros and "vendor/github.com/x/y/y.go" in ficheros, (
+        "la plataforma des-versionó un vendor/ que una PERSONA commiteó a propósito: "
+        "el PR del plan borra las dependencias del proyecto"
+    )
+    assert "main.go" in ficheros
+
+
+def test_los_cambios_del_agente_dentro_de_un_vendor_respetado_si_entran(worktree: Path) -> None:
+    """Respetar a medias sería peor: si `vendor/` es del proyecto, sus cambios
+    también lo son, y una exclusión ciega del `git add -A` los perdería en
+    silencio."""
+    _versiona_una_persona(
+        worktree,
+        {"vendor/modules.txt": "# github.com/x/y v1.0.0\n"},
+        "vendoriza",
+    )
+    _escribe(worktree, "vendor/modules.txt", "# github.com/x/y v1.1.0\n")
+
+    sha = _commit(worktree)
+
+    contenido = _git("show", f"{sha}:vendor/modules.txt", cwd=worktree)
+    assert "v1.1.0" in contenido, (
+        "el cambio del agente dentro del vendor/ respetado no llegó al commit"
+    )
+
+
+def test_el_gitignore_base_no_ignora_un_directorio_respetado(worktree: Path) -> None:
+    """Un `.gitignore` con `vendor/` en un proyecto que lo versiona a propósito
+    es una contradicción escrita en el repo: git seguiría rastreando lo ya
+    trackeado, pero cualquier fichero NUEVO bajo `vendor/` desaparecería del
+    `git add` de quien clone."""
+    _versiona_una_persona(worktree, {"vendor/modules.txt": "# x\n"}, "vendoriza")
+    _escribe(worktree, "main.go", "package main\n")
+
+    _commit(worktree)
+
+    gitignore = worktree / ".gitignore"
+    assert gitignore.is_file(), "el proyecto no traía .gitignore: la plataforma deja el base"
+    lineas = [ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()]
+    assert "vendor/" not in lineas, (
+        "el .gitignore base ignora un directorio que el proyecto versiona"
+    )
+    assert "node_modules/" in lineas, "y los demás nombres del catálogo siguen en la lista"
+
+
+def test_se_deshace_el_accidente_y_se_respeta_a_la_persona_en_el_mismo_arbol(
+    worktree: Path,
+) -> None:
+    """Las dos poblaciones conviven en un monorepo, y la decisión es POR
+    DIRECTORIO, no por nombre ni por proyecto."""
+    _versiona_una_persona(
+        worktree,
+        {"frontend/node_modules/leftpad/index.js": "module.exports = 1;\n"},
+        "node_modules vendorizado a propósito en el frontend",
+    )
+    _versiona_como_antes(worktree, {"vendor/autoload.php": "<?php\n"})
+    _escribe(worktree, "app/Home.php")
+
+    ficheros = _ficheros_del_commit(worktree, _commit(worktree))
+
+    assert not [f for f in ficheros if f.startswith("vendor/")], (
+        "el accidente de la plataforma (vendor/) sigue versionado"
+    )
+    assert "frontend/node_modules/leftpad/index.js" in ficheros, (
+        "el node_modules que una persona versionó a propósito se ha des-versionado"
+    )
+
+
+def test_un_accidente_que_una_persona_luego_toco_se_respeta(worktree: Path) -> None:
+    """Basta que UNA persona haya tocado el directorio para que deje de ser un
+    accidente: a partir de ahí hay trabajo humano dentro, y la plataforma no
+    tiene autoridad para retirarlo."""
+    _versiona_como_antes(worktree, {"vendor/autoload.php": "<?php\n"})
+    _versiona_una_persona(
+        worktree, {"vendor/autoload.php": "<?php // parche local\n"}, "parchea vendor"
+    )
+    _escribe(worktree, "app/Home.php")
+
+    ficheros = _ficheros_del_commit(worktree, _commit(worktree))
+
+    assert "vendor/autoload.php" in ficheros, (
+        "se des-versionó un vendor/ con un parche commiteado por una persona"
+    )
+
+
 def test_un_nombre_de_dependencia_invalido_se_rechaza(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """La validación de nombres, con el mismo trato que su precedente.
 
-    `_nombres_de_dependencias` valida lo que llega del catálogo antes de meterlo
+    `dependency_dirs.nombres` valida lo que llega del catálogo antes de meterlo
     en un pathspec. El precedente que cita —`git_repos.clean_args`— SÍ tiene su
     `pytest.raises(ValueError)`; ésta no lo tenía, y la mutación que quitaba la
     validación no mataba ningún test.
@@ -448,9 +595,9 @@ def test_un_nombre_de_dependencia_invalido_se_rechaza(
     directorio de un pathspec inyectado.
     """
     from shared_test_runtimes import catalog as runtime_catalog
-    from workers.plan_git import _nombres_de_dependencias
+    from workers.dependency_dirs import nombres
 
     for veneno in ("../fuera", "vendor/sub", ":(glob)**", "", "  "):
         monkeypatch.setattr(runtime_catalog, "dependency_dirs", lambda v=veneno: (v,))
         with pytest.raises(ValueError):
-            _nombres_de_dependencias()
+            nombres()

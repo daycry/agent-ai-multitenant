@@ -322,6 +322,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "Reason: {{ reason | default('not given') }}."
         ),
     ),
+    # --- plan_pr_failed ----------------------------------------------------
+    ("plan_pr_failed", "es"): TemplateSource(
+        subject="Auto-PR fallido: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "No se pudo abrir el pull request automático del plan "
+            "«{{ plan_name | default('(sin nombre)') }}». "
+            "Motivo: {{ reason | default('no indicado') }}. "
+            "Revisa la configuración git del proyecto y reintenta desde la ficha del plan."
+        ),
+    ),
+    ("plan_pr_failed", "en"): TemplateSource(
+        subject="Auto-PR failed: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "The automatic pull request for plan "
+            "\"{{ plan_name | default('(unnamed)') }}\" could not be opened. "
+            "Reason: {{ reason | default('not given') }}. "
+            "Check the project's git configuration and retry from the plan page."
+        ),
+    ),
     # --- execution_failed --------------------------------------------------
     ("execution_failed", "es"): TemplateSource(
         subject="Ejecución fallida: {{ plan_name | default('(sin nombre)') }}",

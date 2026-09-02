@@ -186,6 +186,11 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
     },
     {"event_type": "plan_approved", "label_es": "Plan aprobado", "label_en": "Plan approved"},
     {"event_type": "plan_rejected", "label_es": "Plan rechazado", "label_en": "Plan rejected"},
+    {
+        "event_type": "plan_pr_failed",
+        "label_es": "Auto-PR del plan fallido",
+        "label_en": "Plan auto-PR failed",
+    },
     {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},
     {"event_type": "plan_unblocked", "label_es": "Plan desbloqueado", "label_en": "Plan unblocked"},
     {

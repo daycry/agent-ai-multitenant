@@ -18,10 +18,12 @@ Deliverable hecho, en disco, fuera de toda rama. La tarea acabó `blocked`.
 
 ## Por qué la guarda de la tool no basta
 
-`file_tools` ya rechaza `.git` desde el mismo día, pero la allowlist base del
-SDK incluye `rm`: `shell_exec("rm .git")` consigue lo mismo. Una guarda por
-puerta deja las demás abiertas. Ésta cubre el RESULTADO —que el enlace exista
-cuando toca commitear— y por eso vale para cualquier mecanismo.
+`file_tools` ya rechaza `.git` desde el mismo día, pero un proyecto puede
+autorizar `rm` en su allowlist y `shell_exec("rm .git")` consigue lo mismo (y
+desde el ADR 0163 el puntero ni siquiera está mientras corre el agente: es el
+worker quien lo esconde y lo repone). Una guarda por puerta deja las demás
+abiertas. Ésta cubre el RESULTADO —que el enlace exista y sea VÁLIDO cuando toca
+commitear— y por eso vale para cualquier mecanismo.
 
 ## El orden, que es lo que se descubrió midiendo
 
@@ -146,6 +148,64 @@ def test_sin_bare_no_revienta(tmp_path: Path) -> None:
     wt = tmp_path / "proyecto" / "worktrees" / "t1"
     wt.mkdir(parents=True)
     assert repair_worktree_link(wt) is False
+
+
+# ---------------------------------------------------------------------------
+# La red comprueba VALIDEZ, no existencia (auditoría 2026-09-01)
+# ---------------------------------------------------------------------------
+# La primera versión hacía `if (worktree / ".git").exists(): return False`. Con
+# un `.git` que fuera un DIRECTORIO —el repo que deja `cargo new .` si el
+# `rmtree` del restore no pudo, o un worker muerto entre esconder y reponer—
+# decía «nada que reparar» y `commit_task` commiteaba en el repo del andamiador:
+# devolvía un sha que NO existía en el bare del plan. Reproducido con git real.
+
+
+def test_un_git_que_es_un_directorio_se_descarta_y_se_repara(proyecto: Path) -> None:
+    """El repo del andamiador no es nuestro puntero: se retira y se reconstruye."""
+    wt = proyecto / "worktrees" / "t1"
+    puntero = (wt / ".git").read_text(encoding="utf-8")
+    (wt / ".git").unlink()
+    _git("init", "-q", str(wt))  # lo que deja `cargo new .`
+    assert (wt / ".git").is_dir()
+
+    assert repair_worktree_link(wt) is True
+    assert (wt / ".git").is_file(), "sigue siendo el repo del andamiador"
+    assert (wt / ".git").read_text(encoding="utf-8").strip() == puntero.strip()
+
+
+def test_tras_descartar_el_repo_intruso_el_commit_llega_al_bare(proyecto: Path) -> None:
+    """Lo que de verdad importa: el sha que devuelve `commit_task` existe en el
+    bare del plan, no en un repositorio que nadie va a mirar."""
+    from workers.plan_git import CommitTrailers, commit_task
+
+    wt = proyecto / "worktrees" / "t1"
+    bare = proyecto / "repos" / "app.git"
+    (wt / ".git").unlink()
+    _git("init", "-q", str(wt))
+    (wt / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+    sha = commit_task(
+        wt,
+        message="scaffold",
+        trailers=CommitTrailers(plan_id="p", task_id="t", execution_id="e"),
+    )
+
+    assert _git("--git-dir", str(bare), "cat-file", "-t", sha).strip() == "commit", (
+        "el commit fue a parar al repo del andamiador, no al bare del plan"
+    )
+
+
+def test_un_puntero_con_contenido_invalido_se_reconstruye(proyecto: Path) -> None:
+    """Un `.git` fichero que no es un `gitdir:` a nuestro bare tampoco vale."""
+    wt = proyecto / "worktrees" / "t1"
+    # En Windows git deja el puntero de sólo lectura: se reemplaza, no se reescribe.
+    (wt / ".git").unlink()
+    (wt / ".git").write_text("gitdir: /ruta/que/no/existe\n", encoding="utf-8")
+
+    assert repair_worktree_link(wt) is True
+    contenido = (wt / ".git").read_text(encoding="utf-8")
+    assert "worktrees" in contenido and "app.git" in contenido, contenido
+    _git("status", "--porcelain", cwd=wt)  # git vuelve a funcionar
 
 
 def test_commit_task_repara_antes_de_tocar_git() -> None:

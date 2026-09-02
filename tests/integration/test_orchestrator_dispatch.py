@@ -507,3 +507,31 @@ def test_run_execution_celery_task_conducts_the_execution(
 
     statuses = asyncio.run(_execution_statuses(admin_database_url, ids["task"]))
     assert statuses == [ExecutionStatus.DONE]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_stamps_the_claim_on_the_task_and_on_the_message(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """`task_cv_13` (A-05): la reclamación viaja con identidad. El `claim_id` que
+    el dispatch escribe en la tarea al reclamarla es el MISMO que va en el
+    payload; es lo que permite al worker descartar el mensaje de una
+    reclamación revertida y redespachada."""
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm)
+        await redis.delete("default")
+        await _dispatcher(sm).handle(_ready_event(ids))
+        messages = await _drain_queue(redis, "default")
+        assert len(messages) == 1
+        _args, kwargs, _embed = json.loads(base64.b64decode(messages[0]["body"]))
+        async with sm() as session:
+            task = await session.get(Task, ids["task"])
+        assert task is not None and task.claim_id, "la reclamación no dejó identidad en la tarea"
+        assert kwargs["request"]["claim_id"] == task.claim_id
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()

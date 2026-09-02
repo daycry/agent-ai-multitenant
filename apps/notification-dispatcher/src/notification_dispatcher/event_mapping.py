@@ -165,6 +165,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
     ),
+    # task_cv_14 (auditoría 2026-09-01, D-02): el auto-PR del plan falló y el motivo
+    # quedó en `plan.pr_error`; sin este evento sólo lo veía quien abriera la ficha.
+    "plan_pr_failed": EventSpec(
+        "plan_pr_failed",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
     # c3/T7 (audit 2026-07-03): a plan whose only remaining open tasks are `blocked`
     # is escalated `in_progress -> blocked` by the orchestrator; the operator is
     # notified so the stall is visible and they can unblock/retry a task.

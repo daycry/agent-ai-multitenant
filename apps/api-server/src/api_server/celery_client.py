@@ -288,6 +288,15 @@ async def compute_plan_code_diff_and_wait(
         return {"ok": False, "error": "diff worker unavailable"}
 
 
+def auto_pr_request(plan_id: UUID | str, plan_title: str | None) -> tuple[str, str]:
+    """Título y cuerpo del auto-PR de un plan (ADR 0072 fase 2). Fuente única:
+    lo usan el cierre por veredicto (``routers/review.py``) y el reencolado del
+    reconciler (`task_cv_14`), que tienen que pedir el MISMO PR."""
+    title = f"Plan: {plan_title}" if plan_title else f"Plan {str(plan_id)[:8]}"
+    body = f"PR automático tras la validación humana del plan.\n\nPlan: {plan_title}\nID: {plan_id}"
+    return title, body
+
+
 async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
     """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
     + apertura del PR/MR por proveedor. La rama se deriva en el worker de

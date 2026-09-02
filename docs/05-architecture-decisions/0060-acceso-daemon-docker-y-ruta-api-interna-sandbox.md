@@ -47,9 +47,19 @@ Los workers **nunca** montan el socket. El compose generado añade un servicio
 
 - monta `/var/run/docker.sock` (read-only) y expone la API Docker por TCP
   (`:2375`) **solo** en una red interna **dedicada** `agentic-docker`;
-- aplica una **ACL por endpoint**: `CONTAINERS`/`IMAGES`/`NETWORKS`/`POST`
-  permitidos (crear + cablear runtimes); `EXEC`/`VOLUMES`/`SWARM` y todo lo
-  demás **denegado** (sin `docker exec`, sin bind-mounts del host, sin swarm);
+- aplica una **ACL por endpoint**: `CONTAINERS`/`IMAGES`/`NETWORKS`/`POST`/`EXEC`
+  permitidos (crear + cablear runtimes, y ejecutar dentro de ellos los checks de
+  aceptación, el `pre_install` y el puente `stack_exec` del ADR 0093);
+  `VOLUMES`/`SWARM` y todo lo demás **denegado**. _Corrección del 2026-09-01_: la
+  redacción original decía «`EXEC` denegado (sin `docker exec`)» y el compose
+  generado por el instalador lo cumplía; pero el diseño exige `exec_run`, así que
+  en producción todo check daba 403 mientras el compose de desarrollo ya llevaba
+  `EXEC=1`. Lo que la ACL garantiza NO es «sin exec»: es que el único cliente del
+  daemon es el worker, en una red dedicada, y que el agent-runtime nunca toca el
+  socket. Nota honesta sobre `VOLUMES=0`: bloquea el endpoint `/volumes`, no los
+  bind-mounts que el propio worker declara en `HostConfig`; la garantía contra
+  montar rutas arbitrarias del host la da el worker validando `worktree_host_path`
+  bajo `data_root`, no el proxy;
 - los servicios `workers` y `workers-privileged` reciben
   `DOCKER_HOST=tcp://docker-socket-proxy:2375` y se unen a `agentic-docker`.
 

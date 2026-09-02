@@ -39,6 +39,7 @@ from uuid import uuid4
 import pytest
 from workers.config import Settings
 from workers.execution import _provision_worktree
+from workers.git_identity import git_identity_env
 from workers.git_repos import BareRepoLayout, BareRepoManager, GitCommandError, _run_git
 from workers.plan_git import (
     CommitTrailers,
@@ -241,12 +242,10 @@ async def test_un_desversionado_que_vacia_el_proyecto_no_deja_el_gitignore_solo(
     (Path(primera) / "README.md").unlink()
     (Path(primera) / "vendor").mkdir()
     (Path(primera) / "vendor" / "autoload.php").write_text("<?php\n", encoding="utf-8")
-    identidad = {
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@e",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@e",
-    }
+    # Firmado por la PLATAFORMA: el accidente fue un `commit_task` viejo. Un
+    # `vendor/` que firmara una persona sería del proyecto y NO se retiraría
+    # (auditoría 2026-09-01, `workers.dependency_dirs`).
+    identidad = git_identity_env()
     _run_git("add", "-A", cwd=Path(primera), env_extra=identidad)
     _run_git(
         "commit", "-m", "la tarea anterior se llevo vendor/", cwd=Path(primera), env_extra=identidad

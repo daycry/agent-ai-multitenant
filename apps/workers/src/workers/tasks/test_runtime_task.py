@@ -261,8 +261,25 @@ async def dispatch_test_runtime_and_wait(request: dict[str, Any]) -> dict[str, A
     budget = test_phase_wait_budget_s(list(criteria))
 
     def _send_and_wait() -> dict[str, Any]:
+        # `allow_join_result` NO es opcional (auditoría 2026-09-01, A-02): esto
+        # corre DENTRO del task `run_execution` de un worker prefork, y Celery
+        # prohíbe `AsyncResult.get()` ahí («Never call result.get() within a
+        # task!») porque un task que espera a otro en el mismo pool puede
+        # inanicionarse. Sin el `with`, cada `done` con criterios acababa en
+        # `test_phase_dispatch_failed` y el reviewer nunca vio un test real — y
+        # el test unitario lo tapaba con un `AsyncResult` falso sin la guarda.
+        #
+        # La inanición que Celery teme se evita por CONSTRUCCIÓN, no por suerte:
+        # la cola `test` la sirve un worker distinto (`workers-aux`,
+        # `--queues=test,review`) tanto en el compose de dev como en el que
+        # genera el instalador, así que el slot que espera aquí (lane `default`)
+        # nunca es el slot que necesita la fase de tests. El presupuesto acota la
+        # espera de todas formas.
+        from celery.result import allow_join_result
+
         async_result = app.send_task("workers.run_test_runtime", args=[request], queue="test")
-        result = async_result.get(timeout=budget)
+        with allow_join_result():
+            result = async_result.get(timeout=budget)
         return dict(result) if isinstance(result, dict) else {}
 
     try:

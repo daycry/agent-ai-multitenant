@@ -139,3 +139,16 @@ runtime_image_override)`): catálogo de servicios allowlisted + servicio de
   imagen custom (misma postura que `review_image`); tope de recursos por
   proyecto (caps de mem/pids por sidecar ya aplican; falta el agregado por
   proyecto).
+
+## Addendum del 2026-09-02: «probada» era un `MagicMock`
+
+La auditoría del 2026-09-01 (B-02) midió que la fontanería de los sidecars los
+lanzaba con `cap_drop ALL` y **sin** `cap_add` ni `user`: exactamente la
+combinación que `gotchas/docker-cap-drop-all-breaks-official-images.md` documenta
+como crash-loop de las imágenes oficiales de postgres/redis/mysql (`gosu`/`su-exec`
+necesitan `SETUID`/`SETGID` para bajar de root, y el entrypoint `CHOWN` sobre el
+datadir). Ningún proyecto que declarase `services` podía arrancarlos; el único
+test era un `MagicMock` que no levanta nada. Desde `task_cv_04` los sidecars
+reciben el mismo `x-infra-caps` que el compose concede a esas imágenes, `remove`
+lleva `v=True` para no dejar volúmenes anónimos, y el test cruza la lista con la
+del compose para que no diverjan.

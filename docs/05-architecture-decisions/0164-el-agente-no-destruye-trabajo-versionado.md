@@ -19,10 +19,10 @@ para que no le haga falta, tiene un camino legítimo.**
 Dos mitades, y las dos son necesarias: la primera sin la segunda deja al agente
 atascado; la segunda sin la primera no impide nada.
 
-|             | Qué dice                                                        | Cómo se cumple                                                         |
-| ----------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| **Defensa** | Un árbol de primer nivel versionado no se puede borrar ni mover | `delete_file` recursivo y `move_file` lo rechazan, con el mismo helper |
-| **Camino**  | Andamiar en un subdirectorio y mover el resultado a su sitio    | `move_file` + la sección de andamiaje de la skill del stack            |
+|             | Qué dice                                                                           | Cómo se cumple                                                         |
+| ----------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Defensa** | Un árbol versionado no se puede borrar ni pisar; uno de primer nivel tampoco mover | `delete_file` recursivo y `move_file` lo rechazan, con el mismo helper |
+| **Camino**  | Andamiar en un subdirectorio y mover el resultado a su sitio                       | `move_file` + la sección de andamiaje de la skill del stack            |
 
 El `.git` es otro asunto y lo cierra el
 [ADR 0163](0163-el-git-del-worktree-dentro-del-sandbox.md): no está dentro del
@@ -88,7 +88,7 @@ Se descartaron dos criterios más simples:
 **Versionado** separa las dos poblaciones mejor que las alternativas: lo
 commiteado suele ser trabajo aceptado de alguien, y lo no versionado suele ser
 artefacto reconstruible. El worker es el único punto con worktree + git, así que
-calcula las entradas de primer nivel versionadas y las publica en
+calcula los directorios versionados (`compute_tracked_paths`) y los publica en
 `AGENT_TRACKED_PATHS` **antes** de que el ADR 0163 esconda el `.git`.
 
 ### Addendum del 2026-09-01: «separa EXACTAMENTE» era falso
@@ -113,39 +113,68 @@ composer create-project .       ->  falla, el directorio no está vacío
 **Blindó un artefacto reconstruible** y dejó la tarea del esqueleto sin salida.
 La guarda no falló: falló la premisa de que versionado implique aceptado.
 
-**La corrección, y de dónde sale:** un directorio de dependencias no es trabajo
-aceptado, esté versionado o no. Y eso no hace falta adivinarlo — cada runtime
-template lo **declara** (`shared_test_runtimes.catalog.dependency_dirs`: `vendor`
-en php, `node_modules` en node, `.venv`/`venv` en python), y la plataforma ya lo
-usaba: `sync_to_head(preserve=…)` los conserva para que el `clean -fdx` no se los
-lleve.
+**La primera corrección, y por qué también era falsa.** Se dijo: «un directorio
+de dependencias no es trabajo aceptado, esté versionado o no; lo declara el
+runtime template del propio proyecto (`shared_test_runtimes.catalog.dependency_dirs`)».
+La auditoría del mismo día lo desmontó midiendo: esa lista es la **UNIÓN de los
+14 templates**, no la del proyecto, y con ella un proyecto Go que versiona
+`vendor/` a propósito (`go mod vendor`, el flujo canónico; y `go-test` no declara
+`vendor`) veía cómo el primer `commit_task` le sacaba `vendor/` del índice, le
+escribía un `.gitignore` con `vendor/` y dejaba de protegerlo. Lo mismo le pasa a
+`public/vendor/` de Laravel, `assets/vendor/` de Symfony AssetMapper o
+`vendor/cache` de Bundler, que sus propios frameworks mandan commitear.
 
-Así que el criterio pasa a ser **versionado Y no declarado como directorio de
-dependencias**, y `compute_tracked_top_level_paths` resta esa lista. No es una
-segunda lista escrita a mano —la objeción que descartó esta idea la primera vez
-que se planteó— sino la misma declaración que el proyecto ya hace.
+### Addendum del 2026-09-01 (b): el criterio es la AUTORÍA, no el nombre
 
-La otra mitad vive fuera de este ADR: `commit_task` dejó de commitear esos
-directorios y des-versiona con `git rm --cached` los que ya entraron, de modo que
-el accidente no vuelve a ocurrir en vez de sólo tolerarse.
+El accidente que motivó todo esto lo firmó **la plataforma**: un `commit_task`
+sin `.gitignore`, con la identidad de `workers.git_identity`. Un `vendor/` que
+commiteó una persona es una decisión del proyecto. Ésa es la línea que separa
+las dos poblaciones, y git la conoce:
 
-**Y una limitación que se conoce y no se cierra:** hay proyectos que versionan un
-directorio con ese nombre a propósito — el `assets/vendor/` de Symfony
-AssetMapper, que su documentación manda commitear. Hoy no hay forma de que un
-proyecto lo declare. Si aparece el caso, la salida es darle esa declaración, no
-retirar la exclusión: retirarla devuelve el punto muerto.
+> Un directorio de dependencias versionado es un **accidente de la plataforma**
+> si todos los commits que lo tocaron los firmó la plataforma. Si lo tocó UNA
+> persona, es del proyecto y se respeta.
+
+Vive en un solo sitio, `workers.dependency_dirs.clasificar_versionados`, y lo
+leen los dos consumidores: `commit_task` des-versiona los accidentes y commitea
+los cambios de los respetados (la exclusión por nombre del `git add -A` no sabe
+distinguirlos, así que los respetados se stagean aparte); `compute_tracked_paths`
+resta los accidentes de la lista que protege al deliverable y deja los respetados
+dentro, protegidos como cualquier otro árbol. Y el `.gitignore` base no lista un
+nombre que el proyecto versiona a propósito. Ante la duda —git que no contesta—
+se respeta: pasarse cuesta que una tarea se queje de no poder borrar `vendor/`;
+quedarse corto costó 85 ficheros de `app/` y habría borrado del PR las
+dependencias vendorizadas de un proyecto Go. Reproducido con git real en los dos
+sentidos; los tests están en `test_las_dependencias_no_se_versionan.py` §3 y
+`test_agent_tracked_paths.py` §4.
+
+Con esto la «limitación conocida» de Symfony AssetMapper deja de serlo: un
+`assets/vendor/` commiteado por una persona se respeta sin declaración alguna.
 
 ## Dónde acaba la protección
 
 Una guarda que se confunde con un muro es peor que no tenerla, así que esto va
 escrito y no supuesto:
 
-1. **Cubre la familia `file`, no `stack_exec`.** Un proyecto con `rm` en su
-   `allowed_commands` se lleva `app/` igual. Es frontera deliberada del
-   [ADR 0093](0093-ejecucion-de-stack-mediada-por-worker-stack-exec.md), no descuido.
-2. **Es de primer nivel.** `app/Config` se puede borrar, y vaciar `app/` a trozos
-   sigue siendo posible. La guarda impide el gesto de una sola llamada, que es el
-   que se midió; no persigue a quien insista.
+1. **Cubre la familia `file`, no `stack_exec` ni `shell_exec`.** Un proyecto con
+   `rm` en su `allowed_commands` se lleva `app/` igual. Es frontera deliberada del
+   [ADR 0093](0093-ejecucion-de-stack-mediada-por-worker-stack-exec.md), no
+   descuido. Lo que NO es frontera deliberada, y se cerró en la auditoría del
+   2026-09-01: la base de comandos que la plataforma añade a todo run con Claude
+   SDK traía `rm` y `mv`, así que `shell_exec("rm -rf app")` hacía lo que
+   `delete_file` rechaza, en todos los proyectos y sin que ninguno lo pidiera.
+   Ya no los trae; `delete_file` y `move_file` son las puertas auditadas y
+   gateadas, y siguen disponibles para el SDK.
+2. **Cubre cualquier profundidad, y sigue al contenido** (auditoría 2026-09-01;
+   antes era de primer nivel y el destrozo se reconstruía con una llamada por
+   subdirectorio). El worker publica todos los directorios versionados
+   (`git ls-tree -r -d`, con presupuesto por niveles: si no cabe en el env se
+   recorta por profundidad, nunca el primer nivel, y se registra). Se rechaza
+   borrar recursivamente cualquiera de ellos, y cualquier directorio que
+   contenga uno. Mover un directorio versionado anidado se permite —es un
+   refactor— y la protección viaja con él, así que «mover a un temporal y borrar
+   el temporal» se rechaza también. Mover o pisar un árbol de PRIMER NIVEL sigue
+   rechazado: es la forma de vaciar la raíz.
 3. **Un fichero versionado suelto sí se borra y se sobrescribe.** Es el caso del
    ADR 0089 y no se rompe.
 4. **Depende de un dato que viaja por el env.** Si el worker no puede calcularlo
@@ -204,6 +233,18 @@ El precio es un residuo: cuando el descarte final no se puede hacer queda un
 hermano `.agent-runtime-tmp.<nombre>.<n>`. El prefijo va **delante** para que un
 solo patrón lo cubra, y `commit_task` lo excluye del `git add -A` — si no, viajaría
 al PR como una copia oculta del árbol que se quiso retirar.
+
+**Y ese residuo tenía un segundo precio que nadie había medido** (auditoría
+2026-09-01): el `git clean -fdx` de la provisión siguiente intentaba borrarlo, no
+podía —por el mismo motivo por el que el descarte no pudo— y salía con rc=1. La
+tarea quedaba `workspace_unavailable` en cada reintento. Antes de este patrón ese
+contenido imborrable vivía dentro de `vendor/`, preservado del `clean`, y nadie
+lo tocaba: el arreglo había movido el fallo de sitio. Dos correcciones: el
+descarte del runtime da permiso de escritura y reintenta antes de rendirse (los
+dos motivos reales, fichero de sólo lectura y directorio sin `w`, se resuelven
+así), y `sync_to_head` barre los residuos antes del `clean` y preserva del
+`clean` lo que ni así se puede borrar, avisando. Un residuo huérfano es un fallo
+menor; una tarea que no vuelve a arrancar no lo es.
 
 Dos residuos declarados que **fallan en seguro** y conviene conocer: escribir a un
 hermano exige permiso sobre el **directorio**, que escribir en el sitio no exigía;

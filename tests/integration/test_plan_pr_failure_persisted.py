@@ -167,3 +167,43 @@ async def test_a_skip_never_erases_an_already_open_pr(
 
     row = await _pr_columns(migrations_pg_dsn, ids["plan"])
     assert row["pr_url"] == open_pr, "el skip pisó la URL del PR ya abierto"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_retry_never_erases_an_already_open_pr(
+    _migrated: None, migrations_pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`task_cv_14` (D-01): un reintento del auto-PR que falla (remoto caído, 422
+    no recuperado) tampoco puede borrar la URL del PR que ya está abierto. Antes
+    sólo el camino del skip la protegía; el camino principal persistía
+    `pr_url=None` encima."""
+    from workers import plan_pr
+    from workers.git_repos import BareRepoLayout, BareRepoManager, _run_git
+
+    remote_bare = tmp_path / "remote" / "backend.git"
+    seed_bare_repo(remote_bare)
+    open_pr = "https://fake.test/owner/backend/pull/7"
+    ids = await _seed(migrations_pg_dsn, str(remote_bare), pr_url=open_pr)
+    data_root = tmp_path / "local"
+    layout = BareRepoLayout(data_root=data_root, tenant_slug=_ORG_SLUG, project_slug="backend")
+    bare = BareRepoManager(layout).ensure_repo("backend", remote_url=str(remote_bare))
+    _run_git("fetch", "origin", cwd=bare)
+    _run_git("update-ref", "refs/heads/main", "refs/remotes/origin/main", cwd=bare)
+    _run_git("symbolic-ref", "HEAD", "refs/heads/main", cwd=bare)
+    monkeypatch.setattr(plan_pr, "_resolve_git_secret", lambda *_a, **_k: ("user", "tok", None))
+
+    def _boom(_title: str, _body: str) -> str:
+        raise RuntimeError("502 Bad Gateway")
+
+    monkeypatch.setattr(plan_pr, "build_pr_opener", lambda **_k: _boom)
+    settings = SimpleNamespace(
+        database_url=migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
+        data_root=str(data_root),
+    )
+
+    await plan_pr._open_plan_pr_async(
+        ids["project"], str(ids["plan"]), title="My plan", body="body", settings=settings
+    )
+
+    row = await _pr_columns(migrations_pg_dsn, ids["plan"])
+    assert row["pr_url"] == open_pr, "el reintento fallido pisó la URL del PR ya abierto"

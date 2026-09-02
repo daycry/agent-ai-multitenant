@@ -345,11 +345,11 @@ def test_deleting_one_tracked_file_is_still_allowed(tmp_path: Path) -> None:
 
 
 def test_a_subtree_inside_a_tracked_directory_is_not_blocked(tmp_path: Path) -> None:
-    """La frontera es de PRIMER NIVEL, y es deliberada.
+    """Lo que no llega en la lista no está versionado, y se puede retirar.
 
-    El contrato sólo trae entradas de primer nivel, así que de `app/Modules/Foo`
-    no se sabe si está versionado. Y ahí vive un caso legítimo —retirar entero
-    un módulo mal andamiado en este mismo run—: bloquearlo convertiría la guarda
+    El worker publica TODOS los directorios versionados; `app/Modules/Foo` no
+    está entre ellos porque lo creó este mismo run. Ahí vive un caso legítimo
+    —retirar entero un módulo mal andamiado—: bloquearlo convertiría la guarda
     en un estorbo, que es como el agente aprende a rodearla (misma lección que
     `.gitignore` frente a `.git`).
     """
@@ -438,6 +438,150 @@ def test_the_root_and_git_guards_survive_the_tracked_one(tmp_path: Path) -> None
     git = files.file_delete({"path": ".git", "recursive": True})
     assert git.ok is False and ".git" in (git.error or "")
     assert (tmp_path / ".git").exists()
+
+
+# ---------------------------------------------------------------------------
+# La guarda cubre CUALQUIER directorio versionado, no sólo el primer nivel
+# ---------------------------------------------------------------------------
+# Auditoría del 2026-09-01. La primera versión protegía sólo la raíz del árbol
+# versionado («es de primer nivel; no persigue a quien insista»). Con eso, el
+# destrozo de los 85 ficheros se reconstruye con una llamada por subdirectorio:
+# `delete_file app/Config`, `delete_file app/Controllers`… El worker publica
+# ahora TODOS los directorios versionados (`git ls-tree -r -d`), y la guarda:
+#
+#   * rechaza borrar recursivamente cualquier directorio de la lista, y
+#     cualquier directorio que CONTENGA uno de la lista;
+#   * deja mover un directorio versionado anidado (es un refactor, no una
+#     demolición), pero la protección SIGUE AL CONTENIDO: el destino entra en
+#     la lista, así que «mover a un temporal y borrar el temporal» se rechaza;
+#   * sigue rechazando mover o pisar un árbol versionado de PRIMER NIVEL (ADR
+#     0164): ésa es la forma de vaciar la raíz, y no tiene lectura de refactor.
+#
+# Lo que NO está en la lista no está versionado (lo creó este run): se borra y
+# se mueve como siempre.
+
+
+def _siembra_config(tmp_path: Path) -> Path:
+    config = tmp_path / "app" / "Config"
+    config.mkdir(parents=True)
+    (config / "App.php").write_text("<?php // config", encoding="utf-8")
+    return config
+
+
+def test_recursive_refuses_a_tracked_nested_directory(tmp_path: Path) -> None:
+    _siembra_deliverable(tmp_path)
+    config = _siembra_config(tmp_path)
+
+    res = _files_rastreadas(tmp_path, "app", "app/Config", "app/Controllers").file_delete(
+        {"path": "app/Config", "recursive": True}
+    )
+
+    assert res.ok is False, "se aceptó borrar un directorio versionado anidado"
+    assert "tracked" in (res.error or "")
+    assert (config / "App.php").exists()
+
+
+def test_recursive_refuses_a_directory_that_contains_tracked_ones(tmp_path: Path) -> None:
+    """Mover a un temporal y borrar el temporal es el mismo destrozo en dos pasos."""
+    _siembra_config(tmp_path)
+    files = _files_rastreadas(tmp_path, "app", "app/Config")
+
+    movido = files.file_move({"source": "app/Config", "destination": "tmp/Config"})
+    assert movido.ok is True, movido.error
+
+    borrado = files.file_delete({"path": "tmp", "recursive": True})
+    assert borrado.ok is False, "se borró un temporal que contenía trabajo versionado"
+    assert (tmp_path / "tmp" / "Config" / "App.php").exists()
+
+    directo = files.file_delete({"path": "tmp/Config", "recursive": True})
+    assert directo.ok is False, "la protección no siguió al directorio movido"
+
+
+def test_moving_a_tracked_nested_directory_is_a_refactor(tmp_path: Path) -> None:
+    """Renombrar `app/Config` a `app/Settings` no destruye nada: se permite."""
+    _siembra_config(tmp_path)
+    files = _files_rastreadas(tmp_path, "app", "app/Config")
+
+    res = files.file_move({"source": "app/Config", "destination": "app/Settings"})
+
+    assert res.ok is True, res.error
+    assert (tmp_path / "app" / "Settings" / "App.php").is_file()
+    # ...y el destino hereda la protección.
+    assert files.file_delete({"path": "app/Settings", "recursive": True}).ok is False
+
+
+def test_overwrite_refuses_a_tracked_nested_tree(tmp_path: Path) -> None:
+    _siembra_config(tmp_path)
+    (tmp_path / "ci4tmp" / "app" / "Config").mkdir(parents=True)
+    (tmp_path / "ci4tmp" / "app" / "Config" / "App.php").write_text(
+        "<?php // nuevo", encoding="utf-8"
+    )
+
+    res = _files_rastreadas(tmp_path, "app", "app/Config").file_move(
+        {"source": "ci4tmp/app/Config", "destination": "app/Config", "overwrite": True}
+    )
+
+    assert res.ok is False
+    assert (tmp_path / "app" / "Config" / "App.php").read_text(
+        encoding="utf-8"
+    ) == "<?php // config"
+
+
+def test_an_untracked_module_created_this_run_is_still_removable(tmp_path: Path) -> None:
+    """Lo que no está en la lista no está versionado: el caso legítimo sigue abierto."""
+    modulo = tmp_path / "app" / "Modules" / "Foo"
+    modulo.mkdir(parents=True)
+    (modulo / "Foo.php").write_text("<?php", encoding="utf-8")
+
+    res = _files_rastreadas(tmp_path, "app", "app/Config").file_delete(
+        {"path": "app/Modules/Foo", "recursive": True}
+    )
+
+    assert res.ok is True, res.error
+    assert not modulo.exists()
+
+
+def test_a_first_level_tracked_tree_still_cannot_be_moved_away(tmp_path: Path) -> None:
+    """La frontera del ADR 0164 no se relaja por cubrir más profundidad."""
+    _siembra_config(tmp_path)
+
+    res = _files_rastreadas(tmp_path, "app", "app/Config").file_move(
+        {"source": "app", "destination": "tmp/app"}
+    )
+
+    assert res.ok is False
+    assert (tmp_path / "app" / "Config" / "App.php").exists()
+
+
+# ---------------------------------------------------------------------------
+# El descarte da permiso de escritura y reintenta antes de dejar un residuo
+# ---------------------------------------------------------------------------
+# Auditoría del 2026-09-01. Un residuo `.agent-runtime-tmp.*` que no se pudo
+# descartar tenía un coste que nadie había medido: el `git clean -fdx` de la
+# provisión siguiente intenta borrarlo, no puede, y sale con rc=1 — la tarea
+# queda `workspace_unavailable` en cada reintento. Los dos motivos por los que
+# `rmtree` no puede (fichero de sólo lectura; directorio sin permiso de
+# escritura) se resuelven dando permiso y repitiendo.
+
+
+def test_recursive_delete_removes_a_read_only_file_without_residue(tmp_path: Path) -> None:
+    (tmp_path / "build" / "pkg").mkdir(parents=True)
+    fichero = tmp_path / "build" / "pkg" / "a.o"
+    fichero.write_bytes(b"\x00")
+    os.chmod(fichero, stat.S_IREAD)
+    if os.name != "nt":
+        os.chmod(tmp_path / "build" / "pkg", stat.S_IRUSR | stat.S_IXUSR)
+
+    res = _files(tmp_path).file_delete({"path": "build", "recursive": True})
+
+    assert res.ok is True, res.error
+    assert not (tmp_path / "build").exists()
+    residuos = [
+        hijo.name for hijo in tmp_path.iterdir() if hijo.name.startswith(".agent-runtime-tmp.")
+    ]
+    assert residuos == [], (
+        f"quedó un residuo que la provisión siguiente no podrá barrer: {residuos}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1078,11 +1222,10 @@ def test_renaming_one_tracked_file_is_still_allowed(tmp_path: Path) -> None:
 
 
 def test_a_subtree_inside_a_tracked_directory_can_be_moved(tmp_path: Path) -> None:
-    """La frontera de PRIMER NIVEL es deliberada, igual que en `delete_file`.
+    """Reorganizar `app/Modules/Foo` —creado en este run— es trabajo normal.
 
-    Reorganizar `app/Modules/Foo` es trabajo normal dentro del run; bloquearlo
-    convertiría la guarda en un estorbo, que es como el agente aprende a
-    rodearla.
+    Bloquearlo convertiría la guarda en un estorbo, que es como el agente
+    aprende a rodearla.
     """
     modulo = tmp_path / "app" / "Modules" / "Foo"
     modulo.mkdir(parents=True)
@@ -1962,7 +2105,7 @@ def test_one_ignore_line_covers_what_both_tools_can_leave_behind(
     Cuando el descarte final falla —en Windows, ficheros de sólo lectura o
     abiertos por otro proceso—, `move_file --overwrite` y
     `delete_file --recursive` dejan cada una un hermano oculto. El cierre de
-    tarea hace `git add -A` (`apps/workers/src/workers/plan_git.py:473`) y ese
+    tarea hace `git add -A` (`workers.plan_git.commit_task`) y ese
     nombre no está en ningún `.gitignore`, así que se commitearía. Un patrón por
     tool obligaría a dos líneas y a acordarse de las dos: esto fija que basta
     con `.agent-runtime-tmp.*`.

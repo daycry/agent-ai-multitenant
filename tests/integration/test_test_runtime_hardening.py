@@ -21,6 +21,7 @@ with a mocked client, like ``test_hardened_run_has_no_bind_mounts_at_all``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -189,3 +190,59 @@ def test_every_aux_sidecar_is_hardened() -> None:
         assert "no-new-privileges:true" in c.kwargs["security_opt"]
         assert c.kwargs["mem_limit"]
         assert isinstance(c.kwargs["pids_limit"], int)
+
+
+def test_aux_kwargs_grant_exactly_the_init_caps_the_official_images_need() -> None:
+    """Auditoría 2026-09-01 (B-02): `cap_drop ALL` sin `cap_add` ni `user` es la
+    combinación que `gotchas/docker-cap-drop-all-breaks-official-images.md`
+    documenta como crash-loop de postgres/redis/mysql (gosu/su-exec necesitan
+    setuid/setgid para bajar de root; el entrypoint necesita chown del datadir).
+    El compose principal ya se lo concede a las MISMAS imágenes como
+    `x-infra-caps`; los sidecars del test-runtime no, y el único test era un
+    MagicMock. Se fija contra el compose para que las dos listas no diverjan."""
+    import yaml
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker" / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    infra_caps = compose["x-infra-caps"]
+
+    kwargs = build_aux_run_kwargs(Settings(), DEFAULT_POSTGRES, "net-x")
+
+    assert kwargs["cap_drop"] == ["ALL"], "el cap_drop ALL sigue siendo la base"
+    assert sorted(kwargs.get("cap_add", [])) == sorted(infra_caps), (
+        f"los sidecars reciben {kwargs.get('cap_add')} y el compose concede {infra_caps} "
+        "a las mismas imágenes: sin CHOWN/SETUID/SETGID postgres y redis no arrancan"
+    )
+
+
+def test_cleanup_removes_the_anonymous_volumes_of_the_sidecars() -> None:
+    """Auditoría 2026-09-01 (B-02, efecto secundario): postgres/mysql/redis declaran
+    `VOLUME`, así que cada sidecar deja un volumen anónimo si `remove` no lleva
+    `v=True` — y el socket-proxy tiene `VOLUMES=0`, así que desde el worker no
+    se pueden podar después."""
+    from workers.test_runtime import TestRuntimeRunner
+
+    class _Contenedor:
+        def __init__(self) -> None:
+            self.remove_kwargs: dict[str, Any] | None = None
+
+        def remove(self, **kwargs: Any) -> None:
+            self.remove_kwargs = dict(kwargs)
+
+    class _Red:
+        def remove(self) -> None:
+            pass
+
+    runner = TestRuntimeRunner.__new__(TestRuntimeRunner)
+    runner._detach_proxy = lambda *_a, **_k: None  # type: ignore[method-assign]
+    principal, sidecar = _Contenedor(), _Contenedor()
+
+    runner._cleanup(principal, [sidecar], _Red())
+
+    for c in (principal, sidecar):
+        assert c.remove_kwargs is not None and c.remove_kwargs.get("v") is True, (
+            f"remove() sin v=True deja el volumen anónimo del sidecar: {c.remove_kwargs}"
+        )

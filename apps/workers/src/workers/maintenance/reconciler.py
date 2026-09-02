@@ -162,6 +162,62 @@ def _orphan_claim_needs_revert(
     return started_at <= now - min_age
 
 
+def _execution_belongs_to_claim(
+    execution_created_at: datetime, *, started_at: datetime | None
+) -> bool:
+    """True si la ejecución se creó EN o DESPUÉS de la reclamación actual de la tarea.
+
+    Auditoría 2026-09-01 (A-05). El caso (a) tomaba la ÚLTIMA ejecución de la
+    tarea sin preguntarse de qué reclamación era. Una tarea re-reclamada
+    (rechazo → backlog → ready → in_progress) conserva las filas de la vuelta
+    anterior; si el run nuevo aún no ha creado la suya —cola de Celery con
+    retraso, worker reiniciado— la «última» es la vieja, terminal y asentada, y
+    el reconciler transicionaba la tarea con el veredicto de un run ajeno
+    (`done` viejo → `in_review` sin trabajo nuevo; `failed` viejo → `blocked`).
+
+    La regla es una sola y vive aquí para que (a) y (a2) la lean igual: el
+    dispatch fija `started_at` con el `now()` de BD al reclamar y el worker crea
+    la fila de `executions` después, con el mismo reloj, así que una fila
+    anterior a `started_at` es, por construcción, de otra reclamación. La
+    igualdad cuenta como «después». Sin `started_at` no hay con qué comparar y
+    se conserva el comportamiento previo (toda ejecución cuenta)."""
+    if started_at is None:
+        return True
+    return execution_created_at >= started_at
+
+
+_RECONCILE_PLAN_PR_MIN_AGE = timedelta(minutes=10)
+_RECONCILE_PLAN_PR_MAX_AGE = timedelta(days=7)
+
+
+def _plan_needs_pr_retry(
+    *,
+    status: str,
+    pr_url: str | None,
+    pr_error: str | None,
+    updated_at: datetime | None,
+    now: datetime,
+    min_age: timedelta,
+    max_age: timedelta,
+) -> bool:
+    """True cuando un plan `completed` sigue sin resultado de auto-PR y hay que
+    reencolar ``workers.open_plan_pr`` (caso e, `task_cv_14`).
+
+    Auditoría 2026-09-01 (D-01): el auto-PR se encolaba UNA vez al validar el plan
+    y nadie volvía a mirar. Si el broker no estaba, o el worker murió con la task
+    en la mano, el plan quedaba `completed` sin `pr_url` ni `pr_error` para
+    siempre, y como el cierre no se repite, nadie lo reintentaba.
+
+    Decisión pura. Tres cosas que NO se reencolan: un plan con URL (el PR existe),
+    un plan con `pr_error` (el fallo ya es visible en la ficha —P6— y lo reintenta
+    el operador; reencolar a ciegas cada barrido convertiría un remoto caído en
+    una tormenta) y un plan más viejo que ``max_age`` (un plan cerrado hace meses
+    sin PR es un hecho histórico, no un encolado perdido)."""
+    if status != "completed" or pr_url or pr_error or updated_at is None:
+        return False
+    return now - max_age <= updated_at <= now - min_age
+
+
 def _orphan_review_needs_reannounce(
     *,
     reviewer_is_ai: bool,
@@ -223,7 +279,7 @@ async def _revert_orphan_claim(
     cruda de ``.status`` — lo vigila ``test_state_mutation_guard``."""
     from api_server.db.domain import Execution, Task, TaskStatus
     from api_server.task_state_machine import transition_task_status
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     task = (
         await db.execute(select(Task).where(Task.id == task_id).with_for_update())
@@ -238,19 +294,27 @@ async def _revert_orphan_claim(
     # filtro SQL de candidatos usa el de (a), así que aquí se re-filtra.
     if not _orphan_claim_needs_revert(task.started_at, now=now, min_age=min_age):
         return None
-    # Re-check bajo el lock: si mientras tanto apareció una ejecución, el run está
-    # vivo y esta tarea NO es una reclamación huérfana.
-    live = (
+    # Re-check bajo el lock: si mientras tanto apareció una ejecución DE ESTA
+    # reclamación, el run está vivo y esta tarea NO es una reclamación huérfana.
+    # Las filas de reclamaciones anteriores no cuentan (A-05): la misma regla
+    # que aplica el caso (a), `_execution_belongs_to_claim`.
+    latest_created_at = (
         await db.execute(
-            select(func.count()).select_from(Execution).where(Execution.task_id == task_id)
+            select(Execution.created_at)
+            .where(Execution.task_id == task_id)
+            .order_by(Execution.created_at.desc())
+            .limit(1)
         )
-    ).scalar_one()
-    if live:
+    ).scalar_one_or_none()
+    if latest_created_at is not None and _execution_belongs_to_claim(
+        latest_created_at, started_at=task.started_at
+    ):
         return None
     old = task.status
     transition_task_status(task, TaskStatus.READY.value)
     task.assigned_agent_id = None
     task.started_at = None
+    task.claim_id = None  # `task_cv_13`: el mensaje de esta reclamación ya no es vigente
     task.updated_at = now
     await db.flush()
     return (task, old, TaskStatus.READY.value)
@@ -289,18 +353,18 @@ async def _reconcile_stuck_tasks(
 
     cutoff = now - min_age
     async with sessionmaker() as db:
-        candidate_ids = list(
+        candidates = list(
             (
                 await db.execute(
-                    select(Task.id).where(
+                    select(Task.id, Task.started_at).where(
                         Task.status == TaskStatus.IN_PROGRESS.value,
                         Task.started_at < cutoff,
                     )
                 )
-            ).scalars()
+            ).all()
         )
     reconciled = 0
-    for task_id in candidate_ids:
+    for task_id, started_at in candidates:
         event: tuple[Any, str, str] | None = None
         async with sessionmaker() as db, db.begin():
             latest = (
@@ -315,11 +379,15 @@ async def _reconcile_stuck_tasks(
                 .scalars()
                 .first()
             )
-            if latest is None:
+            if latest is None or not _execution_belongs_to_claim(
+                latest.created_at, started_at=started_at
+            ):
                 # (a2) V-1: reclamación huérfana. Se relee la tarea DENTRO de la
                 # transacción y se re-verifica `in_progress` + ausencia de run,
                 # para no pisar un dispatch que haya ganado la carrera entre el
-                # SELECT de candidatos y este punto.
+                # SELECT de candidatos y este punto. Una ejecución ANTERIOR a la
+                # reclamación (A-05) es de otra vuelta de la tarea: no es el run
+                # de este claim y no puede decidir su destino.
                 event = await _revert_orphan_claim(
                     db, task_id, now=now, min_age=_RECONCILE_ORPHAN_CLAIM_MIN_AGE
                 )
@@ -477,6 +545,71 @@ async def _reconcile_orphan_reviews(
         )
         reannounced += 1
     return reannounced
+
+
+async def _reconcile_plans_without_pr(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+    min_age: timedelta = _RECONCILE_PLAN_PR_MIN_AGE,
+    max_age: timedelta = _RECONCILE_PLAN_PR_MAX_AGE,
+    enqueue: Any | None = None,
+) -> int:
+    """Caso (e), `task_cv_14`: reencola el auto-PR de los planes `completed` que
+    siguen sin `pr_url` ni `pr_error` (ver :func:`_plan_needs_pr_retry`).
+
+    Pide el MISMO PR que el cierre por veredicto (``auto_pr_request``, fuente
+    única) por la misma vía (``enqueue_open_plan_pr``). Un reencolado que falla
+    (broker caído) no cuenta y se vuelve a intentar en el siguiente barrido; uno
+    cuya task falle deja ahora `pr_error` (``_persist_task_failure``), así que
+    no puede repetirse indefinidamente. Devuelve cuántos se reencolaron."""
+    from api_server.celery_client import auto_pr_request, enqueue_open_plan_pr
+    from api_server.db.domain import Plan, PlanStatus
+    from sqlalchemy import select
+
+    send = enqueue if enqueue is not None else enqueue_open_plan_pr
+    async with sessionmaker() as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(
+                        Plan.id,
+                        Plan.project_id,
+                        Plan.title,
+                        Plan.status,
+                        Plan.pr_url,
+                        Plan.pr_error,
+                        Plan.updated_at,
+                    ).where(
+                        Plan.status == PlanStatus.COMPLETED.value,
+                        Plan.pr_url.is_(None),
+                        Plan.pr_error.is_(None),
+                        Plan.deleted_at.is_(None),
+                        Plan.updated_at <= now - min_age,
+                        Plan.updated_at >= now - max_age,
+                    )
+                )
+            ).all()
+        )
+    retried = 0
+    for row in rows:
+        if not _plan_needs_pr_retry(
+            status=str(row.status),
+            pr_url=row.pr_url,
+            pr_error=row.pr_error,
+            updated_at=row.updated_at,
+            now=now,
+            min_age=min_age,
+            max_age=max_age,
+        ):
+            continue
+        title, body = auto_pr_request(row.id, row.title)
+        if await send(row.project_id, row.id, title=title, body=body):
+            _log.warning(
+                "maintenance.reconcile_pipeline_state.plan_pr_reenqueued", plan_id=str(row.id)
+            )
+            retried += 1
+    return retried
 
 
 async def _reconcile_complete_plans(
@@ -859,6 +992,7 @@ async def _reconcile_pipeline_state_async(
         "completed_plans": 0,
         "unblocked_plans": 0,
         "pushed_worktrees": 0,
+        "retried_plan_prs": 0,
         "tenant_ghost_children": 0,
     }
     try:
@@ -892,6 +1026,10 @@ async def _reconcile_pipeline_state_async(
             _log.warning(
                 "maintenance.reconcile_pipeline_state.completed_plans_error", error=str(exc)
             )
+        try:
+            result["retried_plan_prs"] = await _reconcile_plans_without_pr(sessionmaker, now=moment)
+        except Exception as exc:
+            _log.warning("maintenance.reconcile_pipeline_state.plan_prs_error", error=str(exc))
         try:
             result["pushed_worktrees"] = await _reconcile_unpushed_worktrees(
                 settings, sessionmaker, redis_client, now=moment, min_age=stuck_task_min_age

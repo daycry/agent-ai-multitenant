@@ -62,11 +62,23 @@ def _uncommitted_diff(worktree_path: str) -> str:
 
 
 def _task_commit_range(worktree_path: str, task_id: str) -> str:
-    """El diff de los commits que llevan el trailer `Task-Id: <task_id>`."""
+    """El diff de los commits que llevan el trailer `Task-Id: <task_id>`, y SÓLO ésos.
+
+    **Por commit, no por rango** (auditoría 2026-09-01, C-02). La primera versión
+    hacía `git diff {oldest}^..{newest}`, y ese rango arrastra lo que hubiera
+    ENTRE los dos: tras un rechazo, el worktree se sincroniza al HEAD de la rama
+    del plan —que ya lleva lo que empujaron las tareas hermanas— y el segundo
+    intento se rebasea encima, así que el reviewer juzgaba commits ajenos como si
+    fueran de la tarea. Reproducido con git real. Cada commit de la tarea se
+    vuelca contra su propio padre (`git show`), en orden cronológico, con una
+    cabecera que dice de qué commit es cada trozo: el reviewer ve la evolución
+    de la tarea y nada más.
+    """
     from workers.git_repos import _run_git
 
     # `--format=%H` en orden cronológico inverso (el de `git log`): el primero
-    # de la lista es el MÁS RECIENTE.
+    # de la lista es el MÁS RECIENTE. Se invierte para presentar la historia de
+    # la tarea en el orden en que ocurrió.
     raw = _run_git(
         "log",
         "--format=%H",
@@ -77,9 +89,25 @@ def _task_commit_range(worktree_path: str, task_id: str) -> str:
     shas = [line.strip() for line in str(raw or "").splitlines() if line.strip()]
     if not shas:
         return ""
-    newest, oldest = shas[0], shas[-1]
-    out = _run_git("diff", "--no-color", f"{oldest}^..{newest}", cwd=Path(worktree_path))
-    return str(out or "").strip()
+    trozos: list[str] = []
+    for sha in reversed(shas):
+        # `--format=` deja sólo el diff; `-m --first-parent` para que un commit de
+        # merge (si algún día lo hubiera) se compare contra la línea de la tarea.
+        cuerpo = str(
+            _run_git(
+                "show",
+                "--no-color",
+                "--format=",
+                "-m",
+                "--first-parent",
+                sha,
+                cwd=Path(worktree_path),
+            )
+            or ""
+        ).strip()
+        if cuerpo:
+            trozos.append(f"# commit {sha[:12]}\n{cuerpo}")
+    return "\n\n".join(trozos)
 
 
 def compute_task_review_diff(worktree_path: str | None, task_id: str) -> str | None:

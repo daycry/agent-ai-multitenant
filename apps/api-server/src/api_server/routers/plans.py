@@ -2092,6 +2092,10 @@ _REVIEW_ESCALATION_ABORT_CODES: tuple[str, ...] = (
     # human to resolve it — surface it on the panel even when the run's status is
     # not needs_human_review (P7, audit 2026-07-03).
     "rebase_conflict",
+    # `task_cv_11` (auditoría 2026-09-01, A-06/C-04): cualquier fallo real de
+    # commit/push deja el entregable fuera de la rama del plan y bloquea la
+    # tarea; tiene que verse en el panel igual que el conflicto de rebase.
+    "commit_failed",
 )
 _ESCALATED_EXECUTION_STATUS = "needs_human_review"
 

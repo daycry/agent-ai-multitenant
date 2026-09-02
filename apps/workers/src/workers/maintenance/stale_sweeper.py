@@ -33,6 +33,211 @@ _STALE_EXECUTION_AFTER = timedelta(hours=7)
 _ORPHAN_CONTAINER_GRACE = timedelta(minutes=5)
 
 
+def _is_review_run(
+    *, execution_agent_id: Any, task_reviewer_agent_id: Any, task_status: str
+) -> bool:
+    """¿Este run era el REVIEW de la tarea? (`task_cv_12`)
+
+    La fila de `executions` no lleva marca de review (viaja en el
+    `ExecutionRequest`, que murió con el worker), así que se infiere igual que en
+    `orchestrator.dispatch` (A-05, `task_cv_06`): la corrió el reviewer de la
+    tarea y la tarea está `in_review`. Un run recuperado de un review se aplica
+    como veredicto; el de un implementador, como transición normal."""
+    return (
+        task_reviewer_agent_id is not None
+        and execution_agent_id == task_reviewer_agent_id
+        and task_status == "in_review"
+    )
+
+
+def _recover_result_from_exited_logs(logs: str, *, exit_code: int | None) -> Any | None:
+    """El resultado REAL que dejó un contenedor `exited` en sus logs, o ``None`` si
+    no hay línea terminal (`task_cv_12`, A-04).
+
+    Reutiliza el mismo parser que el camino vivo (F16, `run_result`): la última
+    `execution.finished` manda —el runtime la escribe una sola vez, al final—, y
+    el código de salida NO la veta: un run que ya emitió su resultado y después
+    murió con 137 (reaper, OOM del host) es un run terminado. Una
+    `execution.error` es un resultado `failed` con su motivo, no un «worker
+    loss». Sin ninguna de las dos no hay nada que recuperar: el sweeper sella."""
+    from workers.run_result import _assemble_result, _scan_logs_for_terminal
+
+    if not logs:
+        return None
+    finished, error = _scan_logs_for_terminal(logs)
+    if finished is not None:
+        return _assemble_result(finished, [], timed_out=False, exit_code=0, runtime_error=None)
+    if error is not None:
+        return _assemble_result(
+            None,
+            [],
+            timed_out=False,
+            exit_code=exit_code if exit_code is not None else 1,
+            runtime_error=error,
+        )
+    return None
+
+
+async def _finalize_from_exited_container(
+    db: Any, runner: Any, execution: Any, container_id: str, *, now: datetime
+) -> tuple[str, str] | None:
+    """Finaliza una fila `running` cuyo contenedor está `exited` (`task_cv_12`).
+
+    Devuelve ``("recovered", status)`` si los logs traían el resultado real,
+    ``("sealed", "failed")`` si no había línea terminal y se selló ya, o
+    ``None`` si el contenedor desapareció entre el listado y la lectura (lo
+    trata la lógica de huérfanos de siempre). Todo dentro de la txn del caller."""
+    from api_server.db.domain import ExecutionStatus, Task
+    from api_server.db.execution_repo import finalize_execution, seal_terminal_execution
+    from api_server.db.task_audit_repo import append_audit_event
+
+    from workers.execution import _apply_review_verdict, transition_task_after_run
+    from workers.run_result import _RuntimeResult
+
+    read = runner.read_exited_container(container_id)
+    if read is None:
+        return None
+    logs, exit_code = read
+    result = _recover_result_from_exited_logs(logs, exit_code=exit_code)
+    if result is None:
+        if not seal_terminal_execution(
+            execution,
+            status=ExecutionStatus.FAILED.value,
+            abort_code="stale_after_worker_loss",
+            now=now,
+        ):
+            return None
+        await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
+        await append_audit_event(
+            db,
+            tenant_id=execution.tenant_id,
+            task_id=execution.task_id,
+            kind="execution_sealed_by_sweeper",
+            actor="system:stale_sweeper",
+            payload={
+                "execution_id": str(execution.id),
+                "abort_code": "stale_after_worker_loss",
+                "reason": "container_exited_without_terminal",
+                "exit_code": exit_code,
+            },
+        )
+        return ("sealed", ExecutionStatus.FAILED.value)
+    if result.status == "awaiting_human_approval":
+        # La solicitud de aprobación se crea con la política EFECTIVA que llevaba
+        # el worker muerto (A-01) y no se puede reconstruir aquí: se falla cerrado
+        # con nombre, como hace `_seal_invalid_park`, y el operador relanza.
+        result = _RuntimeResult(
+            status="failed",
+            abort_code="approval_lost_with_worker",
+            output=(result.output or "")
+            + "\n\n[the run parked on a sensitive action and its worker died before"
+            " the approval request was created; re-run the task]",
+            iterations=result.iterations,
+            steps=result.steps,
+            usage=result.usage,
+            finish_status=result.finish_status,
+        )
+    task = await db.get(Task, execution.task_id)
+    review = task is not None and _is_review_run(
+        execution_agent_id=execution.agent_id,
+        task_reviewer_agent_id=task.reviewer_agent_id,
+        task_status=str(task.status),
+    )
+    if await finalize_execution(db, execution.id, result=result) is None:
+        return None
+    if review:
+        await _apply_review_verdict(db, execution.task_id, execution.tenant_id, result)
+    else:
+        await transition_task_after_run(db, execution.task_id, result.status)
+    await append_audit_event(
+        db,
+        tenant_id=execution.tenant_id,
+        task_id=execution.task_id,
+        kind="execution_recovered_by_sweeper",
+        actor="system:stale_sweeper",
+        payload={
+            "execution_id": str(execution.id),
+            "status": result.status,
+            "abort_code": result.abort_code,
+            "reason": "recovered_from_container_logs",
+            "exit_code": exit_code,
+            "review": review,
+        },
+    )
+    _log.warning(
+        "maintenance.sweep_stale_executions.recovered_from_logs",
+        execution_id=str(execution.id),
+        status=result.status,
+        review=review,
+    )
+    return ("recovered", str(result.status))
+
+
+async def _commit_recovered_worktree(
+    settings: Settings,
+    sessionmaker: Any,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    execution_id: UUID,
+    status: str,
+) -> None:
+    """La mitad del post-proceso del worker que un run recuperado también
+    necesita (`task_cv_12`): el commit + push del worktree a la rama del plan.
+    Sin él, la tarea llega a `in_review` con el trabajo sólo en el worktree y el
+    siguiente `sync_to_head` lo borra (A-06). Best-effort; un fallo real de
+    commit bloquea la tarea igual que en el camino vivo (`task_cv_11`)."""
+    from api_server.db.domain import Plan, Project, Task
+    from api_server.db.models import Organization
+
+    from workers.execution import _commit_and_push_worktree, _mark_commit_failed
+    from workers.plan_git import worktree_layout
+
+    try:
+        async with sessionmaker() as db:
+            task = await db.get(Task, task_id)
+            if task is None or task.plan_id is None:
+                return
+            plan = await db.get(Plan, task.plan_id)
+            project = await db.get(Project, task.project_id)
+            org = await db.get(Organization, tenant_id)
+        if not (plan and plan.slug and project and project.slug and org and org.slug):
+            return
+        host_path = worktree_layout(
+            data_root=settings.data_root, tenant_slug=org.slug, project_slug=project.slug
+        ).worktree_path(str(task_id))
+        if not host_path.is_dir():
+            return
+        abort = await _commit_and_push_worktree(
+            settings,
+            host_path=str(host_path),
+            tenant_slug=org.slug,
+            project_slug=project.slug,
+            project_id=str(project.id),
+            plan_id=str(plan.id),
+            plan_slug=plan.slug,
+            task_id=str(task_id),
+            execution_id=str(execution_id),
+            escalated=status == "needs_human_review",
+        )
+        if abort:
+            code, conflict_context = abort
+            await _mark_commit_failed(
+                sessionmaker,
+                execution_id,
+                code,
+                conflict_context=conflict_context,
+                task_id=task_id,
+                tenant_id=tenant_id,
+            )
+    except Exception as exc:  # pragma: no cover - best-effort
+        _log.warning(
+            "maintenance.sweep_stale_executions.recovered_commit_failed",
+            execution_id=str(execution_id),
+            error=str(exc)[:200],
+        )
+
+
 @app.task(name="workers.sweep_stale_executions")  # type: ignore[untyped-decorator]
 def sweep_stale_executions() -> dict[str, Any]:
     """Close zombie executions + reap their orphan containers.
@@ -143,7 +348,7 @@ async def _remove_exited_terminal_containers(engine: Any, runner: Any) -> int:
     return removed
 
 
-async def _sweep_stale_executions_async(
+async def _sweep_stale_executions_async(  # noqa: PLR0912, PLR0915 - barrido + recuperación de exited
     settings: Settings,
     *,
     runner: Any = None,
@@ -167,6 +372,10 @@ async def _sweep_stale_executions_async(
     engine = worker_engine(settings)
     swept = 0
     reaped = 0
+    recovered = 0
+    # (task_id, tenant_id, execution_id, status) de los runs recuperados con
+    # entregable: su commit del worktree va DESPUÉS de la txn, como en el worker.
+    post_commits: list[tuple[UUID, UUID, UUID, str]] = []
     containers_removed = 0
     released = 0
     # (task_id, run-lock token) of every row this pass seals — see
@@ -181,6 +390,14 @@ async def _sweep_stale_executions_async(
         alive_ids: set[str] | None = None
         if hasattr(runner, "list_managed_execution_ids"):
             alive_ids = runner.list_managed_execution_ids()
+        # `task_cv_12` (A-04): contenedores gestionados YA TERMINADOS, por
+        # execution-id. Una fila `running` con contenedor `exited` no es ni viva
+        # ni huérfana: su resultado está en los logs del contenedor.
+        exited_by_exec: dict[str, str] = {}
+        if hasattr(runner, "list_exited_managed") and hasattr(runner, "read_exited_container"):
+            for container_id, execution_id in runner.list_exited_managed():
+                if execution_id:
+                    exited_by_exec[execution_id] = container_id
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db, db.begin():
             candidates = list(
@@ -195,6 +412,23 @@ async def _sweep_stale_executions_async(
             )
             stale_ids = []
             for execution in candidates:
+                exited_container = exited_by_exec.get(str(execution.id))
+                if exited_container is not None:
+                    outcome = await _finalize_from_exited_container(
+                        db, runner, execution, exited_container, now=moment
+                    )
+                    if outcome is not None:
+                        kind, status = outcome
+                        sealed_runs.append((str(execution.task_id), execution.celery_task_id))
+                        if kind == "recovered":
+                            recovered += 1
+                            if status in ("done", "needs_human_review"):
+                                post_commits.append(
+                                    (execution.task_id, execution.tenant_id, execution.id, status)
+                                )
+                        else:
+                            swept += 1
+                        continue
                 # El SELECT ya exige started_at < orphan_cutoff (no-NULL); el
                 # narrow explícito lo hace visible para mypy y a prueba de refactors.
                 stale_by_age = execution.started_at is not None and execution.started_at < cutoff
@@ -243,6 +477,19 @@ async def _sweep_stale_executions_async(
                 swept += 1
         # Reap lingering containers OUTSIDE the txn — Docker I/O must never hold
         # the DB transaction open. Best-effort per execution.
+        for task_id, tenant_id, execution_id_uuid, status in post_commits:
+            await _commit_recovered_worktree(
+                settings,
+                sessionmaker,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                execution_id=execution_id_uuid,
+                status=status,
+            )
+            with contextlib.suppress(Exception):
+                from workers.memorizer import trigger_memorize
+
+                trigger_memorize(execution_id_uuid, status)
         for execution_id in stale_ids:
             with contextlib.suppress(Exception):
                 reaped += runner.kill_by_label(execution_id)
@@ -254,6 +501,7 @@ async def _sweep_stale_executions_async(
         _log.warning("maintenance.sweep_stale_executions.error", error=str(exc))
         return {
             "swept": swept,
+            "recovered": recovered,
             "reaped": reaped,
             "containers_removed": containers_removed,
             "run_locks_released": released,
@@ -265,12 +513,14 @@ async def _sweep_stale_executions_async(
     _log.info(
         "maintenance.sweep_stale_executions.done",
         swept=swept,
+        recovered=recovered,
         reaped=reaped,
         containers_removed=containers_removed,
         run_locks_released=released,
     )
     return {
         "swept": swept,
+        "recovered": recovered,
         "reaped": reaped,
         "containers_removed": containers_removed,
         "run_locks_released": released,

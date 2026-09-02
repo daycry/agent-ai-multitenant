@@ -644,3 +644,42 @@ def test_empty_apparmor_setting_relies_on_docker_default() -> None:
     opts = kwargs["security_opt"]
     assert "no-new-privileges:true" in opts
     assert not any(o.startswith("apparmor=") for o in opts)
+
+
+# ---------------------------------------------------------------------------
+# Auditoría 2026-09-01 (B-03): el perfil estricto daba `x` sólo a las raíces
+# FHS (/usr, /bin, /sbin, /lib, /lib64) más /workspace y /home/agent. Los
+# toolchains de java-maven / java-gradle viven en /opt (JAVA_HOME de
+# eclipse-temurin, /opt/gradle/lib) y Chromium de las imágenes Playwright en
+# /ms-playwright: bajo el perfil que pina el instalador, `java`, `gradle` y
+# `chrome` morían con EACCES al `execve`, y sólo en producción Linux.
+# ---------------------------------------------------------------------------
+
+#: Raíz de ejecución → plantillas que ejecutan desde ella. Se mantiene a mano
+#: porque las rutas las fijan las imágenes BASE, no nuestros Dockerfiles.
+TOOLCHAIN_EXEC_ROOTS: dict[str, tuple[str, ...]] = {
+    "/opt": ("java-maven", "java-gradle"),
+    "/ms-playwright": ("node-playwright", "browser-runtime"),
+}
+
+
+def _grants_exec_under(profile_text: str, root: str) -> bool:
+    pattern = re.compile(rf"^\s*{re.escape(root)}/\*\*\s+[rwkl]*ix,\s*$", re.M)
+    return pattern.search(profile_text) is not None
+
+
+@pytest.mark.parametrize("root", sorted(TOOLCHAIN_EXEC_ROOTS))
+def test_the_strict_profile_lets_every_toolchain_root_execute(root: str) -> None:
+    text = _read(AGENT_PROFILE)
+    assert _grants_exec_under(text, root), (
+        f"{AGENT_PROFILE.name} no da `ix` bajo {root}/**: las plantillas "
+        f"{TOOLCHAIN_EXEC_ROOTS[root]} no pueden ejecutar su toolchain con el perfil cargado"
+    )
+
+
+def test_the_exec_roots_inventory_matches_the_images_that_need_them() -> None:
+    """Si una plantilla nueva ejecuta desde otra raíz, hay que declararla aquí."""
+    dockerfiles = APPARMOR_DIR.parent / "agent-runtimes"
+    for templates in TOOLCHAIN_EXEC_ROOTS.values():
+        for template in templates:
+            assert (dockerfiles / template / "Dockerfile").is_file(), template

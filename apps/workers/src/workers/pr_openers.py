@@ -46,17 +46,51 @@ def parse_remote(remote_url: str) -> tuple[str, str, str]:
     return host, "/".join(parts[:-1]), parts[-1]
 
 
+# Auditoría 2026-09-01 (D-01, `task_cv_14`): «ya existe un PR para esa rama» no
+# es un fallo, es la URL que buscábamos. El auto-PR se reintenta (re-veredicto,
+# reencolado del reconciler) y el proveedor contesta 422 (GitHub) / 409 (GitLab);
+# tratarlo como error dejaba el plan con `pr_error` y sin URL mientras el PR que
+# se le debía estaba abierto. Se localiza el PR abierto de la rama y se devuelve.
+_ALREADY_EXISTS = "already exists"
+
+
+def _first_url(items: Any, key: str) -> str:
+    for item in items or []:
+        url = str((item or {}).get(key) or "")
+        if url:
+            return url
+    return ""
+
+
+def _github_existing_pr(
+    http: httpx.Client, api: str, owner: str, repo: str, head: str, headers: dict[str, str]
+) -> str:
+    lookup = http.get(
+        f"{api}/repos/{owner}/{repo}/pulls",
+        headers=headers,
+        params={"head": f"{owner}:{head}", "state": "open"},
+    )
+    if lookup.status_code >= 300:
+        return ""
+    return _first_url(lookup.json(), "html_url")
+
+
 def _github_pr(http: httpx.Client, host: str, owner: str, repo: str, token: str, **pr: str) -> str:
     api = "https://api.github.com" if host == "github.com" else f"https://{host}/api/v3"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     resp = http.post(
         f"{api}/repos/{owner}/{repo}/pulls",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=headers,
         json={"title": pr["title"], "head": pr["head"], "base": pr["base"], "body": pr["body"]},
     )
+    if resp.status_code == 422 and _ALREADY_EXISTS in resp.text.lower():
+        existing = _github_existing_pr(http, api, owner, repo, pr["head"], headers)
+        if existing:
+            return existing
     if resp.status_code >= 300:
         raise PrError(f"GitHub PR falló ({resp.status_code}): {resp.text[:300]}")
     return str(resp.json().get("html_url", ""))
@@ -74,6 +108,15 @@ def _gitlab_mr(http: httpx.Client, host: str, owner: str, repo: str, token: str,
             "description": pr["body"],
         },
     )
+    if resp.status_code == 409 and _ALREADY_EXISTS in resp.text.lower():
+        lookup = http.get(
+            f"https://{host}/api/v4/projects/{project}/merge_requests",
+            headers={"PRIVATE-TOKEN": token},
+            params={"source_branch": pr["head"], "state": "opened"},
+        )
+        existing = _first_url(lookup.json(), "web_url") if lookup.status_code < 300 else ""
+        if existing:
+            return existing
     if resp.status_code >= 300:
         raise PrError(f"GitLab MR falló ({resp.status_code}): {resp.text[:300]}")
     return str(resp.json().get("web_url", ""))

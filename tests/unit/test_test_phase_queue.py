@@ -215,3 +215,45 @@ async def test_run_task_tests_no_longer_runs_the_runtime_in_process(
 
     assert len(dispatched) == 1
     assert dispatched[0]["worktree_host_path"] == "/data/wt/t1"
+
+
+# ---------------------------------------------------------------------------
+# Auditoría 2026-09-01 (A-02): el `get()` corría DENTRO de un task prefork
+# ---------------------------------------------------------------------------
+# Celery prohíbe `AsyncResult.get()` dentro de un task («Never call result.get()
+# within a task!»): en el hijo prefork `task_join_will_block()` es True y `get()`
+# lanza `RuntimeError` antes de tocar el backend. El `_FakeAsyncResult` de arriba
+# no reproduce esa guarda, así que el cierre de C-04 (`task_wf_22`) quedó en verde
+# con la fase de tests muerta en producción: cada `done` con criterios acababa en
+# `test_phase_dispatch_failed` y el reviewer nunca vio un test real.
+
+
+class _AsyncResultConLaGuardaDeCelery(_FakeAsyncResult):
+    """Un resultado cuyo `get()` aplica la MISMA guarda que Celery."""
+
+    def get(self, timeout: float | None = None) -> Any:
+        from celery.result import assert_will_not_block
+
+        assert_will_not_block()  # RuntimeError si estamos «dentro de un task»
+        return super().get(timeout)
+
+
+@pytest.mark.asyncio
+async def test_the_wait_survives_inside_a_prefork_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    from celery._state import _set_task_join_will_block
+    from workers.tasks import test_runtime_task
+
+    fake = _FakeApp(_AsyncResultConLaGuardaDeCelery({"status": "completed", "runtimes": []}))
+    monkeypatch.setattr(test_runtime_task, "app", fake)
+    request = {"task_id": "t1", "acceptance_criteria": [_check()]}
+
+    _set_task_join_will_block(True)  # lo que hace el hijo prefork al arrancar
+    try:
+        result = await test_runtime_task.dispatch_test_runtime_and_wait(request)
+    finally:
+        _set_task_join_will_block(False)
+
+    assert result.get("status") == "completed", (
+        f"la espera murió con la guarda de Celery y volvió {result.get('status')!r}: "
+        "la fase de tests no corre nunca en un worker prefork"
+    )

@@ -121,11 +121,19 @@ def test_the_fallback_catalog_names_one_claude_generation() -> None:
     permiso para quedarse: de las SEMILLAS, que es quien crea la obligación de
     cobrarlo, y no de una lista escrita a mano que se desincroniza a la primera.
     """
+    # Desde el 2026-09-01 (auditoría, F-01) los built-in NO pinean modelo: heredan
+    # por la cadena del ADR 0055. `seeded` queda normalmente vacío, y eso es lo
+    # correcto; se conserva por si un built-in vuelve a pinear a propósito.
     seeded = {agent.model_name for agent in BUILTIN_AGENTS if agent.model_name}
-    assert len(seeded) >= 3, f"apenas {len(seeded)} modelos sembrados: ¿parser roto?"
+    # Ids que copias de tenant adoptadas ANTES de la migración 0147 pueden seguir
+    # pineando (la 0147 sólo despinea las que heredaron `anthropic` de fábrica;
+    # un pin puesto a mano por el tenant se respeta). Mientras esas copias
+    # existan, su precio de respaldo tiene que existir. Retirar un id de aquí es
+    # una decisión: exige comprobar en la BD viva que ninguna copia lo usa.
+    still_pinned_by_adopted_copies = {"claude-opus-4-7", "claude-sonnet-4-6"}
 
     claude_ids = {mid for mid in DEFAULT_AI_PRICE_CATALOG.prices if mid.startswith("claude-")}
-    stale = claude_ids - CURRENT_CLAUDE_MODELS - seeded
+    stale = claude_ids - CURRENT_CLAUDE_MODELS - seeded - still_pinned_by_adopted_copies
     assert not stale, (
         f"el catálogo de respaldo arrastra ids que ya no son de la generación vigente "
         f"{sorted(CURRENT_CLAUDE_MODELS)} y que ningún agente built-in usa: {sorted(stale)}"

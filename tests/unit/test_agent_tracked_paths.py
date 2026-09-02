@@ -11,10 +11,11 @@ El worker SÍ lo sabe — es el único punto que tiene worktree y git a la vez, 
 que con el diff del reviewer (`workers/review_diff.py`). Aquí se prueba SU mitad
 del contrato:
 
-  1. calcular las entradas de PRIMER NIVEL versionadas en la rama del plan
-     (primer nivel y no el árbol entero: en ese proyecto eran 5.192 ficheros, y
-     el env de un contenedor no es sitio para eso);
-  2. publicarlas en `AGENT_TRACKED_PATHS`, separadas por saltos de línea;
+  1. calcular los DIRECTORIOS versionados en la rama del plan, a cualquier
+     profundidad (directorios y no ficheros: en ese proyecto eran 5.192
+     ficheros y ~300 directorios; y con presupuesto por niveles, porque el env
+     de un contenedor tiene un tope);
+  2. publicarlos en `AGENT_TRACKED_PATHS`, separados por saltos de línea;
   3. que ese valor llegue de verdad al `ContainerSpec` del run — el «último
      tramo» que `docs/03-guides/verificar-antes-de-implementar.md` §5 documenta
      como el sitio donde estas features se quedan sin cablear.
@@ -33,12 +34,13 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from workers import execution
+from workers import execution, tracked_paths
 from workers.config import Settings
 from workers.container import ContainerResult, ContainerSpec
 from workers.execution import _build_runtime_env, _PreparedRun, _Workspace
+from workers.git_identity import PLATFORM_GIT_EMAIL, PLATFORM_GIT_NAME
 from workers.run_contract import ExecutionRequest
-from workers.tracked_paths import compute_tracked_top_level_paths
+from workers.tracked_paths import compute_tracked_paths
 
 pytestmark = pytest.mark.unit
 
@@ -48,17 +50,21 @@ _API_URL = "http://api-server:8000"
 # ---------------------------------------------------------------------------
 # Un worktree de verdad: git es justo lo que se está ejercitando
 # ---------------------------------------------------------------------------
-def _git(*args: str, cwd: Path) -> None:
+def _git(*args: str, cwd: Path, como_plataforma: bool = False) -> None:
+    """`como_plataforma` firma como `commit_task`: desde el 2026-09-01 la autoría
+    decide si un directorio de dependencias versionado es un ACCIDENTE de la
+    plataforma (se resta de la lista) o una decisión de una persona (se protege)."""
+    nombre, email = (PLATFORM_GIT_NAME, PLATFORM_GIT_EMAIL) if como_plataforma else ("t", "t@t")
     subprocess.run(
         ["git", *args],
         cwd=cwd,
         check=True,
         capture_output=True,
         env={
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@t",
+            "GIT_AUTHOR_NAME": nombre,
+            "GIT_AUTHOR_EMAIL": email,
+            "GIT_COMMITTER_NAME": nombre,
+            "GIT_COMMITTER_EMAIL": email,
             "PATH": os.environ.get("PATH", ""),
             "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -95,19 +101,31 @@ def worktree(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 # 1. El cálculo
 # ---------------------------------------------------------------------------
-def test_solo_las_entradas_de_primer_nivel_versionadas(worktree: Path) -> None:
-    """Lo versionado, entero, y NADA más: ni el árbol recursivo ni lo no versionado.
+def test_todos_los_directorios_versionados_a_cualquier_profundidad(worktree: Path) -> None:
+    """Los directorios versionados, todos, y NADA más: ni ficheros ni lo no versionado.
 
-    Las dos mitades importan. Si faltara `app`, el borrado de 85 ficheros del
-    2026-08-31 volvería a pasar. Si sobrara `vendor`, el agente no podría
-    reinstalar dependencias y el ADR 0163 (que existe porque un agente necesitó
-    vaciar el directorio para `composer create-project`) quedaría inservible.
+    Las mitades importan. Si faltara `app`, el borrado de 85 ficheros del
+    2026-08-31 volvería a pasar; si faltara `app/Config`, el mismo destrozo se
+    reconstruye con una llamada por subdirectorio (auditoría 2026-09-01). Si
+    sobrara `vendor`, el agente no podría reinstalar dependencias y el ADR 0163
+    quedaría inservible.
     """
-    entries = compute_tracked_top_level_paths(str(worktree))
+    entries = compute_tracked_paths(str(worktree))
 
-    assert sorted(entries) == ["app", "composer.json", "public", "system"]
-    # Primer nivel: nada de las 5.192 rutas anidadas del caso real.
-    assert not [e for e in entries if "/" in e or "\\" in e]
+    assert sorted(entries) == ["app", "app/Config", "app/Controllers", "public", "system"]
+    assert "composer.json" not in entries, "los ficheros no viajan: de ellos se ocupa write_file"
+
+
+def test_si_no_cabe_en_el_env_se_recorta_por_niveles_sin_perder_el_primero(
+    worktree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El recorte degrada en PROFUNDIDAD, nunca en anchura, y nunca a mitad de nivel."""
+    # Nivel 1 ("app", "public", "system") = 3+1 + 6+1 + 6+1 = 18 B; nivel 2 no cabe.
+    monkeypatch.setattr(tracked_paths, "_PRESUPUESTO_BYTES", 30)
+
+    entries = compute_tracked_paths(str(worktree))
+
+    assert sorted(entries) == ["app", "public", "system"]
 
 
 def test_un_worktree_sin_commit_todavia_no_protege_nada(tmp_path: Path) -> None:
@@ -117,13 +135,13 @@ def test_un_worktree_sin_commit_todavia_no_protege_nada(tmp_path: Path) -> None:
     work.mkdir()
     _git("init", "-q", "-b", "main", cwd=work)
 
-    assert compute_tracked_top_level_paths(str(work)) == []
+    assert compute_tracked_paths(str(work)) == []
 
 
 def test_sin_worktree_no_hay_nada_que_calcular() -> None:
     """Runs sin worktree (análisis, diseño, tmpfs legacy): `None` → lista vacía."""
-    assert compute_tracked_top_level_paths(None) == []
-    assert compute_tracked_top_level_paths("") == []
+    assert compute_tracked_paths(None) == []
+    assert compute_tracked_paths("") == []
 
 
 def test_un_fallo_de_git_degrada_a_lista_vacia_sin_tumbar_el_run(
@@ -140,7 +158,7 @@ def test_un_fallo_de_git_degrada_a_lista_vacia_sin_tumbar_el_run(
 
     monkeypatch.setattr("workers.git_repos._run_git", _boom)
 
-    assert compute_tracked_top_level_paths(str(worktree)) == []
+    assert compute_tracked_paths(str(worktree)) == []
 
 
 def test_los_nombres_coinciden_con_los_del_disco(tmp_path: Path) -> None:
@@ -172,9 +190,9 @@ def test_los_nombres_coinciden_con_los_del_disco(tmp_path: Path) -> None:
     _git("add", "-A", cwd=work)
     _git("commit", "-qm", "docs", cwd=work)
 
-    entries = compute_tracked_top_level_paths(str(work))
+    entries = compute_tracked_paths(str(work))
 
-    en_disco = sorted(p.name for p in work.iterdir() if p.name != ".git")
+    en_disco = sorted(p.name for p in work.iterdir() if p.is_dir() and p.name != ".git")
     assert sorted(entries) == en_disco
     assert "documentación" in entries  # explícito: el caso que se perdía
     assert not [e for e in entries if e.startswith('"')]
@@ -273,7 +291,7 @@ async def test_la_provision_del_workspace_calcula_las_rutas_versionadas(
     )
 
     assert ws.host_path == str(worktree)
-    assert sorted(ws.tracked_paths) == ["app", "composer.json", "public", "system"]
+    assert sorted(ws.tracked_paths) == ["app", "app/Config", "app/Controllers", "public", "system"]
 
 
 @pytest.mark.asyncio
@@ -374,7 +392,7 @@ async def test_el_contenedor_arranca_con_la_variable_puesta(
         prepared=_prepared(),
         workspace=_Workspace(
             host_path="/data/agent-platform/wt",
-            tracked_paths=["app", "system", "composer.json"],
+            tracked_paths=["app", "app/Config", "system"],
         ),
         exec_id="exec-1",
         runner=runner,
@@ -384,7 +402,7 @@ async def test_el_contenedor_arranca_con_la_variable_puesta(
 
     assert result.status == "completed"
     assert runner.spec is not None
-    assert runner.spec.env["AGENT_TRACKED_PATHS"] == "app\nsystem\ncomposer.json"
+    assert runner.spec.env["AGENT_TRACKED_PATHS"] == "app\napp/Config\nsystem"
 
 
 # ---------------------------------------------------------------------------
@@ -409,8 +427,15 @@ def worktree_con_vendor_versionado(tmp_path: Path) -> Path:
     (work / "vendor" / "codeigniter4" / "Boot.php").write_text("<?php\n", encoding="utf-8")
     (work / "composer.json").write_text("{}\n", encoding="utf-8")
     _git("init", "-q", "-b", "main", cwd=work)
-    _git("add", "-A", cwd=work)
-    _git("commit", "-qm", "la tarea anterior se llevo vendor/ a la rama", cwd=work)
+    # Lo firmó la PLATAFORMA: era un `commit_task` sin `.gitignore`, no una persona.
+    _git("add", "-A", cwd=work, como_plataforma=True)
+    _git(
+        "commit",
+        "-qm",
+        "la tarea anterior se llevo vendor/ a la rama",
+        cwd=work,
+        como_plataforma=True,
+    )
     return work
 
 
@@ -418,20 +443,50 @@ def test_un_vendor_versionado_no_se_declara_como_trabajo_aceptado(
     worktree_con_vendor_versionado: Path,
 ) -> None:
     """El criterio del ADR 0164 es «versionado = trabajo aceptado», y un árbol de
-    dependencias no lo es AUNQUE esté versionado.
+    dependencias que la PLATAFORMA metió por accidente no lo es AUNQUE esté
+    versionado.
 
-    La lista no se escribe a mano: se resta `dependency_dirs()`, la MISMA
-    declaración por runtime que ya usan `sync_to_head(preserve=...)` y la
-    exclusión del commit.
+    La lista de nombres no se escribe a mano: sale de `dependency_dirs()`, la
+    MISMA declaración por runtime que ya usan `sync_to_head(preserve=...)` y la
+    exclusión del commit. Y la autoría la decide git: aquí el commit lo firmó
+    `commit_task`.
     """
-    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+    entries = compute_tracked_paths(str(worktree_con_vendor_versionado))
 
     assert "vendor" not in entries, (
         "`vendor` se anuncia como versionado: la guarda del ADR 0164 lo blindará "
         "otra ejecución entera y la tarea seguirá sin poder andamiar"
     )
-    assert sorted(entries) == ["app", "composer.json"], (
-        "el filtro se llevó por delante deliverable de verdad"
+    assert not [e for e in entries if e.startswith("vendor/")], "ni lo que cuelga de él"
+    assert sorted(entries) == [
+        "app",
+        "app/Controllers",
+    ], "el filtro se llevó por delante deliverable de verdad"
+
+
+def test_un_vendor_versionado_por_una_persona_sigue_protegido(tmp_path: Path) -> None:
+    """La otra mitad del criterio, y la que faltaba (auditoría 2026-09-01).
+
+    Un proyecto Go con `vendor/` commiteado a propósito por una persona —`go mod
+    vendor`, el flujo canónico— NO es un accidente de la plataforma: es trabajo
+    del proyecto, y `delete_file vendor --recursive` tiene que rechazarse igual
+    que sobre `app/`. Restarlo por el NOMBRE, como hacía la primera versión,
+    dejaba sin protección justo lo que el proyecto había decidido versionar.
+    """
+    work = tmp_path / "proyecto-go"
+    (work / "vendor" / "github.com" / "x").mkdir(parents=True)
+    (work / "vendor" / "modules.txt").write_text("# github.com/x v1\n", encoding="utf-8")
+    (work / "vendor" / "github.com" / "x" / "x.go").write_text("package x\n", encoding="utf-8")
+    (work / "go.mod").write_text("module example.com/app\n", encoding="utf-8")
+    _git("init", "-q", "-b", "main", cwd=work)
+    _git("add", "-A", cwd=work)  # una PERSONA
+    _git("commit", "-qm", "vendoriza las dependencias", cwd=work)
+
+    entries = compute_tracked_paths(str(work))
+
+    assert "vendor" in entries, (
+        "un vendor/ que una persona versionó a propósito ha dejado de protegerse: "
+        "el agente puede borrarlo en una llamada"
     )
 
 
@@ -448,7 +503,7 @@ def test_la_guarda_del_runtime_suelta_vendor_y_sigue_protegiendo_app(
     """
     from agent_runtime.file_tools import WorkspaceFiles
 
-    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+    entries = compute_tracked_paths(str(worktree_con_vendor_versionado))
     files = WorkspaceFiles(
         root=str(worktree_con_vendor_versionado),
         tracked_paths="\n".join(entries),
@@ -484,15 +539,17 @@ def test_los_nombres_salen_del_catalogo_y_no_de_una_lista_a_mano(
     (work / "src").mkdir()
     (work / "src" / "App.php").write_text("<?php\n", encoding="utf-8")
     _git("init", "-q", "-b", "main", cwd=work)
-    _git("add", "-A", cwd=work)
-    _git("commit", "-qm", "init", cwd=work)
+    # Accidente de la plataforma, para que el ÚNICO criterio en juego sea el nombre.
+    _git("add", "-A", cwd=work, como_plataforma=True)
+    _git("commit", "-qm", "init", cwd=work, como_plataforma=True)
 
-    entries = compute_tracked_top_level_paths(str(work))
+    entries = compute_tracked_paths(str(work))
 
     assert "cachorros" not in entries
-    assert sorted(entries) == ["src", "vendor"], (
-        "la lista de directorios de dependencias está escrita a mano en algún sitio"
-    )
+    assert sorted(entries) == [
+        "src",
+        "vendor",
+    ], "la lista de directorios de dependencias está escrita a mano en algún sitio"
 
 
 def test_si_el_catalogo_no_se_puede_leer_se_protege_de_mas_y_no_de_menos(
@@ -511,6 +568,6 @@ def test_si_el_catalogo_no_se_puede_leer_se_protege_de_mas_y_no_de_menos(
 
     monkeypatch.setattr(catalog, "dependency_dirs", _boom)
 
-    entries = compute_tracked_top_level_paths(str(worktree_con_vendor_versionado))
+    entries = compute_tracked_paths(str(worktree_con_vendor_versionado))
 
-    assert sorted(entries) == ["app", "composer.json", "vendor"]
+    assert sorted(entries) == ["app", "app/Controllers", "vendor", "vendor/codeigniter4"]

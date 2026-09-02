@@ -250,8 +250,9 @@ descarta, y eso tiene que estar escrito donde alguien lo lea.
 - Algunas herramientas detectan la raíz del proyecto buscando `.git` hacia
   arriba. Dentro del sandbox no la encontrarán. Hay que comprobar si alguna del
   toolchain lo usa; en los runtimes actuales no se conoce ninguna que lo exija.
-- La guía de `shell_exec` que hoy explica que «git sale 128 aquí» deja de tener
-  sentido y hay que reescribirla: ya no habrá repo que confunda.
+- La guía de `shell_exec` que explicaba que «git sale 128 aquí» se reescribió el
+  2026-09-01 (`tool_usage_guidance.py`): ahora dice que no hay repositorio en el
+  sandbox y que la plataforma versiona por el agente.
 
 ## Lo que se midió antes de aceptarlo
 
@@ -280,12 +281,42 @@ auditoría adversarial (cinco agentes, 2026-08-31):
 21 tests lo fijan, todos verificados mutando producción: sin lock; sin soltar el
 lock; sin ocultar; ocultando también en review; y sin reparar en la provisión.
 
+## Addendum del 2026-09-01: tres huecos que la auditoría midió, y cómo se cerraron
+
+Los tres se reprodujeron con git real antes de tocar nada.
+
+1. **El lock no tenía dueño.** `git_link_hidden` reponía el puntero y soltaba el
+   lock en su `finally` sin mirar de quién era. Con dos ejecuciones SOLAPADAS de
+   la misma tarea —ya ocurren: la gotcha «deploy relaunches frozen tasks»— la
+   provisión de B reparaba y desbloqueaba mientras A seguía corriendo, y al
+   terminar A reponía el `.git` en mitad del run de B y le soltaba el lock. Ahora
+   el motivo del lock lleva el `execution_id`; sólo el dueño repone y suelta, y
+   si otra ejecución tomó el relevo se registra y no se toca nada.
+2. **La reparación comprobaba existencia, no validez.** Con un `.git` que fuera un
+   DIRECTORIO —el repo de `cargo new .` si el restore no pudo retirarlo, o un
+   worker muerto entre esconder y reponer— `repair_worktree_link` decía «nada
+   que reparar» y `commit_task` commiteaba en el repo del andamiador: devolvía un
+   sha que no existía en el bare del plan. Ahora valida que el puntero apunta a
+   los metadatos de este worktree en un bare del proyecto, descarta lo que no lo
+   sea, y repara.
+3. **La provisión toma el relevo, y el reaper suelta antes de podar.** Un worker
+   muerto entre reponer el puntero y soltar el lock dejaba un lock huérfano que
+   nadie iba a soltar: `repair_worktree_link` sólo desbloqueaba cuando reparaba,
+   y `_remove_worktree` no desbloqueaba nunca — `remove --force` se negaba, el
+   `rmtree` de respaldo borraba el disco y `prune` respetaba el lock, dejando un
+   registro fantasma `locked` permanente y un `worktree add` del mismo id con
+   rc=128. Ahora la reparación suelta cualquier lock de la plataforma haya
+   reparado o no (quien provisiona o cierra es el dueño legítimo), y el reaper
+   hace `worktree unlock` antes de `remove`.
+
 ## Lo que esta decisión NO garantiza
 
 - **La ventana existe.** Entre retirar y reponer hay hasta dos horas en las que
   el worktree depende del lock. Si alguien añade un camino que pode SIN respetar
   el lock, vuelve el problema. El lock es un fichero `locked` en los metadatos:
   `git worktree prune` lo respeta, un `rm -rf` a mano no.
+- **Un lock puesto a mano por una persona no se toca.** La plataforma sólo
+  suelta los locks con su propio motivo (`agent run in progress […]`).
 - **No cubre un worktree que ya estaba roto** antes de este cambio. El del
   incidente del 2026-08-31 sigue en disco sin registrar, y es irrecuperable
   porque sus metadatos se podaron antes de que existiera el lock.

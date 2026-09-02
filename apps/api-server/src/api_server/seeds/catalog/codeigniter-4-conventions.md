@@ -254,10 +254,12 @@ una anomalía del proyecto:
 
 Detalle del paso 4, que es donde se decide si esto sale bien. Para un fichero
 suelto en el que el del framework deba ganar —`README.md` es el caso típico—
-añade `"overwrite": true`. Para un directorio de primer nivel **ya versionado**
-(`app/` en un reintento) no lo intentes ni con `overwrite`: la tool lo rechaza
-por el mismo motivo que el borrado recursivo, y con razón — mueve dentro sólo
-los ficheros que de verdad quieras, y no vacíes el destino para hacer sitio.
+añade `"overwrite": true`. Para un directorio **ya versionado** (`app/` o
+`app/Config` en un reintento) no lo intentes ni con `overwrite`: la tool lo
+rechaza por el mismo motivo que el borrado recursivo, y con razón — mueve dentro
+sólo los ficheros que de verdad quieras, y no vacíes el destino para hacer sitio.
+Tampoco sirve moverlo a un temporal para borrarlo después: la protección viaja
+con el directorio y el borrado del temporal se rechaza igual.
 
 Los pasos 1, 3, 4 y 5 son de la familia de tools `file`, que **no** depende de
 la allowlist de comandos del proyecto: siguen estando disponibles aunque
@@ -287,9 +289,10 @@ tenía ningún significado especial: era la entrada más grande de la lista.
 
 La plataforma ahora lo **rechaza**. Saberlo ahorra iteraciones contra la puerta:
 
-- `delete_file` recursivo sobre un directorio de primer nivel **versionado**
-  devuelve error: _«refusing to recursively delete 'app': it is tracked in this
-  branch…»_. Vale para cualquier entrada que ya esté en la rama.
+- `delete_file` recursivo sobre un directorio **versionado**, a cualquier
+  profundidad (`app/`, `app/Config/`) o que contenga uno, devuelve error:
+  _«refusing to recursively delete 'app': it is tracked in this branch…»_. Vale
+  para cualquier directorio que ya esté en la rama.
 - `delete_file` sobre la **raíz**, también: no es podar un subárbol, es borrar
   el deliverable entero.
 - `.git` no se toca: la tool lo rechaza (ADR 0163). Sin él tu trabajo no se

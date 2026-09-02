@@ -49,11 +49,18 @@ class BuiltinAgent:
     memory_scope: str
     review_capability: bool
     max_concurrent_tasks: int
-    model_provider: str
-    model_name: str
-    temperature: float
     system_prompt_es: str
     system_prompt_en: str
+    # Un built-in NO pinea proveedor ni modelo (ADR 0055, la regla que el equipo
+    # CI4 ya seguía): hereda proyecto → equipo → plataforma. Auditoría
+    # 2026-09-01 (F-01): once agentes core pineaban `provider="anthropic"`, un
+    # kind que no existe en `LLMProviderKind`; las copias adoptadas lo copiaban
+    # verbatim, la cadena de herencia se saltaba por el pin, y todo run de un
+    # equipo core abortaba `model_unresolved`. Quedan como opcionales sólo para
+    # un built-in que de verdad necesite fijar un kind DEL CATÁLOGO.
+    model_provider: str | None = None
+    model_name: str | None = None
+    temperature: float | None = None
     # Slugs of built-in skills (api_server.seeds.builtin_skills) wired to
     # this agent via the `agent_skills` M:N junction. Empty for agents
     # whose curated prompt already carries everything they need.
@@ -105,15 +112,21 @@ class BuiltinAgent:
         return self.system_prompt_en + execution_guidance(self.resolved_tool_slugs())[1]
 
     def to_model_config(self) -> dict[str, Any]:
-        return {
-            "provider": self.model_provider,
-            "model": self.model_name,
-            "temperature": self.temperature,
+        """``model_config`` sembrado: los prompts bilingües y, SÓLO si el built-in
+        pinea a propósito, el modelo. Sin `provider`+`model` la cadena de
+        herencia (ADR 0055) decide, igual que en `CI4Agent.to_model_config`."""
+        config: dict[str, Any] = {
             "system_prompts": {
                 "es": self.effective_prompt_es,
                 "en": self.effective_prompt_en,
             },
         }
+        if self.model_provider is not None and self.model_name is not None:
+            config["provider"] = self.model_provider
+            config["model"] = self.model_name
+        if self.temperature is not None:
+            config["temperature"] = self.temperature
+        return config
 
 
 BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
@@ -125,9 +138,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=False,
         max_concurrent_tasks=2,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.2,
         system_prompt_es=(
             "Eres un Project Manager experimentado. Tu trabajo: descomponer "
             "objetivos en un Plan ejecutable con tareas, dependencias y "
@@ -161,9 +171,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=True,
         max_concurrent_tasks=2,
-        model_provider="anthropic",
-        model_name="claude-opus-4-7",
-        temperature=0.2,
         system_prompt_es=(
             "Eres un Software Architect. Tu trabajo: tomar decisiones de "
             "diseño de alto nivel — estructura del repo, división en servicios, "
@@ -201,9 +208,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="team_shared",
         review_capability=True,
         max_concurrent_tasks=4,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un Backend Senior. Implementas features end-to-end con tests "
             "de integración. Sigues las convenciones del repo (linters, "
@@ -233,9 +237,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="team_shared",
         review_capability=False,
         max_concurrent_tasks=1,
-        model_provider="anthropic",
-        model_name="claude-haiku-4-5-20251001",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un Backend Junior. Implementas tareas acotadas y bien "
             "especificadas. Para cada tarea: (1) lee los archivos y tests "
@@ -264,9 +265,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="team_shared",
         review_capability=True,
         max_concurrent_tasks=3,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un Frontend Developer. Construyes UI con Next.js App Router, "
             "Tailwind y shadcn/ui. Cada pantalla tiene estados explícitos "
@@ -315,9 +313,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="team_shared",
         review_capability=True,
         max_concurrent_tasks=3,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.2,
         system_prompt_es=(
             "Eres un QA Engineer. Para cada feature, diseñas un plan de test "
             "en tres niveles: unit, integration, E2E. Identificas casos de "
@@ -346,9 +341,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=True,
         max_concurrent_tasks=2,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un DevOps Engineer. Cuidas pipelines CI/CD, Docker, "
             "configuración de servicios, observabilidad (logs JSON, traces "
@@ -382,9 +374,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=False,
         max_concurrent_tasks=3,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.3,
         system_prompt_es=(
             "Eres un Technical Writer. Eres responsable de la documentación en "
             "`/docs/` y de su estructura canónica de 7 carpetas: `01-overview`, "
@@ -462,9 +451,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=False,
         max_concurrent_tasks=2,
-        model_provider="anthropic",
-        model_name="claude-opus-4-7",
-        temperature=0.3,
         system_prompt_es=(
             "Eres un Researcher. Investigas opciones técnicas (librerías, "
             "patrones, providers), comparas pros/contras y produces un "
@@ -500,9 +486,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=True,
         max_concurrent_tasks=4,
-        model_provider="anthropic",
-        model_name="claude-sonnet-4-6",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un Code Reviewer. Revisas PRs en cuatro ejes, en orden: "
             "(1) correctness — ¿hace lo que dice? ¿tests cubren los casos "
@@ -643,9 +626,6 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         memory_scope="project_shared",
         review_capability=True,
         max_concurrent_tasks=2,
-        model_provider="anthropic",
-        model_name="claude-opus-4-7",
-        temperature=0.1,
         system_prompt_es=(
             "Eres un Security Specialist. Auditas el código bajo el lente "
             "OWASP Top 10 y los riesgos específicos del sistema: aislamiento "

@@ -68,9 +68,9 @@ FAMILY_FLAG_PREFIX = "AGENT_TOOL_FAMILY_"
 #: production, so the default is unchanged for real runs.
 _WORKSPACE_ROOT_ENV = "AGENT_WORKSPACE_ROOT"
 
-#: Las entradas de PRIMER NIVEL versionadas en la rama del plan, que el worker
-#: publica separadas por saltos de línea ("app\nsystem\npublic\ncomposer.json").
-#: La familia `file` las necesita para distinguir un árbol reconstruible
+#: Los DIRECTORIOS versionados en la rama del plan, a cualquier profundidad, que
+#: el worker publica separados por saltos de línea ("app\napp/Config\nsystem").
+#: La familia `file` los necesita para distinguir un árbol reconstruible
 #: (vendor/) del deliverable ya commiteado de otra tarea — ver
 #: `WorkspaceFiles._delete_tree`. Vacía o ausente ⇒ sin esa protección, que es
 #: la compatibilidad hacia atrás con un worker anterior al contrato.
