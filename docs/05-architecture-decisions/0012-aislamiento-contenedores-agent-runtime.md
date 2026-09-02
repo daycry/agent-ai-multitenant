@@ -169,6 +169,21 @@ Negativas / cuidados:
   La imagen y el loop se diseñan para soportarla; el pool elástico es
   Plan 06.
 
+## Adenda 2026-09-02 — un bridge por ejecución (`task_cv_25`, auditoría B-07)
+
+La red «dedicada» de esta decisión era UNA red (`agentic-agents`, `internal`,
+con ICC) compartida por todos los sandboxes de todos los tenants, los previews
+de review, el api-server y los workers: dos sandboxes de tenants distintos
+podían hablarse por IP. Desde el 2026-09-02 el worker crea un bridge `internal`
+por ejecución (`agent-run-<exec>-<hex>`, etiqueta
+`com.agentic-platform.run-bridge`), le conecta con alias sólo lo que ese run
+necesita —el egress-proxy (`WORKERS_EGRESS_PROXY_CONTAINER`), el api-server
+interno y los servidores MCP internos que declare el proyecto— y lo desmonta al
+terminar; el sweeper de ejecuciones rancias poda los que deja un worker que
+muere. `WORKERS_AGENT_NETWORK_PER_EXECUTION=false` devuelve la red compartida.
+El preview de review (ADR 0130) sigue en `agentic-agents`: no ejecuta código del
+agente en vivo y su aislamiento es otro (worktree de sólo lectura, `task_cv_26`).
+
 ## Referencias
 
 - `docs/roadmap/02-ejecucion-agentes.md` — Fase B, task_02_05..09.

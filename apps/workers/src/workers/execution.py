@@ -162,6 +162,20 @@ def _task_is_launchable(status: str, *, is_review: bool) -> bool:
     return status == _LAUNCHABLE_STATUS_BY_KIND[is_review]
 
 
+def _internal_mcp_hosts(request: ExecutionRequest) -> list[str]:
+    """Hosts sin punto de los servidores MCP del proyecto: servicios internos del
+    compose. Van a NO_PROXY y (`task_cv_25`) al bridge de la ejecución."""
+    return sorted(
+        {
+            host
+            for server in (request.mcp_servers or [])
+            if (url := str(server.get("url") or ""))
+            and (host := urlparse(url).hostname)
+            and "." not in host
+        }
+    )
+
+
 def _build_runtime_env(
     request: ExecutionRequest,
     approval_policy: dict[str, Any] | None,
@@ -243,15 +257,7 @@ def _build_runtime_env(
     # 2026-07-18). La declaracion del server en el proyecto ES la autorizacion
     # (RBAC tenant_admin). Un MCP EXTERNO (FQDN con punto) sigue saliendo por el
     # proxy y exige su host en la allowlist: deny-by-default intacto.
-    internal_mcp_hosts = sorted(
-        {
-            host
-            for server in (request.mcp_servers or [])
-            if (url := str(server.get("url") or ""))
-            and (host := urlparse(url).hostname)
-            and "." not in host
-        }
-    )
+    internal_mcp_hosts = _internal_mcp_hosts(request)
     if internal_mcp_hosts:
         joined = ",".join(internal_mcp_hosts)
         env["NO_PROXY"] = joined
@@ -2057,6 +2063,9 @@ async def _launch_and_stream(  # noqa: PLR0912, PLR0915 - lanzamiento + streamin
         workspace_host_path=workspace.host_path,
         workspace_read_only=workspace.read_only,
         extra_mounts=tuple(staged_credentials.mounts) if staged_credentials else (),
+        # `task_cv_25`: los servidores MCP internos del proyecto se conectan al
+        # bridge de esta ejecución (los mismos que van a NO_PROXY).
+        peers=tuple(_internal_mcp_hosts(request)),
     )
     # `task_cv_20`: el spec y el token salen del env y van por fichero.
     runtime_env, staged_runtime_secrets = _stage_runtime_secrets(

@@ -276,7 +276,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_25` — Un bridge efímero por ejecución en vez de una L2 compartida (B-07)
 
-- [ ] _(pendiente al cierre de la sesión del 2026-09-02: es la única de la ola 2 sin hacer; el patrón está en `test_runtime.py:_create_bridge` + `_attach_registry_proxy` y el runner del agente tendría que conectar `egress-proxy` y `api-server` —y los servidores MCP internos que declare el proyecto— al bridge de cada ejecución, además de actualizar el ADR 0012)_ **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
+- [x] _(hecho 2026-09-02, tests en verde; `AgentContainerRunner` crea un bridge `internal` por ejecución (`agent-run-<exec>-<hex>`, etiqueta `com.agentic-platform.run-bridge`), conecta con alias el egress-proxy, el api-server y los MCP internos del proyecto (`ContainerSpec.peers`), lo desmonta al terminar y el sweeper poda los huérfanos; `WORKERS_AGENT_NETWORK_PER_EXECUTION=false` devuelve la red compartida; ADR 0012 con adenda; el test de «dos sandboxes no se ven» es de Docker real y queda para el stack de pruebas)_ **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
       comparten `agentic-agents` con ICC (`isolation.py` promete lo contrario). Bridge interno por
       ejecución (patrón de `test_runtime.py:_create_bridge`) con `network.connect` del egress-proxy
       y del api-server. Actualizar ADR 0012.

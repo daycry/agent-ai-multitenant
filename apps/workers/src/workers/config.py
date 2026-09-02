@@ -115,6 +115,28 @@ class Settings(BaseSettings):
         "el worker necesita ``API_SERVER_JWT_SECRET`` (mismo secreto que "
         "api-server) en su entorno para que el token valide.",
     )
+    # `task_cv_25` (auditoría 2026-09-01, B-07): un bridge `internal` POR
+    # EJECUCIÓN en vez de la L2 compartida `agentic-agents` (donde todos los
+    # sandboxes de todos los tenants se veían entre sí con ICC). El runner le
+    # conecta sólo lo que el run necesita —egress-proxy, api-server y los
+    # servidores MCP internos del proyecto— con sus alias, y lo desmonta al
+    # terminar. Apagarlo devuelve la red compartida (compatibilidad).
+    agent_network_per_execution: bool = Field(
+        default=True,
+        description="Un bridge interno por ejecución (task_cv_25) en vez de la red compartida.",
+    )
+    egress_proxy_container: str = Field(
+        default="agentic-egress-proxy",
+        description="Nombre del contenedor del egress-proxy que se conecta al bridge de cada run.",
+    )
+    egress_proxy_alias: str = Field(
+        default="egress-proxy",
+        description="Alias del egress-proxy en el bridge de cada run (host de egress_proxy_url).",
+    )
+    internal_api_alias: str = Field(
+        default="api-server",
+        description="Alias del api-server interno en el bridge de cada run.",
+    )
     agent_network_internal: bool = Field(
         default=True,
         description="Create the agent network as `internal` (no egress to "
