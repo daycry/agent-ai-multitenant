@@ -30,6 +30,7 @@ from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine
 from workers.docker_client import get_docker_client
+from workers.host_paths import HostPathError, ensure_under_data_root
 
 _log = structlog.get_logger("workers.tasks")
 
@@ -308,6 +309,29 @@ async def dispatch_test_runtime_and_wait(request: dict[str, Any]) -> dict[str, A
         }
 
 
+def _validated_worktree_host_path(
+    request: dict[str, Any], settings: Settings
+) -> tuple[str | None, dict[str, Any] | None]:
+    """`task_cv_45` (B-10): ``(ruta normalizada, None)`` si el worktree del
+    request vive bajo `data_root`; ``(None, outcome de infra)`` si no."""
+    raw = str(request.get("worktree_host_path") or "")
+    try:
+        return ensure_under_data_root(raw, data_root=settings.data_root), None
+    except HostPathError as exc:
+        _log.error(
+            "workers.test_runtime_worktree_host_path_rejected",
+            task_id=str(request.get("task_id", "")),
+            error=str(exc),
+        )
+        return None, infra_failure_outcome(
+            stage="worktree_host_path_invalid",
+            detail=(
+                f"el worktree del request no vive bajo data_root, así que no se montó "
+                f"nada y no corrió ningún check: {exc}"
+            ),
+        )
+
+
 @app.task(name="workers.run_test_runtime")  # type: ignore[untyped-decorator]
 def run_test_runtime(request: dict[str, Any]) -> dict[str, Any]:
     """Run the test-runtime for one task (Plan 06.5 Fase F task_06_5_16).
@@ -504,7 +528,10 @@ async def _launch_test_runtime_plans(
     # carries `repository_config` when the orchestrator threads it; absent →
     # empty (backward-compatible, no services).
     try:
-        services = build_project_runtime_services(request.get("repository_config"))
+        services = build_project_runtime_services(
+            request.get("repository_config"),
+            image_registry_allowlist=tuple(get_settings().tenant_image_registry_allowlist),
+        )
     except RuntimeServicesConfigError as exc:
         # A bad services config must not sink the whole test run — run without
         # them (the checks that need a DB will fail visibly, which is truthful).
@@ -538,11 +565,16 @@ async def _launch_test_runtime_plans(
     _repo_cfg = request.get("repository_config")
     _project_root = _repo_cfg.get("project_root") if isinstance(_repo_cfg, dict) else None
 
+    # `task_cv_45` (B-10): el worktree tiene que vivir bajo `data_root`.
+    worktree_host_path, path_outcome = _validated_worktree_host_path(request, settings)
+    if path_outcome is not None:
+        outcomes.append(path_outcome)
+        plans = ()
     runner = TestRuntimeRunner(settings)
     for plan in plans:
         spec = TestRuntimeSpec(
             plan=plan,
-            worktree_host_path=str(request["worktree_host_path"]),
+            worktree_host_path=worktree_host_path or "",
             project_root=_project_root,
             dep_cache_host_path=request.get("dep_cache_host_path"),
             # ADR 0094: cold-cache default_pre_install needs to resolve its

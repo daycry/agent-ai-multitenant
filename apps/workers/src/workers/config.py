@@ -82,6 +82,14 @@ class Settings(BaseSettings):
         default="agent-runtime:v1",
         description="Image the worker launches for each agent task.",
     )
+    tenant_image_registry_allowlist: list[str] = Field(
+        default_factory=list,
+        description="`task_cv_44` (auditoría 2026-09-01, B-05): registries/prefijos "
+        '(JSON, p.ej. ["ghcr.io/acme", "registry.corp:5000"]) de los que un proyecto '
+        "puede declarar imágenes SIN digest en `runtime_services` (`image:` de un "
+        "sidecar propio o `runtime_image`). Fuera de esta lista, una imagen del "
+        "tenant tiene que llevar `@sha256:`. Vacía por defecto: sólo digest.",
+    )
     browser_runtime_image: str = Field(
         default="browser-runtime:v1",
         description=(
@@ -114,6 +122,28 @@ class Settings(BaseSettings):
         "compose. El token se firma con el ``jwt_secret`` del api-server, así que "
         "el worker necesita ``API_SERVER_JWT_SECRET`` (mismo secreto que "
         "api-server) en su entorno para que el token valide.",
+    )
+    # `task_cv_25` (auditoría 2026-09-01, B-07): un bridge `internal` POR
+    # EJECUCIÓN en vez de la L2 compartida `agentic-agents` (donde todos los
+    # sandboxes de todos los tenants se veían entre sí con ICC). El runner le
+    # conecta sólo lo que el run necesita —egress-proxy, api-server y los
+    # servidores MCP internos del proyecto— con sus alias, y lo desmonta al
+    # terminar. Apagarlo devuelve la red compartida (compatibilidad).
+    agent_network_per_execution: bool = Field(
+        default=True,
+        description="Un bridge interno por ejecución (task_cv_25) en vez de la red compartida.",
+    )
+    egress_proxy_container: str = Field(
+        default="agentic-egress-proxy",
+        description="Nombre del contenedor del egress-proxy que se conecta al bridge de cada run.",
+    )
+    egress_proxy_alias: str = Field(
+        default="egress-proxy",
+        description="Alias del egress-proxy en el bridge de cada run (host de egress_proxy_url).",
+    )
+    internal_api_alias: str = Field(
+        default="api-server",
+        description="Alias del api-server interno en el bridge de cada run.",
     )
     agent_network_internal: bool = Field(
         default=True,
@@ -560,6 +590,15 @@ class Settings(BaseSettings):
         "periodic git-remote fetch sweep (ADR 0098). Default every 30 minutes; "
         "the live ON/OFF lever is the `git_fetch_sweep_enabled` platform setting "
         "(default OFF). The beat process reads this at boot.",
+    )
+    git_remote_timeout_s: int = Field(
+        default=300,
+        ge=5,
+        description="`task_cv_43` (auditoría 2026-09-01, B-11): segundos máximos "
+        "para un git contra un REMOTO (fetch/push/pull/ls-remote/clone). Las "
+        "operaciones locales siguen acotadas a 120 s. Un remoto colgado se "
+        "convierte en GitCommandError con el comando y el límite, no en una traza "
+        "de TimeoutExpired que mata el auto-PR o el sync del worktree.",
     )
     ecb_fx_feed_url: str = Field(
         default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",

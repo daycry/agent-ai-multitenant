@@ -77,7 +77,14 @@ from pathlib import Path
 #: exactamente lo que le pasó al `watchdog` durante diez días en 2026-08.
 PLATFORM_APPS: tuple[str, ...] = (
     "admin-panel",
+    # `task_cv_44` (auditoría 2026-09-01, B-09): las dos imágenes que el worker
+    # LANZA por tarea. El ADR 0148 pineó las plantillas y este manifiesto las
+    # apps; `agent-runtime:v1` y `browser-runtime:v1` no se publicaban ni
+    # pineaban. Se construyen en `release-images.yml` (job `runtimes`) y el
+    # compose se las pasa al worker por `WORKERS_*_RUNTIME_IMAGE`.
+    "agent-runtime",
     "api-server",
+    "browser-runtime",
     "notification-dispatcher",
     "orchestrator",
     "watchdog",

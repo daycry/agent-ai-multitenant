@@ -182,3 +182,24 @@ y añadir columnas `slug` a Plan/Project. Es un plan de roadmap con su propio
 ADR/diseño (ver `docs/roadmap/`), no un cableado rápido. Cuando exista, **no toca
 nada de lo anterior**: el disparo del auto-PR ya está puesto y se ejecutará solo
 en cuanto las ramas lleven commits reales.
+
+## Addendum del 2026-09-02: la política fantasma se retira y la credencial caducada avisa (`task_cv_45`)
+
+Dos hallazgos de la auditoría del 2026-09-01 tocan esta decisión:
+
+- **G-03 — `direct_to_default_allowed` se retira.** Prometía un merge
+  fast-forward a la rama por defecto que **nadie ejecutaba** (`apply_push_policy`
+  no tenía llamantes en producción) y cuyo `update-ref` sin guard FF habría
+  retrocedido `main` el día que alguien lo cableara. Un plan acaba siempre en
+  pull request (principio rector 5): las políticas válidas son `forbidden` y
+  `branch_only_pr_required`; la retirada se rechaza al construir
+  `PlanGitPolicies` y en el esquema de la API (`GitConfigUpdateRequest`).
+  `plan_validation_mode` sigue: `auto_approve` sí está cableado (Plan 06
+  `task_06_23`).
+- **G-10 — la credencial caducada avisa antes del `pr_error`.** Un PAT o una
+  clave SSH caducados se descubrían en el `pr_error` de un plan ya `completed`.
+  Ahora cualquier error de git/PR que huela a autenticación (401/403,
+  `Authentication failed`, `Permission denied (publickey)`, `could not read
+Username`…) emite `git_credential_failed` al tenant (in-app + email), throttled
+  seis horas por plan/proyecto; la sonda periódica de fetch (ADR 0098) es la que
+  lo ve primero.

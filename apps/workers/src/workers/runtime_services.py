@@ -30,9 +30,11 @@ Vault, so do not put production secrets there.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from shared_test_runtimes.images import is_valid_digest, split_reference
 
 from workers.test_runtime import AuxServiceSpec
 
@@ -69,6 +71,18 @@ class _ServiceType:
     mem_limit: str | None
     # alias -> connection env injected into the MAIN container
     conn_env: Callable[[str], dict[str, str]]
+    #: `task_cv_44` (auditoría 2026-09-01, B-09): versiones ADICIONALES que un
+    #: proyecto puede pedir, cada una con su imagen pineada por digest. Antes
+    #: `version` recomponía `repo:tag` y deshacía el pin del sidecar.
+    versions: Mapping[str, str] = field(default_factory=dict)
+
+    def pinned_versions(self) -> dict[str, str]:
+        """Mapa versión → imagen pineada: la del catálogo (por su tag) más las
+        declaradas en ``versions``."""
+        _repo, tag, _digest = split_reference(self.default_image)
+        pinned = {str(tag or "latest"): self.default_image}
+        pinned.update({str(k): str(v) for k, v in self.versions.items()})
+        return pinned
 
 
 def _mysql_conn(alias: str) -> dict[str, str]:
@@ -216,18 +230,65 @@ def _validate_env(raw: Any, *, where: str) -> dict[str, str]:
     return out
 
 
-def _image_from_version(default_image: str, version: Any) -> str:
+def _image_from_version(spec_type: _ServiceType, version: Any, *, where: str) -> str:
+    """La imagen pineada de ``version`` (`task_cv_44`). Una versión que el
+    catálogo no tiene pineada se rechaza nombrando las que hay: componer
+    `repo:tag` a mano deshacía el pin por digest del sidecar."""
     if version is None or str(version).strip() == "":
-        return default_image
-    repo = default_image.split(":", 1)[0]
+        return spec_type.default_image
     tag = str(version).strip()
-    image = f"{repo}:{tag}"
-    if not _IMAGE_RE.match(image):
-        raise RuntimeServicesConfigError(f"invalid service version {version!r}")
-    return image
+    pinned = spec_type.pinned_versions()
+    if tag not in pinned:
+        known = ", ".join(sorted(pinned))
+        raise RuntimeServicesConfigError(
+            f"{where}: unknown service version {version!r}; pinned versions: {known}"
+        )
+    return pinned[tag]
 
 
-def _parse_one_service(entry: Any, index: int, aliases_seen: set[str]) -> AuxServiceSpec:
+def _registry_of(image: str) -> str:
+    """El registry (con su prefijo de repo) de una referencia: el primer
+    segmento si parece un host (`.`, `:` o `localhost`); si no, Docker Hub sin
+    decirlo (`docker.io/<repo>`)."""
+    repo, _tag, _digest = split_reference(image)
+    head = repo.split("/", 1)[0]
+    if "." in head or ":" in head or head == "localhost":
+        return repo
+    return f"docker.io/{repo}"
+
+
+def _registry_allowed(image: str, allowlist: Sequence[str]) -> bool:
+    """¿El registry/prefijo de ``image`` está en ``allowlist``? Casa por
+    segmentos enteros: `ghcr.io/acme` casa `ghcr.io/acme/tool`, no
+    `ghcr.io/acme-evil/tool`."""
+    full = _registry_of(image)
+    for entry in allowlist:
+        prefix = str(entry).strip().rstrip("/")
+        if prefix and (full == prefix or full.startswith(prefix + "/")):
+            return True
+    return False
+
+
+def _check_image_provenance(image: str, *, where: str, allowlist: Sequence[str]) -> None:
+    """`task_cv_44` (B-05): una imagen del tenant lleva `@sha256:` o viene de un
+    registry de `WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST`. Sin eso el sandbox
+    ejecutaría lo que un tag mutable devuelva hoy."""
+    _repo, _tag, digest = split_reference(image)
+    if digest:
+        if not is_valid_digest(digest):
+            raise RuntimeServicesConfigError(f"{where}: malformed image digest in {image!r}")
+        return
+    if _registry_allowed(image, allowlist):
+        return
+    raise RuntimeServicesConfigError(
+        f"{where}: image {image!r} is neither pinned by digest (@sha256:...) nor from an "
+        "allowlisted registry (WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST)"
+    )
+
+
+def _parse_one_service(
+    entry: Any, index: int, aliases_seen: set[str], *, allowlist: Sequence[str] = ()
+) -> AuxServiceSpec:
     where = f"services[{index}]"
     if not isinstance(entry, dict):
         raise RuntimeServicesConfigError(f"{where} must be an object")
@@ -243,7 +304,7 @@ def _parse_one_service(entry: Any, index: int, aliases_seen: set[str]) -> AuxSer
             )
         spec_type = SERVICE_CATALOG[str(svc_type)]
         alias = str(entry.get("alias") or spec_type.default_alias)
-        resolved_image = _image_from_version(spec_type.default_image, entry.get("version"))
+        resolved_image = _image_from_version(spec_type, entry.get("version"), where=where)
         service_env = {**dict(spec_type.service_env), **env}  # project env may extend
         healthcheck = spec_type.healthcheck_cmd
         mem_limit = spec_type.mem_limit
@@ -253,6 +314,7 @@ def _parse_one_service(entry: Any, index: int, aliases_seen: set[str]) -> AuxSer
         # top-level `env`, e.g. a full connection string).
         if not isinstance(image, str) or not _IMAGE_RE.match(image):
             raise RuntimeServicesConfigError(f"{where}: invalid image reference {image!r}")
+        _check_image_provenance(image, where=where, allowlist=allowlist)
         alias = str(entry.get("alias") or "")
         if not alias:
             raise RuntimeServicesConfigError(f"{where}: an image service requires an 'alias'")
@@ -295,6 +357,8 @@ def _connection_env(entry: Any) -> dict[str, str]:
 
 def build_project_runtime_services(
     repository_config: Mapping[str, Any] | None,
+    *,
+    image_registry_allowlist: Sequence[str] = (),
 ) -> ProjectRuntimeServices:
     """Resolve a project's declared runtime services + env + custom image.
 
@@ -318,7 +382,7 @@ def build_project_runtime_services(
     aux: list[AuxServiceSpec] = []
     main_env: dict[str, str] = {}
     for i, entry in enumerate(raw_services):
-        aux.append(_parse_one_service(entry, i, aliases_seen))
+        aux.append(_parse_one_service(entry, i, aliases_seen, allowlist=image_registry_allowlist))
         # connection env in declaration order; later same-type wins DATABASE_URL.
         main_env.update(_connection_env(entry))
 
@@ -330,6 +394,10 @@ def build_project_runtime_services(
         runtime_image = str(runtime_image).strip() or None
         if runtime_image and not _IMAGE_RE.match(runtime_image):
             raise RuntimeServicesConfigError(f"invalid runtime_image reference {runtime_image!r}")
+        if runtime_image:
+            _check_image_provenance(
+                runtime_image, where="runtime_image", allowlist=image_registry_allowlist
+            )
 
     preview_rw, writable_paths = _parse_preview(repository_config.get("preview"))
     return ProjectRuntimeServices(

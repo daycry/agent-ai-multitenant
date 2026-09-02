@@ -33,11 +33,13 @@ from workers.backup_verification import verify_bundle
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine, worker_session
+from workers.maintenance.singleton import beat_singleton
 
 _log = structlog.get_logger("workers.backup_task")
 
 
 @app.task(name="workers.run_daily_backup")  # type: ignore[untyped-decorator]
+@beat_singleton("run_daily_backup", ttl_s=3 * 3600)
 def run_daily_backup() -> dict[str, Any]:
     """Run the daily full backup (scheduled).
 

@@ -59,7 +59,10 @@ Los workers **nunca** montan el socket. El compose generado añade un servicio
   socket. Nota honesta sobre `VOLUMES=0`: bloquea el endpoint `/volumes`, no los
   bind-mounts que el propio worker declara en `HostConfig`; la garantía contra
   montar rutas arbitrarias del host la da el worker validando `worktree_host_path`
-  bajo `data_root`, no el proxy;
+  bajo `data_root`, no el proxy. _Desde el 2026-09-02 (`task_cv_45`, B-10) esa
+  validación existe de verdad_: `workers.host_paths.ensure_under_data_root` en
+  `review_runtime_task`, `test_runtime_task` y `run_cycle`; una ruta fuera de
+  `data_root` no se monta y el check lo dice como fallo de infraestructura;
 - los servicios `workers` y `workers-privileged` reciben
   `DOCKER_HOST=tcp://docker-socket-proxy:2375` y se unen a `agentic-docker`.
 

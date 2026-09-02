@@ -87,7 +87,8 @@ async def test_a_persisted_pr_failure_emits_plan_pr_failed(
     )
 
     assert plan.pr_error == "GitHub PR falló (401): bad credentials"
-    assert [e["event_type"] for e in emitted] == ["plan_pr_failed"]
+    # `task_cv_45` (G-10): un 401 es ADEMÁS una credencial rechazada.
+    assert [e["event_type"] for e in emitted] == ["plan_pr_failed", "git_credential_failed"]
     event = emitted[0]
     assert event["tenant_id"] == str(plan.tenant_id)
     assert event["context"]["plan_id"] == str(plan.id)

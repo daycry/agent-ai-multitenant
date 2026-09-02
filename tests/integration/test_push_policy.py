@@ -87,31 +87,12 @@ def test_pr_required_returns_pr_required_no_merge(tmp_path: Path) -> None:
     assert main_after == main_before
 
 
-def test_direct_to_default_fast_forwards_main(tmp_path: Path) -> None:
-    from workers.plan_git import PlanGitPolicies, PlanGitWorkflow
+def test_direct_to_default_was_retired(tmp_path: Path) -> None:
+    """`task_cv_45` (G-03, auditoría 2026-09-01): `direct_to_default_allowed` era
+    una política fantasma —sin llamantes en producción— cuyo `update-ref` sin
+    guard fast-forward habría retrocedido `main`. Un plan acaba siempre en PR
+    (principio rector 5); la política se rechaza al construirla."""
+    from workers.plan_git import PlanGitPolicies
 
-    bare = _bare_with_plan_branch(tmp_path)
-    plan_tip = subprocess.run(
-        ["git", "rev-parse", "refs/heads/plan/m1-x"],
-        cwd=str(bare),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-    wf = PlanGitWorkflow(
-        bare_repo_path=bare,
-        plan_branch="plan/m1-x",
-        policies=PlanGitPolicies(push_policy="direct_to_default_allowed"),
-    )
-    action = wf.apply_push_policy()
-    assert action == "merged_to_default"
-
-    main_tip = subprocess.run(
-        ["git", "rev-parse", "refs/heads/main"],
-        cwd=str(bare),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert main_tip == plan_tip
+    with pytest.raises(ValueError, match="direct_to_default_allowed"):
+        PlanGitPolicies(push_policy="direct_to_default_allowed")  # type: ignore[arg-type]

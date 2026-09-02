@@ -146,6 +146,42 @@ SHELL_ONLY_EN = (
 )
 
 
+#: Todas las variantes de la guía, para poder retirarlas de un prompt horneado.
+_ALL_GUIDANCE: tuple[str, ...] = (
+    BOTH_DOORS_ES,
+    BOTH_DOORS_EN,
+    STACK_ONLY_ES,
+    STACK_ONLY_EN,
+    SHELL_ONLY_ES,
+    SHELL_ONLY_EN,
+)
+
+
+def _normalised_slugs(tool_slugs: Iterable[str]) -> set[str]:
+    """Slugs y NOMBRES (`stack_exec` ≡ `stack-exec`): el dispatch resuelve nombres."""
+    return {str(slug).replace("_", "-") for slug in tool_slugs}
+
+
+def strip_execution_guidance(text: str) -> str:
+    """Retira cualquier guía de ejecución horneada en ``text`` (`task_cv_33`).
+
+    La guía se concatenaba al `system_prompt` al sembrar y las copias la
+    heredaban congelada; una migración que cambiaba las tools de un agente no
+    tocaba el texto. Al resolver la persona en el dispatch se quita la horneada
+    y se añade la de las tools EFECTIVAS (`with_execution_guidance`)."""
+    for block in _ALL_GUIDANCE:
+        text = text.replace(block, "")
+    return text
+
+
+def with_execution_guidance(text: str, tool_slugs: Iterable[str], language: str | None) -> str:
+    """``text`` sin la guía horneada y con la que corresponde a ``tool_slugs``."""
+    base = strip_execution_guidance(text)
+    es, en = execution_guidance(tool_slugs)
+    chosen = en if str(language or "").lower().startswith("en") else es
+    return base + chosen
+
+
 def execution_guidance(tool_slugs: Iterable[str]) -> tuple[str, str]:
     """El bloque (ES, EN) que corresponde a las tools REALES del agente.
 
@@ -153,7 +189,7 @@ def execution_guidance(tool_slugs: Iterable[str]) -> tuple[str, str]:
     nada que aclarar y añadirle un párrafo sobre ejecución sería enseñarle a
     intentar lo que no puede.
     """
-    slugs = set(tool_slugs)
+    slugs = _normalised_slugs(tool_slugs)
     has_stack = STACK_EXEC_SLUG in slugs
     has_shell = SHELL_EXEC_SLUG in slugs
     if has_stack and has_shell:
@@ -175,4 +211,6 @@ __all__ = [
     "STACK_ONLY_EN",
     "STACK_ONLY_ES",
     "execution_guidance",
+    "strip_execution_guidance",
+    "with_execution_guidance",
 ]

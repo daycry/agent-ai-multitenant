@@ -161,7 +161,11 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "api-rest-guidelines",
             "postgresql-best-practices",
         ),
-        allowed_commands=("python", "pip", "pytest", "node", "npm", "npx"),
+        # task_cv_36: el runtime es python-pytest y no trae node; prometer
+        # `node/npm/npx` mandaba al agente a buscarlos y a quemar iteraciones.
+        # El front de esta plantilla se prueba con `node-playwright` por tarea
+        # (e2e-test-suite), no desde aquí.
+        allowed_commands=("python", "pip", "pytest"),
         default_runtime_template="python-pytest",
         allowed_domains=("pypi.org", "files.pythonhosted.org", "registry.npmjs.org"),
     ),
@@ -204,7 +208,9 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
             "php-symfony-conventions",
             "postgresql-best-practices",
         ),
-        allowed_commands=("python", "pip", "pytest", "php", "composer", "phpunit"),
+        # task_cv_36: la migración corre sobre python-pytest, que no trae PHP; el
+        # código legado se lee, no se ejecuta aquí.
+        allowed_commands=("python", "pip", "pytest"),
         default_runtime_template="python-pytest",
         allowed_domains=("pypi.org", "files.pythonhosted.org", "packagist.org"),
     ),
@@ -234,7 +240,10 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         # exactamente lo que esta plantilla ya gateaba. El preset `production`
         # añade lo que faltaba (PII, altas de usuario, comunicación externa).
         human_approval_policy=_POLICY_PROD_SKELETON,
-        allowed_commands=("python", "pip", "pytest", "docker", "terraform", "ansible"),
+        # task_cv_36: `docker/terraform/ansible` no están en python-pytest (y el
+        # sandbox no tiene socket de Docker por el principio rector 2): la
+        # plantilla escribe IaC y la ejecuta el pipeline del tenant, no el agente.
+        allowed_commands=("python", "pip", "pytest"),
         default_runtime_template="python-pytest",
         allowed_domains=("pypi.org", "files.pythonhosted.org"),
     ),

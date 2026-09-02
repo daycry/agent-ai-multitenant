@@ -52,6 +52,7 @@ async def _seed(
     project_model: dict | None = None,
     project_budgets: dict | None = None,
     project_paused_by_budget: bool = False,
+    project_status: str = "active",
 ) -> dict[str, UUID]:
     """A task in ``in_review``; ``reviewer_type`` = 'ai' | 'human' | None decides
     whether a reviewer agent is attached and of which kind. ``reviewer_model``
@@ -81,7 +82,7 @@ async def _seed(
                 id=ids["project"],
                 tenant_id=ids["tenant"],
                 name="P",
-                status="active",
+                status=project_status,
                 is_template=False,
                 worker_config={},
                 model_config=project_model,
@@ -662,6 +663,49 @@ async def test_the_reviewers_own_verdict_is_never_the_implementer_output(
         assert request["review_context"]["implementer_output"] == "implemented the parser", (
             "el reviewer recibe su propio veredicto anterior como salida del implementador"
         )
+    finally:
+        await engine.dispose()
+        await redis.aclose()
+
+
+# --------------------------------------------------------------- task_cv_41
+# Auditoría 2026-09-01 (C-05): el despacho de review sólo miraba que la tarea
+# estuviera `in_review` con reviewer; el de implementación exige además
+# proyecto `active` y sin pausa por presupuesto. Un proyecto pausado seguía
+# gastando en runs de review. Las dos guardas se aplican también aquí.
+
+
+@pytest.mark.asyncio
+async def test_a_paused_project_does_not_dispatch_review_runs(
+    _migrated: None, admin_database_url: str
+) -> None:
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="ai", project_status="paused")
+        await _dispatcher(sm).handle(_in_review_event(ids))
+        messages = await _drain(redis, "default")
+        assert messages == [], "un proyecto pausado despachó un run de review"
+    finally:
+        await engine.dispose()
+        await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_project_paused_by_budget_does_not_dispatch_review_runs(
+    _migrated: None, admin_database_url: str
+) -> None:
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(sm, reviewer_type="ai", project_paused_by_budget=True)
+        await _dispatcher(sm).handle(_in_review_event(ids))
+        messages = await _drain(redis, "default")
+        assert messages == [], "un proyecto en pausa por presupuesto despachó un review"
     finally:
         await engine.dispose()
         await redis.aclose()

@@ -270,6 +270,36 @@ async def seed_catalog_ingestion_per_document(
     return results
 
 
+async def warn_stale_catalog_corpus(
+    session: AsyncSession, *, catalog_dir: Path | None = None
+) -> int:
+    """Avisa (WARNING) de cada corpus de KB built-in cuyo texto en el repo ya no
+    coincide con lo ingerido en la base (`task_cv_36`, auditoría 2026-09-01 F-07).
+
+    Ingerir exige embeddings (Ollama) y no puede vivir en el arranque; lo que sí
+    puede es DECIRLO: la skill CI4 reescrita el 2026-09-01 no llegaba a ninguna
+    instalación sin CLI y nadie lo sabía. Devuelve cuántos corpus están rancios;
+    no toca la base."""
+    base_dir = catalog_dir or CATALOG_DIR
+    stale = 0
+    for kb in BUILTIN_KBS:
+        md_path = base_dir / f"{kb.slug}.md"
+        if not md_path.is_file():
+            continue
+        shipped = _corpus_hash(md_path.read_text(encoding="utf-8"))
+        existing = await _existing_corpus_hash(session, catalog_document_id_for_slug(kb.slug))
+        if existing != shipped:
+            stale += 1
+            logger.warning(
+                "catalog_ingestion.corpus_stale",
+                slug=kb.slug,
+                ingested_hash=existing,
+                shipped_hash=shipped,
+                hint="run `python -m api_server.cli seed-catalog` to re-ingest",
+            )
+    return stale
+
+
 async def _ingest_one(
     session: AsyncSession,
     *,

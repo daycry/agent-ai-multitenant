@@ -30,15 +30,18 @@ from shared_test_runtimes.dep_cache import (
     compute_lock_hash,
 )
 from shared_test_runtimes.types import (
+    TOOLCHAIN_COMMANDS,
     NetworkPolicy,
     OutputParser,
     Resources,
     RuntimeTemplate,
+    foreign_commands,
 )
 
 __all__ = [
     "CATALOG",
     "DEFAULT_TTL_SECONDS",
+    "TOOLCHAIN_COMMANDS",
     "CacheEntry",
     "DepCacheManager",
     "LockHashResult",
@@ -47,6 +50,7 @@ __all__ = [
     "Resources",
     "RuntimeTemplate",
     "compute_lock_hash",
+    "foreign_commands",
     "get",
     "list_ids",
 ]

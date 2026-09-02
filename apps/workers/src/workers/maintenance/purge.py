@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.db import worker_engine
+from workers.maintenance.singleton import beat_singleton
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -386,6 +387,7 @@ async def purge_soft_deleted(
 
 
 @app.task(name="workers.purge_soft_deleted")  # type: ignore[untyped-decorator]
+@beat_singleton("purge_soft_deleted", ttl_s=3600)
 def purge_soft_deleted_task(
     dry_run: bool | None = None, grace_days: int | None = None
 ) -> dict[str, Any]:

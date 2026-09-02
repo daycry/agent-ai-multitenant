@@ -172,3 +172,20 @@ def test_the_branch_is_created_when_the_plan_never_committed(data_root: Path) ->
     """
     assert _write(data_root) == "written"
     assert f"docs/07-changelog/{_PLAN_ID}.md" in _branch_files(data_root)
+
+
+def test_the_docs_worktree_is_removed_after_the_push(data_root: Path) -> None:
+    """`task_cv_42` (auditoría 2026-09-01, G-03): el worktree `plan-docs-*` se
+    creaba para commitear el changelog y NUNCA se retiraba: un worktree por plan
+    cerrado, registrado en el bare, que la poda por TTL sólo tocaba a los 30
+    días. Tras el push se retira en un `finally`, pase lo que pase."""
+    from workers.git_repos import BareRepoLayout
+
+    assert _write(data_root) == "written"
+
+    layout = BareRepoLayout(data_root=data_root, tenant_slug=_TENANT, project_slug=_PROJECT)
+    leftovers = sorted(p.name for p in layout.worktrees_root.glob("plan-docs-*"))
+    assert leftovers == [], f"worktree de docs sin retirar: {leftovers}"
+    bare = data_root / "projects" / _TENANT / _PROJECT / "repos" / f"{_PROJECT}.git"
+    registered = _git_out("worktree", "list", "--porcelain", cwd=bare)
+    assert "plan-docs-" not in registered, registered

@@ -59,7 +59,7 @@ from agent_runtime.review_harvest import (
     _workspace_root,
     worktree_file_list,
 )
-from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
+from agent_runtime.safeguards import Budgets, ModelPrices, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
     STATUS_AWAITING_APPROVAL,
@@ -351,6 +351,46 @@ def _provider_abort_code(exc: LLMError) -> str:
     return str(SafeguardCode.PROVIDER_ERROR)
 
 
+_COMPACT_ARGS_CHARS = 200
+
+
+def _compact_args(args: Any) -> str:
+    """`task_cv_45` (D-08): los args de una acción, en una línea corta y legible
+    (`k=v`), para que la observación —y su línea condensada al evictar— digan
+    QUÉ acción produjo el resultado."""
+    if not isinstance(args, dict) or not args:
+        return ""
+    parts: list[str] = []
+    for key, value in args.items():
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        parts.append(f"{key}={text}")
+    joined = " ".join(parts)
+    if len(joined) > _COMPACT_ARGS_CHARS:
+        return joined[: _COMPACT_ARGS_CHARS - 1] + "…"
+    return joined
+
+
+def _filter_batch_for_approval(decision: ModelDecision, approval: Any) -> ModelDecision:
+    """ADR 0111 + `task_cv_45` (D-10): el gate aplica POR ELEMENTO al lote
+    read-only. Un elemento con categoría sensible se EXPULSA (nunca se ejecuta
+    sin aprobación), pero `review` recibe sus ARGS —una acción ya aprobada
+    exactamente igual se canjea— y lo expulsado viaja en `batch_dropped` para
+    que la observación lo anuncie en vez de callarlo."""
+    kept: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for extra in decision.batch_calls:
+        tool = str(extra.get("tool") or "")
+        category = approval.review(tool, extra.get("args") or {})
+        if category is None:
+            kept.append(extra)
+        else:
+            dropped.append({**dict(extra), "category": str(category)})
+    if not dropped:
+        return decision
+    _log.info("batch: dropped %d call(s) requiring approval", len(dropped))
+    return replace(decision, batch_calls=tuple(kept), batch_dropped=tuple(dropped))
+
+
 @dataclass
 class AgentDeps:
     """Everything the loop needs from the outside world."""
@@ -369,6 +409,9 @@ class AgentDeps:
     # (not write_file), the read-churn backstop cuts it, and a safeguard trip
     # escalates to a human instead of a silent abort.
     is_review: bool = False
+    # `task_cv_45` (D-09): preguntas `ask_human` que le quedan a la TASK (el
+    # dispatcher las cuenta contra `ASK_HUMAN_MAX_PER_TASK`); None = sin techo.
+    ask_human_remaining: int | None = None
     # ADR 0102 / g1: the resolved guardrail pipeline (or None). run_hook scans
     # tool OUTPUTS for prompt injection (post_tool) before they re-enter context.
     guardrails: Any = None
@@ -896,17 +939,7 @@ class _AgentLoop:
             # (nunca se ejecuta sin aprobación); el call principal sigue el gate
             # histórico de más abajo intacto.
             if decision.batch_calls and self.deps.approval is not None:
-                kept = tuple(
-                    extra
-                    for extra in decision.batch_calls
-                    if self.deps.approval.review(str(extra.get("tool") or "")) is None
-                )
-                if len(kept) != len(decision.batch_calls):
-                    _log.info(
-                        "batch: dropped %d call(s) requiring approval",
-                        len(decision.batch_calls) - len(kept),
-                    )
-                    decision = replace(decision, batch_calls=kept)
+                decision = _filter_batch_for_approval(decision, self.deps.approval)
             action: dict[str, Any] = {"tool": decision.tool, "args": decision.tool_args}
             if decision.batch_calls:
                 # ADR 0111: la fingerprint del detector incluye el LOTE — repetir
@@ -1173,6 +1206,24 @@ class _AgentLoop:
         reintento dirigido, nunca un park vacío."""
         if decision.kind != DecisionKind.ACT or decision.tool != "ask_human":
             return decision, None
+        remaining = self.deps.ask_human_remaining
+        if remaining is not None and remaining <= 0:
+            # `task_cv_45` (D-09): techo de preguntas por task. Cada respuesta
+            # re-despachaba con presupuesto fresco: ciclo sin límite de coste ni
+            # de fatiga humana. El dispatcher pasa el restante; aquí se respeta.
+            rewritten = replace(
+                decision,
+                tool="noop",
+                tool_args={
+                    "reason": (
+                        "ask_human budget exhausted for this task: no more questions "
+                        "will be forwarded to a human. Decide with what you have, or "
+                        "finish with finish_status=failed explaining what was missing."
+                    )
+                },
+                batch_calls=(),
+            )
+            return rewritten, None
         question = str((decision.tool_args or {}).get("question") or "").strip()
         if not question:
             rewritten = replace(
@@ -1348,6 +1399,8 @@ class _AgentLoop:
         ]
         observation = {
             "tool": tool,
+            # `task_cv_45` (D-08): qué acción produjo esta observación, capado.
+            "args": _compact_args(args),
             "ok": result.ok,
             "output": capped_output,
             "error": capped_error,
@@ -1395,6 +1448,10 @@ class _AgentLoop:
                     }
                 )
             observation["batch"] = batch_observations
+        # `task_cv_45` (D-10): lo expulsado del lote se anuncia, no se calla.
+        dropped = decision.get("batch_dropped") or []
+        if dropped:
+            observation["batch_dropped"] = [dict(d) for d in dropped]
         return {
             "last_observation": observation,
             "steps": steps,
@@ -2078,6 +2135,16 @@ def build_agent_graph(
     return _AgentLoop(deps, tracker, detector).build()
 
 
+def _bind_model_deadline(model: Any, tracker: SafeguardTracker) -> None:
+    """`task_cv_40` (D-05): el cliente del proveedor conoce el restante del
+    wall-clock y lo usa como `timeout` de cada llamada. Un cliente sin el hook
+    (scripted, fakes) se deja como está."""
+    bind = getattr(model, "bind_deadline", None)
+    if not callable(bind):
+        return
+    bind(lambda: tracker.budgets.max_wall_clock_s - tracker.elapsed_s())
+
+
 def run_agent(
     deps: AgentDeps,
     task: AgentTask,
@@ -2088,6 +2155,7 @@ def run_agent(
     on_step: Callable[[dict[str, Any]], None] | None = None,
     system_preamble: str | None = None,
     agent_seal: str | None = None,
+    model_prices: ModelPrices | None = None,
 ) -> ExecutionResult:
     """Run one execution of the agent loop end to end.
 
@@ -2108,7 +2176,8 @@ def run_agent(
     `None` yields the pre-`task_gov_03` label, unchanged.
     """
     budgets = budgets or Budgets()
-    tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
+    tracker = SafeguardTracker(budgets, clock=clock or time.monotonic, prices=model_prices)
+    _bind_model_deadline(deps.model, tracker)
     detector = LoopDetector(threshold=loop_threshold)
     graph = build_agent_graph(deps, tracker=tracker, detector=detector)
 

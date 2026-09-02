@@ -1,7 +1,7 @@
 ---
 plan_id: remediacion-ciclo-vida-proyecto-2026-09-01
 title: Remediación del ciclo de vida de un proyecto — workers, agentes, memorias y runtimes
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-09-02
 completed_at: null
@@ -46,7 +46,7 @@ el modelo ve. La ola 4 es operación.
 1. Todos los checkboxes marcados `[x]` con su test automático en verde.
 2. Suites `unit` + `integration` + runtime sin regresiones respecto al baseline.
 3. Tests humanos `human_cv_01..04` (§Tests humanos) validados por el operador.
-4. Entrada en `docs/07-changelog/remediacion-ciclo-vida-proyecto.md`.
+4. Entrada en `docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`.
 5. Los ADR 0060, 0071, 0072, 0102, 0129, 0149 y 0163 actualizados en el mismo commit que
    los cambios que los contradicen (regla de precedencia de `CLAUDE.md`).
 
@@ -276,7 +276,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_25` — Un bridge efímero por ejecución en vez de una L2 compartida (B-07)
 
-- [ ] _(pendiente al cierre de la sesión del 2026-09-02: es la única de la ola 2 sin hacer; el patrón está en `test_runtime.py:_create_bridge` + `_attach_registry_proxy` y el runner del agente tendría que conectar `egress-proxy` y `api-server` —y los servidores MCP internos que declare el proyecto— al bridge de cada ejecución, además de actualizar el ADR 0012)_ **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
+- [x] _(hecho 2026-09-02, tests en verde; `AgentContainerRunner` crea un bridge `internal` por ejecución (`agent-run-<exec>-<hex>`, etiqueta `com.agentic-platform.run-bridge`), conecta con alias el egress-proxy, el api-server y los MCP internos del proyecto (`ContainerSpec.peers`), lo desmonta al terminar y el sweeper poda los huérfanos; `WORKERS_AGENT_NETWORK_PER_EXECUTION=false` devuelve la red compartida; ADR 0012 con adenda; el test de «dos sandboxes no se ven» es de Docker real y queda para el stack de pruebas)_ **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
       comparten `agentic-agents` con ICC (`isolation.py` promete lo contrario). Bridge interno por
       ejecución (patrón de `test_runtime.py:_create_bridge`) con `network.connect` del egress-proxy
       y del api-server. Actualizar ADR 0012.
@@ -332,7 +332,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_33` — La guía de ejecución se genera en el dispatch y `merge` absorbe capacidades (F-03)
 
-- [ ] **Título**: la guía se hornea en `agents.system_prompt` al sembrar, las copias la heredan
+- [x] _(hecho 2026-09-02, tests en verde; `resolve_agent_persona(agent, tool_slugs=)` retira la guía horneada y añade la de las tools efectivas (`strip_execution_guidance` / `with_execution_guidance`), el dispatch la pide con `agent_tool_names`, y `POST /agents/{fork_id}/merge` acepta `capabilities: ["tools","skills"]`; los seeds siguen horneando la guía para la UI, el dispatch la sustituye)_ **Título**: la guía se hornea en `agents.system_prompt` al sembrar, las copias la heredan
       congelada y las migraciones cambian tools sin tocar texto. `resolve_agent_persona` recibe
       las tools efectivas y añade `execution_guidance`; `POST /agents/{fork_id}/merge` acepta
       `capabilities: ["tools","skills"]`.
@@ -360,7 +360,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_36` — El refresco de arranque cubre plantillas y avisa del corpus rancio (F-07, F-08)
 
-- [ ] **Título**: `startup.py` no refresca `project_templates`, `human_agent_templates`,
+- [x] _(hecho 2026-09-02, tests en verde; el refresco de arranque aplica también políticas, plantillas de proyecto (built-in y CI4) y plantillas de agente humano, y avisa con WARNING del corpus de KB rancio (`warn_stale_catalog_corpus`); `RuntimeTemplate.toolchains` + `foreign_commands` cruzan las allowlists, y `webapp`, `legacy-migration` y `devops-bootstrap` dejan de prometer comandos que su runtime no trae)_ **Título**: `startup.py` no refresca `project_templates`, `human_agent_templates`,
       `approval_policies` ni el corpus de skills (la skill CI4 reescrita el 2026-09-01 no llega a
       ninguna instalación sin CLI). Añadir los upserts; WARNING con `corpus_hash` desactualizado;
       test que cruce `allowed_commands` de cada plantilla con los binarios de su runtime
@@ -374,52 +374,90 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_40` — Presupuestos que se aplican antes del gasto (D-05, D-06, D-07)
 
-- [ ] **Título**: el wall-clock sólo se mira al inicio de `plan` (una llamada puede rebasarlo 45
+- [x] **Título**: el wall-clock sólo se mira al inicio de `plan` (una llamada puede rebasarlo 45
       min y el worker mata antes); `max_cost_usd` es 0 en tres de cuatro proveedores; un fallo del
       motor de guardrails deja un proyecto con reglas `block` corriendo sin ninguna. Pasar el
       restante como `timeout` a `_run_with_retry`/`stack_exec`; estimar coste con precios del
       catálogo cuando el proveedor devuelva 0; abortar (`guardrails_unavailable`) si el spec trae
       `block` y el pipeline no arranca.
+      _Cerrada el 2026-09-02_: `run_agent` ata el restante del wall-clock al cliente del
+      proveedor (`bind_deadline`) y cada llamada viaja con ese `timeout` (suelo 5 s); el worker
+      adjunta `model.prices` (USD/1M tokens, del catálogo `model_prices`) y el tracker estima el
+      coste de las llamadas que llegan a 0 (`cost_estimated_calls` en el envelope), con lo que
+      `max_cost_usd` tripa en los cuatro proveedores; con reglas `block` y sin motor el run
+      aborta `guardrails_unavailable` antes de la primera llamada (ADR 0102, addendum). Tests:
+      `test_budgets_before_spend.py`, `test_provider_retries.py`, `test_budget_envelope_step.py`,
+      `test_el_spec_lleva_los_precios_del_catalogo.py`.
       **Coste**: 1,5 d.
 
 ### `task_cv_41` — Escaladas visibles y despacho de review que respeta pausa y proyecto (C-05, C-06, C-07)
 
-- [ ] **Título**: las tres escaladas del bucle AI-reviewer no emiten notificación ni salen en el
+- [x] **Título**: las tres escaladas del bucle AI-reviewer no emiten notificación ni salen en el
       panel; `_on_task_in_review` esquiva `budget_pause_block` y `status == active`; el reviewer
       puede acabar siendo el implementador cuando no hay preset. Emitir `task_blocked`, panel con
       `blocked` + `review_comment.escalated`, y excluir `reviewer_agent_id` del pool.
       **Coste**: 1 d.
+      _Cerrada el 2026-09-02_: `_notify_execution_outcome` recibe el estado final de la tarea y
+      emite `task_blocked` (razón = `abort_code` o `escalated`) cuando queda bloqueada;
+      `_on_task_in_review` aplica las mismas guardas que el despacho de implementación
+      (proyecto `active`, sin `budget_pause_block`); `_pick` retira `reviewer_agent_id` del
+      pool; el panel de la tarea muestra la escalada del último `review_comment`
+      (`task-review-criteria.tsx`). Tests: `test_execution_outcome_notify.py`,
+      `test_assignment_policies.py`, `test_in_review_dispatch.py`, `task-review-criteria.test.tsx`.
 
 ### `task_cv_42` — Beat con instancia única y poda que respeta ejecuciones vivas (G-05, G-06, G-04)
 
-- [ ] **Título**: ninguna tarea beat tiene `expires` ni lock (`acks_late` las reentrega: dos backups
+- [x] **Título**: ninguna tarea beat tiene `expires` ni lock (`acks_late` las reentrega: dos backups
       con dos quiesces); la poda hace `unlock` + `remove --force` confiando sólo en el mtime del
       directorio (dependencia no fijada por ningún test: hoy la refresca el ocultado del `.git`);
       el worktree `plan-docs-*` nunca se retira. `expires` + `SET NX` en las tareas con efectos en
       disco; `executions.status='running'` → `keep`; no soltar un lock cuyo `execution_id` esté
       `running`; `_remove_worktree` en el `finally` de `write_plan_docs_to_branch`. Actualizar ADR 0163 §5.
+      _Cerrada el 2026-09-02_: las seis tareas con efecto en disco (poda de worktrees, dep-cache,
+      housekeeping de git, purga de soft-borrados, backup, sweeper) llevan `expires` en su entrada
+      del beat y el cerrojo `SET NX EX` de `workers.maintenance.singleton` (sin Redis corren igual
+      y lo registran); la política de poda lee `executions.status` y un worktree con run `running`
+      es `keep` aunque el plan esté cerrado (con ello no se suelta su lock); `write_plan_docs_to_branch`
+      retira el worktree de docs en un `finally` (`WorktreeManager.remove`). ADR 0163 con addendum
+      del 2026-09-02. Tests: `test_el_mantenimiento_respeta_las_ejecuciones_vivas.py`,
+      `test_plan_closure_docs.py::test_the_docs_worktree_is_removed_after_the_push`.
       **Coste**: 1,5 d.
 
 ### `task_cv_43` — Timeouts de git remoto, DLQ con lector y quiesce que no deja facturando (G-07, A-09, G-08)
 
-- [ ] **Título**: `_run_git` fija 120 s también para push/fetch de remoto (un repo grande nunca
+- [x] **Título**: `_run_git` fija 120 s también para push/fetch de remoto (un repo grande nunca
       cierra); `dlq:executions` no tiene lector; el quiesce nocturno mata el worker y deja al
       agent-runtime facturando hasta 6-7 h. `timeout` parametrizable (`WORKERS_GIT_REMOTE_TIMEOUT_S`);
       métrica `agentic_dlq_depth` + endpoint System Admin; señal `worker_shutting_down` que mata
       los contenedores del worker y sella las filas (`failed:quiesced`).
       **Coste**: 1,5 d.
+      _Cerrada el 2026-09-02_: `WORKERS_GIT_REMOTE_TIMEOUT_S` (300 s por defecto) acota
+      fetch/push/pull/ls-remote/clone en `_run_git`, lo local sigue a 120 s y el vencimiento es un
+      `GitCommandError` (`test_el_git_remoto_tiene_timeout.py`); `dlq:executions` entra en
+      `agentic_dlq_depth` y `GET /admin/dead-letters` (System Admin) enseña profundidad y últimas
+      entradas de cada DLQ; cada contenedor lleva la etiqueta `com.agentic-platform.worker` y al
+      recibir `worker_shutting_down` el worker mata SUS agent-runtimes y sella sus filas
+      (`failed`, `abort_code=quiesced`, `workers.quiesce`). Tests:
+      `test_el_quiesce_no_deja_facturando.py`, `test_el_mantenimiento_respeta_las_ejecuciones_vivas.py`.
 
 ### `task_cv_44` — Imágenes del tenant por digest y con allowlist (B-05, B-09)
 
-- [ ] **Título**: `runtime_services.py` acepta cualquier `host/repo:tag` y `version` deshace el pin
+- [x] **Título**: `runtime_services.py` acepta cualquier `host/repo:tag` y `version` deshace el pin
       por digest de los sidecars; `agent-runtime:v1` y `browser-runtime:v1` no se publican ni
       fijan por digest (ADR 0148 sólo cubrió las 14 plantillas). Exigir `@sha256:` o allowlist
       de registries; mapa versión→digest; añadir las dos imágenes al pipeline de release.
       **Coste**: 1,5 d.
+      _Cerrada el 2026-09-02_: una `image:`/`runtime_image` del tenant lleva `@sha256:` o viene
+      de `WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST` (por segmentos enteros; vacía = sólo digest);
+      `version` resuelve contra `pinned_versions()` del catálogo y una versión no pineada se
+      rechaza nombrando las que hay; `agent-runtime` y `browser-runtime` se construyen y escanean
+      en `release-images.yml` (job `runtimes`), entran en `PLATFORM_APPS` y el compose del
+      instalador se las pasa al worker por `WORKERS_*_RUNTIME_IMAGE`. ADR 0148 con addendum.
+      Tests: `test_runtime_services.py`, `test_platform_images_wiring.py`.
 
 ### `task_cv_45` — Restos de menor riesgo
 
-- [ ] **Título**: `timeout -k` en el wrapper de `exec_run` (B-08); validar `worktree_host_path`
+- [x] **Título**: `timeout -k` en el wrapper de `exec_run` (B-08); validar `worktree_host_path`
       bajo `data_root` en los consumidores (B-10); `args` capados en la observación (D-08); techo
       de `ask_human` por task (D-09); lote read-only que anuncia el elemento expulsado (D-10);
       `plan_retro` por la persistencia común e idempotente por tag (E-06, G-12); memorizer humano
@@ -428,6 +466,20 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
       `git_credential_failed` (G-10); watchdog que re-resuelve contenedores (G-11); retirar
       `direct_to_default_allowed`/`plan_validation_mode` o cablearlos (G-03).
       **Coste**: 2 d (sumados).
+      _Cerrada el 2026-09-02_ en dos tandas. Operación: `timeout -k 10` (B-08);
+      `workers.host_paths.ensure_under_data_root` en review/test-runtime/run_cycle (B-10);
+      `agentic_recall_embedding_failures_total` (E-10); `approved` sin rama es WARNING (G-09); el
+      watchdog re-resuelve por etiqueta tras un recreate (G-11); `plan_retro` por
+      `persist_memory_candidates` e idempotente por tag en BD, 30 días de ventana (E-06, G-12).
+      Modelo y memoria: `args` capados en la observación y en la línea condensada (D-08);
+      `ASK_HUMAN_MAX_PER_TASK=5` → `ask_human_remaining` en el spec y noop visible al agotarse
+      (D-09); `review(tool, args)` por elemento del lote y `batch_dropped` en la observación
+      (D-10); memorizer humano por `_select_distiller` con causa y racha (E-07);
+      `sanitize_memory_content` antes de embeber/persistir (E-11); evento `git_credential_failed`
+      throttled desde el auto-PR y la sonda de fetch (G-10); `direct_to_default_allowed` retirada
+      —`plan_validation_mode=auto_approve` sí estaba cableado— (G-03; ADR 0072 addendum). Tests:
+      `test_los_restos_operativos_de_menor_riesgo.py`, `test_los_restos_de_memoria_y_git.py`,
+      runtime `test_restos_del_modelo.py`.
 
 ---
 

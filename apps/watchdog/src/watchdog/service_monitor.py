@@ -19,6 +19,7 @@ The Docker client is duck-typed: any object exposing `reload()`,
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -51,6 +52,36 @@ class ServiceMonitor:
     # antes (solo log), que es lo que quieren los tests que ya existían y un
     # watchdog corriendo en dev sin api-server delante.
     alert_sink: AlertSink | None = None
+    #: `task_cv_45` (G-11): cómo volver a encontrar el contenedor cuando el que
+    #: se resolvió al arrancar ya no existe (recreate de postgres/redis). Sin
+    #: esto el watchdog quedaba ciego con `NotFound` en cada tick.
+    resolver: Callable[[], Any] | None = None
+
+    def _healthy_after_re_resolve(self, exc: Exception) -> bool | None:
+        """`task_cv_45` (G-11): tras un fallo de inspección, volver a resolver el
+        contenedor y reintentar UNA vez; ``None`` si sigue sin poder mirarse."""
+        if not self._re_resolve():
+            _logger.error("watchdog.inspect_failed", name=self.name, error=str(exc))
+            return None
+        try:
+            return self.is_healthy()
+        except Exception as exc2:  # - docker errors vary widely
+            _logger.error("watchdog.inspect_failed", name=self.name, error=str(exc2))
+            return None
+
+    def _re_resolve(self) -> bool:
+        if self.resolver is None:
+            return False
+        try:
+            fresh = self.resolver()
+        except Exception as exc:  # - docker errors vary widely
+            _logger.warning("watchdog.re_resolve_failed", service=self.name, error=str(exc))
+            return False
+        if fresh is None:
+            return False
+        _logger.info("watchdog.container_re_resolved", service=self.name)
+        self.container = fresh
+        return True
 
     # ----- inspection -----
     def status(self) -> str:
@@ -90,8 +121,10 @@ class ServiceMonitor:
         try:
             healthy = self.is_healthy()
         except Exception as exc:  # - docker errors vary widely
-            _logger.error("watchdog.inspect_failed", name=self.name, error=str(exc))
-            return "inspect_failed"
+            recovered = self._healthy_after_re_resolve(exc)
+            if recovered is None:
+                return "inspect_failed"
+            healthy = recovered
 
         if healthy:
             if self.record.consecutive_failures:

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine
+from workers.maintenance.singleton import beat_singleton
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -239,6 +240,7 @@ async def _commit_recovered_worktree(
 
 
 @app.task(name="workers.sweep_stale_executions")  # type: ignore[untyped-decorator]
+@beat_singleton("sweep_stale_executions", ttl_s=240)
 def sweep_stale_executions() -> dict[str, Any]:
     """Close zombie executions + reap their orphan containers.
 
@@ -494,6 +496,12 @@ async def _sweep_stale_executions_async(  # noqa: PLR0912, PLR0915 - barrido + r
             with contextlib.suppress(Exception):
                 reaped += runner.kill_by_label(execution_id)
         containers_removed = await _remove_exited_terminal_containers(engine, runner)
+        # `task_cv_25`: un worker que muere con el run en marcha deja su bridge.
+        if hasattr(runner, "prune_run_bridges"):
+            with contextlib.suppress(Exception):
+                pruned = runner.prune_run_bridges()
+                if pruned:
+                    _log.info("maintenance.sweep_stale_executions.run_bridges_pruned", count=pruned)
         # LAST, and best-effort: a Redis blip must not cost us the Docker cleanup
         # above.
         released = await _sweep_run_locks(settings, redis, sealed_runs)

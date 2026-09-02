@@ -290,6 +290,21 @@ async def distil_human_work_session(
     llm: LLMProvider,
     model: str | None = None,
 ) -> list[MemoryCandidate]:
+    """Compat: sólo los candidatos. Ver :func:`distil_human_work_session_result`."""
+    result = await distil_human_work_session_result(
+        session=session, agent=agent, user=user, llm=llm, model=model
+    )
+    return result.candidates
+
+
+async def distil_human_work_session_result(
+    *,
+    session: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    user: Mapping[str, Any],
+    llm: LLMProvider,
+    model: str | None = None,
+) -> DistillationResult:
     """Ask the LLM to extract memory candidates from a human work session.
 
     The human equivalent of :func:`distil_execution` (which stays unchanged).
@@ -327,9 +342,10 @@ async def distil_human_work_session(
         )
     except Exception as exc:  # the LLM call failed — log and move on
         logger.warning("memorizer.human_llm_call_failed", error=str(exc))
-        return []
-
-    return _parse_response(response.content)
+        return DistillationResult(candidates=[], cause="llm_error")
+    # `task_cv_45` (E-07): con CAUSA, como el destilado de ejecuciones (F2.3).
+    candidates, cause = _parse_response_result(response.content)
+    return DistillationResult(candidates=candidates, cause=cause)
 
 
 def _parse_response(text: str) -> list[MemoryCandidate]:

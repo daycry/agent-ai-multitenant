@@ -154,3 +154,37 @@ def test_round_robin_independent_cursor_per_pool() -> None:
 
 def test_round_robin_empty_pool_returns_none() -> None:
     assert RoundRobin().pick([]) is None
+
+
+# --------------------------------------------------------------- task_cv_41
+# Auditoría 2026-09-01 (C-05): sin `assigned_agent_id` preestablecido, el pool
+# de implementadores incluía al reviewer de la propia tarea, así que el mismo
+# agente podía implementar Y revisar. El reviewer queda fuera del pool.
+
+
+def _dispatcher_for_pick():
+    from orchestrator.dispatch import TaskDispatcher
+
+    return TaskDispatcher.__new__(TaskDispatcher)
+
+
+def test_the_reviewer_never_implements_its_own_task() -> None:
+    from types import SimpleNamespace
+
+    task = SimpleNamespace(id="t-1", assigned_agent_id=None, reviewer_agent_id="agent-b")
+    candidates = [
+        Candidate("agent-a", active_task_count=3),
+        Candidate("agent-b", active_task_count=0),
+    ]
+
+    picked = _dispatcher_for_pick()._pick(None, task, candidates)
+
+    assert picked == "agent-a", "el reviewer de la tarea salió elegido como implementador"
+
+
+def test_a_pool_made_only_of_the_reviewer_yields_nobody() -> None:
+    from types import SimpleNamespace
+
+    task = SimpleNamespace(id="t-1", assigned_agent_id=None, reviewer_agent_id="agent-b")
+
+    assert _dispatcher_for_pick()._pick(None, task, [Candidate("agent-b")]) is None

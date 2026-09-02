@@ -191,6 +191,12 @@ NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
         "label_es": "Auto-PR del plan fallido",
         "label_en": "Plan auto-PR failed",
     },
+    # `task_cv_45` (G-10): credencial git rechazada por el remoto.
+    {
+        "event_type": "git_credential_failed",
+        "label_es": "Credencial git rechazada",
+        "label_en": "Git credential rejected",
+    },
     {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},
     {"event_type": "plan_unblocked", "label_es": "Plan desbloqueado", "label_en": "Plan unblocked"},
     {

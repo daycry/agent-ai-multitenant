@@ -36,6 +36,7 @@ from celery import Celery
 from kombu import Queue
 
 from workers.config import Settings, get_settings
+from workers.quiesce import install_quiesce_signal
 from workers.task_metrics import install_task_metrics
 
 # prod-08 Fase C (observability-3 / observability-7). Hasta 2026-07-31 los
@@ -65,6 +66,8 @@ install_celery_logging(service="workers")
 # (ADR 0141). Se conecta al importar, por el mismo motivo que el logging: es lo
 # que hace el CLI antes de arrancar nada.
 install_task_metrics()
+# `task_cv_43`: al apagarse, el worker mata sus contenedores y sella sus runs.
+install_quiesce_signal()
 
 # Canonical queue names. Order is informational only. ``heavy``/``gpu`` removed
 # by ADR 0083 (prod-06 colas_02): dead lanes with no producer/consumer on a

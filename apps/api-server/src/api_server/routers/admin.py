@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -593,6 +595,68 @@ async def _check_tcp(name: str, host: str, port: int) -> ServiceHealth:
             writer.close()
             with contextlib.suppress(Exception):  # best-effort close
                 await writer.wait_closed()
+
+
+# `task_cv_43` (auditoría 2026-09-01, A-09): `dlq:executions` existía sin lector.
+# Los streams se muestrean en `agentic_dlq_depth`; aquí el System Admin ve qué
+# hay dentro (últimas entradas) para reprocesar a mano.
+DEAD_LETTER_STREAMS: tuple[str, ...] = ("dlq:executions", "dlq:notifications")
+
+
+class DeadLetterEntry(BaseModel):
+    id: str
+    fields: dict[str, str]
+
+
+class DeadLetterStream(BaseModel):
+    stream: str
+    depth: int
+    entries: list[DeadLetterEntry]
+
+
+class DeadLettersResponse(BaseModel):
+    streams: list[DeadLetterStream]
+
+
+def _decode(value: Any) -> str:
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+
+
+async def _read_dead_letters(
+    redis: Any, streams: tuple[str, ...], *, limit: int
+) -> list[dict[str, Any]]:
+    """Profundidad + últimas ``limit`` entradas (más reciente primero) por stream.
+    Un stream ausente es profundidad 0, no un error."""
+    report: list[dict[str, Any]] = []
+    for name in streams:
+        depth = 0
+        entries: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            depth = int(await redis.xlen(name))
+        if depth:
+            with contextlib.suppress(Exception):
+                raw = await redis.xrevrange(name, count=limit)
+                entries = [
+                    {
+                        "id": _decode(entry_id),
+                        "fields": {_decode(k): _decode(v) for k, v in dict(fields).items()},
+                    }
+                    for entry_id, fields in raw
+                ]
+        report.append({"stream": name, "depth": depth, "entries": entries})
+    return report
+
+
+@router.get("/dead-letters", response_model=DeadLettersResponse)
+async def dead_letters(
+    _: AuthPrincipal = Depends(require_system_admin),
+    redis: Redis = Depends(get_redis),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> DeadLettersResponse:
+    """Las DLQ de la plataforma (`task_cv_43`): qué runs y notificaciones
+    murieron y por qué, para reprocesar a mano."""
+    report = await _read_dead_letters(redis, DEAD_LETTER_STREAMS, limit=limit)
+    return DeadLettersResponse(streams=[DeadLetterStream(**item) for item in report])
 
 
 @router.get("/system-health", response_model=SystemHealthResponse)

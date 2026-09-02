@@ -13,6 +13,9 @@ inside the image in Fase C — here we only orchestrate the sandbox.
 from __future__ import annotations
 
 import contextlib
+import os
+import secrets
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -40,6 +43,19 @@ _POLL_INTERVAL_S = 0.25
 
 # Labels stamped on every container the worker launches — makes orphans
 # easy to find and reap.
+#: `task_cv_25`: etiqueta de los bridges de run, para poder podarlos.
+_RUN_BRIDGE_LABEL = "com.agentic-platform.run-bridge"
+
+#: `task_cv_43`: qué worker lanzó el contenedor. Al apagarse (`worker_shutting_down`)
+#: el worker mata SUS contenedores y sella sus runs (`workers.quiesce`).
+WORKER_LABEL = "com.agentic-platform.worker"
+
+
+def worker_identity() -> str:
+    """Identidad estable del worker dentro del compose: su hostname."""
+    return os.environ.get("HOSTNAME") or socket.gethostname()
+
+
 _BASE_LABELS = {
     "com.agentic-platform.component": "agent-runtime",
     "com.agentic-platform.managed": "true",
@@ -63,6 +79,11 @@ class ContainerSpec:
     extra_mounts: tuple[Any, ...] = ()
     name: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    #: `task_cv_25`: servicios internos del compose (por nombre de servicio) que
+    #: este run necesita alcanzar además del egress-proxy y el api-server —
+    #: los servidores MCP internos que declare el proyecto. Se conectan al
+    #: bridge de la ejecución con ese nombre como alias.
+    peers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +171,8 @@ class AgentContainerRunner:
     def __init__(self, settings: Settings, *, client: Any = None) -> None:
         self._settings = settings
         self._client = client
+        # `task_cv_25`: bridge (+ peers conectados) de cada contenedor vivo.
+        self._bridges: dict[str, tuple[Any, list[Any]]] = {}
 
     @property
     def client(self) -> Any:
@@ -182,10 +205,108 @@ class AgentContainerRunner:
             )
         return name
 
+    # ---- `task_cv_25`: un bridge interno por ejecución -----------------------
+
+    def _create_run_bridge(self, spec: ContainerSpec) -> Any:
+        """Bridge `internal` de UN run (patrón de `test_runtime._create_bridge`)."""
+        execution_id = spec.labels.get("com.agentic-platform.execution-id") or "run"
+        name = f"agent-run-{str(execution_id)[:12]}-{secrets.token_hex(3)}"
+        return self.client.networks.create(
+            name,
+            driver="bridge",
+            internal=True,
+            options={"com.docker.network.bridge.enable_icc": "true"},
+            labels={**_BASE_LABELS, _RUN_BRIDGE_LABEL: "true"},
+        )
+
+    def _find_peer(self, name: str) -> Any | None:
+        """Un contenedor por nombre, o por su servicio del compose."""
+        try:
+            return self.client.containers.get(name)
+        except Exception:
+            pass
+        try:
+            found = self.client.containers.list(
+                filters={"label": f"com.docker.compose.service={name}"}
+            )
+        except Exception:
+            return None
+        return found[0] if found else None
+
+    def _attach_run_peers(self, network: Any, spec: ContainerSpec) -> list[Any]:
+        """Conecta al bridge lo que el run necesita, cada uno con su alias."""
+        wanted: list[tuple[str, str]] = []
+        if self._settings.egress_proxy_url and self._settings.egress_proxy_container:
+            wanted.append(
+                (self._settings.egress_proxy_container, self._settings.egress_proxy_alias)
+            )
+        if "AGENTIC_API_URL" in spec.env or "AGENTIC_INTERNAL_TOKEN_FILE" in spec.env:
+            wanted.append((self._settings.internal_api_alias, self._settings.internal_api_alias))
+        wanted.extend((peer, peer) for peer in spec.peers)
+        attached: list[Any] = []
+        for lookup, alias in wanted:
+            peer = self._find_peer(lookup)
+            if peer is None:
+                _log.warning(
+                    "workers.container.run_bridge_peer_missing",
+                    peer=lookup,
+                    alias=alias,
+                    detail="el run sigue; ese servicio no será alcanzable desde el sandbox",
+                )
+                continue
+            try:
+                network.connect(peer, aliases=[alias])
+                attached.append(peer)
+            except Exception as exc:
+                _log.warning(
+                    "workers.container.run_bridge_connect_failed", peer=lookup, error=str(exc)
+                )
+        return attached
+
+    def _teardown_run_bridge(self, network: Any, attached: list[Any]) -> None:
+        """Desconecta los peers (NUNCA los elimina) y borra el bridge. Best-effort."""
+        for peer in attached:
+            with contextlib.suppress(Exception):
+                network.disconnect(peer, force=True)
+        with contextlib.suppress(Exception):
+            network.remove()
+
+    def _release_bridge_of(self, container: Any) -> None:
+        key = getattr(container, "id", None)
+        if not key:
+            return
+        entry = self._bridges.pop(str(key), None)
+        if entry is not None:
+            self._teardown_run_bridge(*entry)
+
+    def prune_run_bridges(self) -> int:
+        """Borra los bridges de run sin contenedores (`task_cv_25`): los deja un
+        worker que muere con el run en marcha. Devuelve cuántos retiró."""
+        removed = 0
+        try:
+            networks = self.client.networks.list(filters={"label": f"{_RUN_BRIDGE_LABEL}=true"})
+        except Exception:
+            return 0
+        for network in networks:
+            try:
+                network.reload()
+                if (network.attrs or {}).get("Containers"):
+                    continue
+                network.remove()
+                removed += 1
+            except Exception:
+                continue
+        return removed
+
     def _start(self, spec: ContainerSpec) -> Any:
         """Apply the hardened isolation profile and launch `spec` detached."""
-        self.ensure_network()
-
+        bridge: Any | None = None
+        attached: list[Any] = []
+        if self._settings.agent_network_per_execution:
+            bridge = self._create_run_bridge(spec)
+            attached = self._attach_run_peers(bridge, spec)
+        else:
+            self.ensure_network()
         kwargs = build_hardened_run_kwargs(
             self._settings,
             workspace_host_path=spec.workspace_host_path,
@@ -210,15 +331,25 @@ class AgentContainerRunner:
             for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
                 environment.setdefault(key, proxy_url)
 
-        return self.client.containers.run(
-            spec.image,
-            command=spec.command,
-            environment=environment,
-            name=spec.name,
-            labels={**_BASE_LABELS, **spec.labels},
-            detach=True,
-            **kwargs,
-        )
+        if bridge is not None:
+            kwargs["network"] = bridge.name
+        try:
+            container = self.client.containers.run(
+                spec.image,
+                command=spec.command,
+                environment=environment,
+                name=spec.name,
+                labels={**_BASE_LABELS, WORKER_LABEL: worker_identity(), **spec.labels},
+                detach=True,
+                **kwargs,
+            )
+        except Exception:
+            if bridge is not None:
+                self._teardown_run_bridge(bridge, attached)
+            raise
+        if bridge is not None:
+            self._bridges[container.id] = (bridge, attached)
+        return container
 
     def run(self, spec: ContainerSpec, *, timeout: int | None = None) -> ContainerResult:
         """Launch `spec`, wait for it, and return the captured result.
@@ -234,6 +365,7 @@ class AgentContainerRunner:
         finally:
             with contextlib.suppress(Exception):
                 container.remove(force=True)
+            self._release_bridge_of(container)
 
     def run_streamed(
         self,
@@ -287,6 +419,7 @@ class AgentContainerRunner:
         finally:
             with contextlib.suppress(Exception):
                 container.remove(force=True)
+            self._release_bridge_of(container)
 
     def kill_by_label(self, execution_id: str) -> int:
         """Force-kill any container tagged with ``execution_id`` (cooperative

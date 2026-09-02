@@ -23,6 +23,7 @@ import contextlib
 import dataclasses
 import json
 import os
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -162,6 +163,77 @@ def _task_is_launchable(status: str, *, is_review: bool) -> bool:
     return status == _LAUNCHABLE_STATUS_BY_KIND[is_review]
 
 
+_PRICE_UNIT_SCALE = {"per_1m_tokens": 1.0, "per_1k_tokens": 1000.0}
+
+
+def _price_hint(get: Callable[[str], Any], model_ids: Sequence[str]) -> dict[str, float] | None:
+    """USD por millón de tokens del primer ``model_id`` con fila abierta en el
+    catálogo (`task_cv_40`). Sólo USD; ``None`` si no hay fila usable."""
+    for model_id in model_ids:
+        if not model_id:
+            continue
+        row = get(str(model_id))
+        if row is None:
+            continue
+        if str(getattr(row, "currency", "USD") or "USD").upper() != "USD":
+            continue
+        scale = _PRICE_UNIT_SCALE.get(str(getattr(row, "unit", "per_1m_tokens")))
+        if scale is None:
+            continue
+        try:
+            return {
+                "input_usd_per_1m": float(row.input_price) * scale,
+                "output_usd_per_1m": float(row.output_price) * scale,
+            }
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return None
+
+
+async def _attach_price_hint(
+    session: AsyncSession, resolved_model: dict[str, Any] | None, requested_model: dict[str, Any]
+) -> None:
+    """`task_cv_40` (D-06): adjunta ``prices`` al modelo resuelto para que el
+    runtime estime el coste de los proveedores que lo devuelven a 0. Best-effort."""
+    if resolved_model is None:
+        return
+    hint = await _catalog_price_hint(session, resolved_model, requested_model)
+    if hint is not None:
+        resolved_model["prices"] = hint
+
+
+async def _catalog_price_hint(
+    session: AsyncSession, resolved_model: dict[str, Any], requested_model: dict[str, Any]
+) -> dict[str, float] | None:
+    """`_price_hint` contra el catálogo vivo; cualquier fallo es ``None``."""
+    try:
+        from api_server.chat.cost_resolution import load_price_catalog
+
+        catalog = await load_price_catalog(session)
+    except Exception as exc:
+        _log.info("workers.price_hint_unavailable", error=str(exc))
+        return None
+    candidates = [
+        str(resolved_model.get("model") or ""),
+        str(requested_model.get("model") or ""),
+    ]
+    return _price_hint(catalog.get, candidates)
+
+
+def _internal_mcp_hosts(request: ExecutionRequest) -> list[str]:
+    """Hosts sin punto de los servidores MCP del proyecto: servicios internos del
+    compose. Van a NO_PROXY y (`task_cv_25`) al bridge de la ejecución."""
+    return sorted(
+        {
+            host
+            for server in (request.mcp_servers or [])
+            if (url := str(server.get("url") or ""))
+            and (host := urlparse(url).hostname)
+            and "." not in host
+        }
+    )
+
+
 def _build_runtime_env(
     request: ExecutionRequest,
     approval_policy: dict[str, Any] | None,
@@ -243,15 +315,7 @@ def _build_runtime_env(
     # 2026-07-18). La declaracion del server en el proyecto ES la autorizacion
     # (RBAC tenant_admin). Un MCP EXTERNO (FQDN con punto) sigue saliendo por el
     # proxy y exige su host en la allowlist: deny-by-default intacto.
-    internal_mcp_hosts = sorted(
-        {
-            host
-            for server in (request.mcp_servers or [])
-            if (url := str(server.get("url") or ""))
-            and (host := urlparse(url).hostname)
-            and "." not in host
-        }
-    )
+    internal_mcp_hosts = _internal_mcp_hosts(request)
     if internal_mcp_hosts:
         joined = ",".join(internal_mcp_hosts)
         env["NO_PROXY"] = joined
@@ -1722,6 +1786,7 @@ async def _prepare_run(
     except ModelResolutionError as exc:
         resolution_error = str(exc)
         resolution_abort_code = exc.abort_code
+    await _attach_price_hint(session, resolved_model, dict(request.model or {}))
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,
@@ -2057,6 +2122,9 @@ async def _launch_and_stream(  # noqa: PLR0912, PLR0915 - lanzamiento + streamin
         workspace_host_path=workspace.host_path,
         workspace_read_only=workspace.read_only,
         extra_mounts=tuple(staged_credentials.mounts) if staged_credentials else (),
+        # `task_cv_25`: los servidores MCP internos del proyecto se conectan al
+        # bridge de esta ejecución (los mismos que van a NO_PROXY).
+        peers=tuple(_internal_mcp_hosts(request)),
     )
     # `task_cv_20`: el spec y el token salen del env y van por fichero.
     runtime_env, staged_runtime_secrets = _stage_runtime_secrets(
@@ -2489,6 +2557,51 @@ async def _notify_execution_outcome(
     status: str,
     abort_code: str | None,
     output: str | None = None,
+    task_status: str | None = None,
+) -> None:
+    """Emite el evento del run (`_notify_run_outcome`) y, si la TAREA quedó
+    ``blocked`` (`task_cv_41`, auditoría 2026-09-01 C-05), ``task_blocked``:
+    las escalaciones del bucle de review con reviewer IA —commit perdido,
+    tercer rechazo, run muerto— bloqueaban la tarea sin avisar a nadie; el
+    evento existía (plantillas ES/EN) pero sólo lo emitían los raíles humanos.
+    Best-effort como el resto: un broker caído jamás rompe el run terminado."""
+    await _notify_run_outcome(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        task_title=task_title,
+        status=status,
+        abort_code=abort_code,
+        output=output,
+    )
+    if task_status != "blocked":
+        return
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": "task_blocked",
+                "tenant_id": tenant_id,
+                "context": {
+                    "task_title": task_title,
+                    "task_id": task_id,
+                    "status": status,
+                    "reason": abort_code or "escalated",
+                },
+            }
+        )
+    except Exception as exc:
+        _log.warning("workers.notify_task_blocked_failed", task_id=task_id, error=str(exc))
+
+
+async def _notify_run_outcome(
+    *,
+    tenant_id: str,
+    task_id: str,
+    task_title: str,
+    status: str,
+    abort_code: str | None,
+    output: str | None = None,
 ) -> None:
     """Encola execution_failed/execution_finished al dispatcher (NOTIF-3).
 
@@ -2756,6 +2869,8 @@ async def conduct_execution(
         abort_code=result.abort_code,
         # AUD16-23: la salida del abort lleva los marcadores de credencial.
         output=result.output,
+        # `task_cv_41`: si la tarea quedó bloqueada, se avisa (task_blocked).
+        task_status=task_event[2] if task_event is not None else None,
     )
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)

@@ -53,6 +53,9 @@ class ModelDecision:
     # decision layer). `act` runs them all in ONE iteration; mutators never
     # ride here (one-action semantics preserved). Each item: {"tool", "args"}.
     batch_calls: tuple[dict[str, Any], ...] = ()
+    #: `task_cv_45` (D-10): elementos del lote expulsados por exigir aprobación,
+    #: con su categoría — se anuncian en la observación, no se pierden.
+    batch_dropped: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +67,7 @@ class ModelDecision:
             "finish_status": self.finish_status,
             "check_declarations": [dict(d) for d in self.check_declarations],
             "batch_calls": [dict(call) for call in self.batch_calls],
+            "batch_dropped": [dict(call) for call in self.batch_dropped],
         }
 
 

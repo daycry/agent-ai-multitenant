@@ -175,6 +175,13 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
     # c3/T7 (audit 2026-07-03): a plan whose only remaining open tasks are `blocked`
     # is escalated `in_progress -> blocked` by the orchestrator; the operator is
     # notified so the stall is visible and they can unblock/retry a task.
+    # `task_cv_45` (G-10, auditoría 2026-09-01): una credencial git caducada se
+    # descubría en el `pr_error` de un plan ya cerrado. Throttled en el emisor.
+    "git_credential_failed": EventSpec(
+        "git_credential_failed",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "email"),
+    ),
     "plan_blocked": EventSpec(
         "plan_blocked",
         lane=NotificationLane.DEFAULT,

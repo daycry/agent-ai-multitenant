@@ -1605,6 +1605,26 @@ class TaskDispatcher:
             if project is None:
                 _log.info("orchestrator.review_skip_deleted_project", task_id=str(task_id))
                 return
+            # `task_cv_41` (auditoría 2026-09-01, C-05): las mismas guardas que el
+            # despacho de implementación — un proyecto pausado, o en pausa por
+            # presupuesto, no gasta en runs de review.
+            if project.status != "active":
+                _log.info(
+                    "orchestrator.review_skip_inactive_project",
+                    task_id=str(task_id),
+                    project_status=str(project.status),
+                )
+                return
+            block = await budget_pause_block(
+                session, tenant_id=tenant_id, project_id=task.project_id
+            )
+            if block is not None:
+                _log.info(
+                    "orchestrator.review_paused_by_budget",
+                    task_id=str(task_id),
+                    **block.as_log_fields(),
+                )
+                return
             # C3 F09: idempotent review dispatch. The task stays `in_review` for
             # the whole review, so a re-delivered `in_review` event would launch a
             # SECOND review run. Guard on an already-running execution for the task
@@ -1755,7 +1775,13 @@ class TaskDispatcher:
         # P0-1 (investigación 2026-07-11): la persona del agente (system_prompt /
         # model_config.system_prompts) viaja al run — el runtime la prepende como
         # PRIMER bloque del system preamble. Sin persona → clave ausente.
-        agent_persona = resolve_agent_persona(agent, language=_project_language(project))
+        # `task_cv_33`: la guía de ejecución de la persona sigue a las tools
+        # efectivas del run (`agent_tool_names`), no al texto horneado al sembrar.
+        agent_persona = resolve_agent_persona(
+            agent,
+            language=_project_language(project),
+            tool_slugs=sorted(agent_tool_names) if agent_tool_names is not None else None,
+        )
         if agent_persona is not None:
             request["agent_persona"] = agent_persona
             # `task_gov_03`: el sello del prompt del agente, para que
@@ -2439,6 +2465,11 @@ class TaskDispatcher:
         human_answers = await self._read_prior_human_answers(session, task)
         if human_answers:
             request["human_answers"] = human_answers
+        # `task_cv_45` (D-09): techo de preguntas por task. Cada respuesta
+        # re-despachaba con presupuesto fresco; el runtime deja de preguntar
+        # cuando `ask_human_remaining` llega a 0.
+        asked = await self._count_human_questions(session, task)
+        request["ask_human_remaining"] = max(0, self.ASK_HUMAN_MAX_PER_TASK - asked)
         # Feature C: human comments on this task/plan → the runtime folds them into a
         # contextual preamble so the agent takes them into account.
         comments = await self._read_relevant_comments(session, task)
@@ -2689,6 +2720,28 @@ class TaskDispatcher:
     # ADR 0114: cuántas Q&A respondidas viajan al siguiente run (las más
     # recientes primero) y tope defensivo del texto de cada lado.
     _HUMAN_ANSWERS_MAX = 3
+    #: `task_cv_45` (D-09): preguntas `ask_human` que una task puede hacer en total.
+    ASK_HUMAN_MAX_PER_TASK = 5
+
+    async def _count_human_questions(self, session: AsyncSession, task: Task) -> int:
+        """Cuántas preguntas `ask_human` lleva hechas ESTA task (cualquier estado)."""
+        from api_server.db.domain import ApprovalRequest
+
+        return int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ApprovalRequest)
+                    .where(
+                        ApprovalRequest.task_id == task.id,
+                        ApprovalRequest.tenant_id == task.tenant_id,
+                        ApprovalRequest.category == "human_question",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
     _HUMAN_ANSWER_TEXT_MAX = 2000
 
     async def _read_prior_human_answers(
@@ -2929,6 +2982,11 @@ class TaskDispatcher:
         """
         if task.assigned_agent_id is not None:
             return str(task.assigned_agent_id)
+        reviewer_id = getattr(task, "reviewer_agent_id", None)
+        if reviewer_id is not None:
+            # `task_cv_41` (auditoría 2026-09-01, C-05): el reviewer de la tarea
+            # no puede ser también su implementador.
+            candidates = [c for c in candidates if c.agent_id != str(reviewer_id)]
         policy = AssignmentPolicy.LOAD_BALANCED
         if project is not None and isinstance(project.worker_config, dict):
             raw = project.worker_config.get("assignment_policy")

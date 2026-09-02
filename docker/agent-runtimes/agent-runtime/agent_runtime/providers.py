@@ -1138,6 +1138,10 @@ class ProviderTimeout(LLMError):  # noqa: N818 — stable typed name
 # Per-call budget + retry policy (F25/F30). Defaults are generous (slow reasoning
 # models can take minutes) and overridable via env for ops, without a redeploy.
 _DEFAULT_CALL_TIMEOUT_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_TIMEOUT_S") or 900.0)
+#: `task_cv_40`: suelo del timeout de una llamada cuando el wall-clock ya está
+#: agotado — el tracker abortará en el siguiente check; la llamada en curso no
+#: se lanza con `timeout=0`, que reventaría con un error confuso.
+_MIN_CALL_TIMEOUT_S: float = 5.0
 _DEFAULT_CALL_ATTEMPTS: int = int(os.environ.get("AGENT_RUNTIME_LLM_ATTEMPTS") or 3)
 _DEFAULT_RETRY_BACKOFF_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_BACKOFF_S") or 2.0)
 
@@ -1296,6 +1300,24 @@ class _ProviderModelClient:
         # defecto: byte-a-byte el comportamiento histórico.
         self._conversation_thread = conversation_thread
         self._thread: list[Message] = []
+        # `task_cv_40` (D-05): restante del wall-clock del run, atado por
+        # `run_agent`. Sin él, el timeout es el de siempre.
+        self._remaining_s: Callable[[], float] | None = None
+
+    def bind_deadline(self, remaining_s: Callable[[], float]) -> None:
+        """Ata el restante del wall-clock del run: cada llamada al proveedor se
+        acota a lo que queda (`task_cv_40`). Antes el wall-clock sólo se miraba
+        entre iteraciones y una llamada podía rebasarlo 45 min."""
+        self._remaining_s = remaining_s
+
+    def _call_timeout_s(self) -> float:
+        if self._remaining_s is None:
+            return float(_DEFAULT_CALL_TIMEOUT_S)
+        try:
+            remaining = float(self._remaining_s())
+        except Exception:
+            return float(_DEFAULT_CALL_TIMEOUT_S)
+        return max(_MIN_CALL_TIMEOUT_S, min(float(_DEFAULT_CALL_TIMEOUT_S), remaining))
 
     def _retrying(self, make_coro: Callable[[], Awaitable[Any]]) -> Any:
         """`_run_with_retry` con el NOMBRE del proveedor puesto.
@@ -1309,6 +1331,7 @@ class _ProviderModelClient:
         """
         return _run_with_retry(
             make_coro,
+            timeout=self._call_timeout_s(),
             provider=getattr(self.provider, "name", "") or "",
             backoff=_DEFAULT_RETRY_BACKOFF_S,
         )

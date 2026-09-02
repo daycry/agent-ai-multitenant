@@ -152,3 +152,15 @@ test era un `MagicMock` que no levanta nada. Desde `task_cv_04` los sidecars
 reciben el mismo `x-infra-caps` que el compose concede a esas imágenes, `remove`
 lleva `v=True` para no dejar volúmenes anónimos, y el test cruza la lista con la
 del compose para que no diverjan.
+
+## Addendum del 2026-09-02: la imagen que declara un tenant va pineada (`task_cv_44`)
+
+La auditoría del 2026-09-01 (B-05, B-09) midió que `image:` aceptaba cualquier
+`host/repo:tag` y que `version` en un sidecar del catálogo recomponía
+`repo:tag`, deshaciendo el pin por digest que la propia tabla del catálogo
+cuida. Desde el 2026-09-02 una `image:` propia o un `runtime_image` llevan
+`@sha256:` o vienen de un registry/prefijo de
+`WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST` (vacía por defecto: sólo digest), y
+`version` resuelve contra `pinned_versions()` del catálogo; la que no está
+pineada se rechaza nombrando las que hay. Los detalles y la parte de las
+imágenes de runtime de la plataforma están en el addendum del ADR 0148.

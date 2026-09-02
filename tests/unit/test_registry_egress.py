@@ -111,7 +111,8 @@ async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("docker.from_env", MagicMock)
 
     request = {
-        "worktree_host_path": "/wt",
+        # `task_cv_45` (B-10): el worktree tiene que vivir bajo `data_root`.
+        "worktree_host_path": "/data/agent-platform/projects/acme/app/worktrees/t1",
         "acceptance_criteria": [
             {
                 "check_type": "automated",

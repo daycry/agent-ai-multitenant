@@ -21,7 +21,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import uuid4
 
 import structlog
 from shared_domain.memory_tags import RETRO_TAG, retro_plan_tag
@@ -32,7 +31,14 @@ from workers.standup import _redact
 
 _log = structlog.get_logger(__name__)
 
-RETRO_WINDOW_HOURS = 48
+#: Prefijo del tag por plan (`retro_plan_tag`), para el NOT EXISTS de la selección.
+_PLAN_TAG_PREFIX = retro_plan_tag("")
+
+RETRO_WINDOW_HOURS = 48  # histórico; ver RETRO_LOOKBACK_DAYS (`task_cv_45`)
+#: `task_cv_45` (G-12): la selección ya no es «cerrados en 48 h» sino «cerrados
+#: en los últimos N días SIN retro persistida». Beat parado un fin de semana
+#: largo ya no deja planes sin retro para siempre.
+RETRO_LOOKBACK_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -116,6 +122,27 @@ async def _run_retros(
 # ---------------------------------------------------------------------------
 # Cableado real (SQL + Redis + Celery) — integración.
 # ---------------------------------------------------------------------------
+class DbRetroMarker:
+    """`task_cv_45` (G-12): hecho = hay una retro con el tag del plan en
+    `memory_entries`. Sobrevive a un Redis restaurado y no caduca."""
+
+    def __init__(self, sessionmaker: Any) -> None:
+        self._sessionmaker = sessionmaker
+
+    async def is_done(self, plan_id: str) -> bool:
+        from sqlalchemy import text as sa_text
+
+        async with self._sessionmaker() as session:
+            result = await session.execute(
+                sa_text("SELECT 1 FROM memory_entries WHERE jsonb_exists(tags, :tag) LIMIT 1"),
+                {"tag": retro_plan_tag(plan_id)},
+            )
+            return result.scalar() is not None
+
+    async def mark(self, _plan_id: str) -> None:
+        return None  # la fila persistida ES la marca
+
+
 class RedisRetroMarker:
     def __init__(self, redis: Any) -> None:
         self._redis = redis
@@ -127,17 +154,25 @@ class RedisRetroMarker:
         await self._redis.set(f"retro:plan:{plan_id}", "1", ex=30 * 24 * 3600)
 
 
-async def _load_recently_closed_plans(sessionmaker: Any) -> list[ClosedPlan]:
+async def _load_closed_plans_without_retro(sessionmaker: Any) -> list[ClosedPlan]:
+    """Planes cerrados en los últimos `RETRO_LOOKBACK_DAYS` días que aún no
+    tienen su retro en `memory_entries` (`task_cv_45`, G-12): la idempotencia
+    es por tag `plan:<id>` en la BD, no por un marker en Redis."""
     from sqlalchemy import text as sa_text
 
     async with sessionmaker() as session:
         rows = await session.execute(
             sa_text(
-                "SELECT id, tenant_id, project_id, title, status FROM plans"
-                " WHERE status IN ('completed', 'cancelled')"
-                "   AND updated_at >= now() - make_interval(hours => :h)"
+                "SELECT p.id, p.tenant_id, p.project_id, p.title, p.status FROM plans p"
+                " WHERE p.status IN ('completed', 'cancelled')"
+                "   AND p.deleted_at IS NULL"
+                "   AND p.updated_at >= now() - make_interval(days => :d)"
+                "   AND NOT EXISTS ("
+                "     SELECT 1 FROM memory_entries m"
+                "      WHERE m.tenant_id = p.tenant_id"
+                "        AND jsonb_exists(m.tags, :prefix || p.id::text))"
             ),
-            {"h": RETRO_WINDOW_HOURS},
+            {"d": RETRO_LOOKBACK_DAYS, "prefix": _PLAN_TAG_PREFIX},
         )
         return [
             ClosedPlan(
@@ -205,25 +240,26 @@ class DbRetroPersister:
         self._sessionmaker = sessionmaker
 
     async def save(self, *, plan: ClosedPlan, content: str) -> None:
-        import json
+        """`task_cv_45` (E-06): por la persistencia común del memorizer —
+        `metadata`, dedup, `tenant_id` en la fila— en vez de un INSERT crudo."""
+        from uuid import UUID
 
-        from sqlalchemy import text as sa_text
+        from api_server.memorizer import persistence
+        from api_server.memorizer.distillation import MemoryCandidate
 
+        candidate = MemoryCandidate(
+            content=content,
+            type="semantic",
+            tags=(RETRO_TAG, retro_plan_tag(plan.plan_id)),
+        )
         async with self._sessionmaker() as session, session.begin():
-            await session.execute(
-                sa_text(
-                    "INSERT INTO memory_entries"
-                    " (id, tenant_id, scope, type, content, project_id, tags)"
-                    " VALUES (:id, :tid, 'project_shared', 'semantic', :content, :pid,"
-                    "         CAST(:tags AS jsonb))"
-                ),
-                {
-                    "id": str(uuid4()),
-                    "tid": plan.tenant_id,
-                    "content": content,
-                    "pid": plan.project_id,
-                    "tags": json.dumps([RETRO_TAG, retro_plan_tag(plan.plan_id)]),
-                },
+            await persistence.persist_memory_candidates(
+                session,
+                [candidate],
+                tenant_id=UUID(plan.tenant_id),
+                scope="project_shared",
+                project_id=UUID(plan.project_id),
+                extra_metadata={"source": "plan_retro", "plan_id": plan.plan_id},
             )
 
 
@@ -233,26 +269,23 @@ def plan_retro_task() -> dict[str, int]:
     settings = get_settings()
 
     async def _main() -> dict[str, int]:
-        from redis.asyncio import Redis
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from workers.db import worker_engine
         from workers.memorizer import _default_llm_factory
 
         engine = worker_engine(settings)
-        redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
         try:
             sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-            plans = await _load_recently_closed_plans(sessionmaker)
+            plans = await _load_closed_plans_without_retro(sessionmaker)
             return await _run_retros(
                 plans=plans,
-                marker=RedisRetroMarker(redis),
+                marker=DbRetroMarker(sessionmaker),
                 collector=lambda p: _collect_plan_stats(sessionmaker, p),
                 llm_factory=lambda _tid: _default_llm_factory(settings),
                 persister=DbRetroPersister(sessionmaker),
             )
         finally:
-            await redis.aclose()
             await engine.dispose()
 
     try:

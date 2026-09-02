@@ -328,3 +328,108 @@ async def test_merge_with_deleted_source_returns_409(
         )
     assert resp.status_code == 409
     assert "source" in resp.text.lower()
+
+
+# ------------------------------------------------------------------ task_cv_33
+# Auditoría 2026-09-01 (F-03): una migración cambia las tools de un built-in
+# sin tocar texto, y la copia adoptada se queda con las de antes. `merge`
+# acepta ahora `capabilities: ["tools", "skills"]` y el fork absorbe las
+# capacidades ACTUALES del origen.
+
+
+async def _seed_tools_and_grant(dsn: str, agent_id: UUID) -> UUID:
+    """Siembra el catálogo de tools y asigna `read-file` al agente. Devuelve el id de la tool."""
+    from api_server.seeds.builtin_tools import seed_builtin_tools
+    from api_server.seeds.platform import ensure_platform_tenant
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    sa_dsn = dsn.replace("postgres://", "postgresql+asyncpg://", 1).replace(
+        "postgresql://", "postgresql+asyncpg://", 1
+    )
+    engine = create_async_engine(sa_dsn, pool_pre_ping=False)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session, session.begin():
+            await ensure_platform_tenant(session)
+            await seed_builtin_tools(session)
+    finally:
+        await engine.dispose()
+    conn = await asyncpg.connect(dsn)
+    try:
+        # `tools` identifica por `name` (índice único tenant+name); la fila
+        # builtin nace en el tenant de plataforma. `agent_tools` es tenant-scoped:
+        # el tenant sale del propio agente.
+        tool_id = await conn.fetchval(
+            "SELECT id FROM tools WHERE name = 'read_file' AND is_builtin = true"
+            " AND deleted_at IS NULL ORDER BY created_at LIMIT 1"
+        )
+        assert tool_id is not None
+        await conn.execute(
+            "INSERT INTO agent_tools (tenant_id, agent_id, tool_id)"
+            " SELECT tenant_id, id, $2 FROM agents WHERE id = $1"
+            " ON CONFLICT DO NOTHING",
+            agent_id,
+            tool_id,
+        )
+        return UUID(str(tool_id))
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_merge_capabilities_absorbs_the_sources_current_tools(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        fork = (
+            await client.post(
+                f"/agents/{seeded['builtin_agent']}/fork",
+                json={"project_id": str(seeded["project_a"])},
+                headers=headers,
+            )
+        ).json()
+        # El origen gana una tool DESPUÉS del fork (lo que hace una migración):
+        tool_id = await _seed_tools_and_grant(migrations_pg_dsn, seeded["builtin_agent"])
+        merged = await client.post(
+            f"/agents/{fork['id']}/merge",
+            json={"capabilities": ["tools"]},
+            headers=headers,
+        )
+    assert merged.status_code == 200, merged.text
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT tool_id FROM agent_tools WHERE agent_id = $1", UUID(fork["id"])
+        )
+    finally:
+        await conn.close()
+    assert tool_id in {UUID(str(r["tool_id"])) for r in rows}, (
+        "el fork no absorbió la tool que el origen ganó después del fork"
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_with_nothing_to_merge_returns_422(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        fork = (
+            await client.post(
+                f"/agents/{seeded['builtin_agent']}/fork",
+                json={"project_id": str(seeded["project_a"])},
+                headers=headers,
+            )
+        ).json()
+        resp = await client.post(f"/agents/{fork['id']}/merge", json={}, headers=headers)
+    assert resp.status_code == 422, resp.text

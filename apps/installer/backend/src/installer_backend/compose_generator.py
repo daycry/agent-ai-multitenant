@@ -1310,6 +1310,11 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # prereq load docker/apparmor/agent-runtime.profile).
             "WORKERS_SECCOMP_PROFILE_PATH": "/etc/agentic/seccomp/agent-runtime.json",
             "WORKERS_APPARMOR_PROFILE": "agent-runtime",
+            # `task_cv_44`: las imágenes que el worker lanza salen del manifiesto
+            # de la release (pineadas por digest cuando la hay), no de un tag
+            # local que nadie publica.
+            "WORKERS_AGENT_RUNTIME_IMAGE": app_image("agent-runtime"),
+            "WORKERS_BROWSER_RUNTIME_IMAGE": app_image("browser-runtime"),
             # Backup wiring (workers-6 / prod-04 task_prod_04_09). Los VALORES
             # los pone `config_generators._backup_env`, que es quien conoce el
             # layout de binds de ESTE compose; aquí solo se referencian. Antes se

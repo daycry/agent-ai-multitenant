@@ -34,6 +34,16 @@ _log = structlog.get_logger("workers.tasks")
 _DEAD_LETTER_STREAM = "dlq:executions"
 
 
+def _validated_workspace(workspace: str | None, settings: Any) -> str | None:
+    """`task_cv_45` (B-10): el workspace a montar vive bajo `data_root` o no se
+    monta; una ruta ajena es un `ValueError` (el job falla visible)."""
+    if workspace is None or not str(workspace).strip():
+        return None
+    from workers.host_paths import ensure_under_data_root
+
+    return ensure_under_data_root(str(workspace), data_root=settings.data_root)
+
+
 @app.task(name="workers.run_agent_container")  # type: ignore[untyped-decorator]
 def run_agent_container(
     image: str | None = None,
@@ -52,7 +62,8 @@ def run_agent_container(
         image=image or settings.agent_runtime_image,
         command=command,
         env=env or {},
-        workspace_host_path=workspace,
+        # `task_cv_45` (B-10): sólo se monta un workspace bajo `data_root`.
+        workspace_host_path=_validated_workspace(workspace, settings),
     )
     return runner.run(spec).as_dict()
 

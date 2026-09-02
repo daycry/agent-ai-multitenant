@@ -17,6 +17,7 @@ import enum
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 # Platform-wide default for max_review_retries. Overridable only by the
 # System Admin via platform_settings (task_02_13b).
@@ -113,6 +114,9 @@ class Usage:
     cost_usd: float = 0.0
     tool_calls: int = 0
     model_calls: int = 0
+    #: `task_cv_40`: llamadas cuyo coste vino a 0 del proveedor y se estimó
+    #: con los precios del catálogo que trae el spec.
+    cost_estimated_calls: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -127,7 +131,39 @@ class Usage:
             "cost_usd": round(self.cost_usd, 6),
             "tool_calls": self.tool_calls,
             "model_calls": self.model_calls,
+            "cost_estimated_calls": self.cost_estimated_calls,
         }
+
+
+@dataclass(frozen=True)
+class ModelPrices:
+    """Precios del modelo efectivo, en USD por millón de tokens (`task_cv_40`).
+
+    Auditoría 2026-09-01 (D-06): `max_cost_usd` era 0 en tres de cuatro
+    proveedores —sólo el que devuelve coste lo sumaba—, así que el techo de
+    coste no tripaba nunca. El worker adjunta al spec los precios del catálogo
+    (`model.prices`) y el tracker estima cada llamada que llega a 0.
+    """
+
+    input_usd_per_1m: float
+    output_usd_per_1m: float
+
+    def estimate(self, tokens_in: int, tokens_out: int) -> float:
+        return (
+            tokens_in * self.input_usd_per_1m + tokens_out * self.output_usd_per_1m
+        ) / 1_000_000.0
+
+    @classmethod
+    def from_spec(cls, raw: Any) -> ModelPrices | None:
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return cls(
+                input_usd_per_1m=float(raw["input_usd_per_1m"]),
+                output_usd_per_1m=float(raw["output_usd_per_1m"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 class SafeguardTracker:
@@ -137,8 +173,15 @@ class SafeguardTracker:
     without sleeping.
     """
 
-    def __init__(self, budgets: Budgets, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        budgets: Budgets,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        prices: ModelPrices | None = None,
+    ) -> None:
         self.budgets = budgets
+        self.prices = prices
         self.usage = Usage()
         self._clock = clock
         self._start = clock()
@@ -150,6 +193,10 @@ class SafeguardTracker:
         self.usage.model_calls += 1
         self.usage.tokens_in += tokens_in
         self.usage.tokens_out += tokens_out
+        if cost_usd <= 0 and self.prices is not None:
+            # `task_cv_40`: el proveedor no factura por llamada; el catálogo sí.
+            cost_usd = self.prices.estimate(tokens_in, tokens_out)
+            self.usage.cost_estimated_calls += 1
         self.usage.cost_usd += cost_usd
 
     def record_tool_call(self) -> None:

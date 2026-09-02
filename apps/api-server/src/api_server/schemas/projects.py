@@ -750,7 +750,9 @@ GitAuthMode = Literal["none", "pat", "ssh"]
 # Políticas del flujo git del plan (ADR 0072 fase 2).
 GitBranchPushMode = Literal["incremental", "final_only"]
 GitPlanValidationMode = Literal["human_required", "auto_approve"]
-GitPushPolicy = Literal["forbidden", "branch_only_pr_required", "direct_to_default_allowed"]
+# `task_cv_45` (G-03): `direct_to_default_allowed` retirada — nadie la ejecutaba y
+# habría retrocedido `main` sin guard fast-forward. El plan acaba siempre en PR.
+GitPushPolicy = Literal["forbidden", "branch_only_pr_required"]
 
 
 #: Formas de remoto git que un tenant configura de verdad. Allowlist, no

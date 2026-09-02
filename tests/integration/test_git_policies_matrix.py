@@ -20,7 +20,8 @@ pytestmark = pytest.mark.integration
 
 BRANCH_PUSH_MODES = ("incremental", "final_only")
 VALIDATION_MODES = ("human_required", "auto_approve")
-PUSH_POLICIES = ("forbidden", "branch_only_pr_required", "direct_to_default_allowed")
+# `task_cv_45` (G-03): `direct_to_default_allowed` retirada.
+PUSH_POLICIES = ("forbidden", "branch_only_pr_required")
 
 
 @pytest.mark.parametrize(

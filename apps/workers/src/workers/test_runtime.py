@@ -1278,7 +1278,9 @@ class TestRuntimeRunner:
         ``..`` traversal) — a project scaffolded under e.g. ``ci4build/`` runs
         its toolchain there instead of failing from the worktree root."""
         effective = _apply_cwd(command, cwd)
-        wrapped = f"timeout {timeout_s} sh -c {_shell_quote(effective)}"
+        # `task_cv_45` (B-08): sin `-k`, `timeout` sólo manda SIGTERM y un
+        # proceso que lo ignora cuelga el hilo del worker sin techo.
+        wrapped = f"timeout -k 10 {timeout_s} sh -c {_shell_quote(effective)}"
         result = container.exec_run(["sh", "-c", wrapped], demux=False)
         rc = getattr(result, "exit_code", 0) or 0
         out_bytes: bytes = getattr(result, "output", b"") or b""
