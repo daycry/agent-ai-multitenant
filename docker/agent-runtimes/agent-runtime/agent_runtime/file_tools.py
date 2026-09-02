@@ -674,6 +674,19 @@ def _apartar(objetivo: Path) -> Path:
     return candidato
 
 
+def _paging(args: dict[str, object]) -> tuple[int, int | None] | ToolResult:
+    """``(offset, limit)`` de una lectura por tramos (`task_cv_21`), o el error."""
+    offset_raw = args.get("offset", 0)
+    limit_raw = args.get("limit")
+    if isinstance(offset_raw, bool) or not isinstance(offset_raw, int) or offset_raw < 0:
+        return ToolResult(ok=False, error="read_file: 'offset' must be an integer >= 0")
+    if limit_raw is not None and (
+        isinstance(limit_raw, bool) or not isinstance(limit_raw, int) or limit_raw <= 0
+    ):
+        return ToolResult(ok=False, error="read_file: 'limit' must be a positive integer")
+    return offset_raw, limit_raw
+
+
 @dataclass
 class WorkspaceFiles:
     """File tools confined to one workspace directory."""
@@ -750,7 +763,7 @@ class WorkspaceFiles:
             )
         return resolved
 
-    def file_read(self, args: dict[str, object]) -> ToolResult:
+    def file_read(self, args: dict[str, object]) -> ToolResult:  # noqa: PLR0911 - validación + paginado
         resolved = self._safe_path(args.get("path"))
         if isinstance(resolved, ToolResult):
             return resolved
@@ -759,6 +772,10 @@ class WorkspaceFiles:
         if resolved.stat().st_size > _MAX_READ_BYTES:
             return ToolResult(ok=False, error=f"file exceeds {_MAX_READ_BYTES} bytes")
         relativa = _relativa(resolved, Path(self.root).resolve())
+        paging = _paging(args)
+        if isinstance(paging, ToolResult):
+            return paging
+        offset, limit = paging
         try:
             content = resolved.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -768,7 +785,23 @@ class WorkspaceFiles:
             return ToolResult(ok=False, error=f"could not read '{relativa}': it is not UTF-8 text")
         except OSError as exc:
             return _error_de_so(exc, operacion=f"could not read '{relativa}'")
-        return ToolResult(ok=True, output={"path": args.get("path"), "content": content})
+        if offset == 0 and limit is None:
+            return ToolResult(ok=True, output={"path": args.get("path"), "content": content})
+        # `task_cv_21`: lectura por tramos. `offset`/`limit` en caracteres, con
+        # el total para que el modelo sepa cuánto queda.
+        total = len(content)
+        end = total if limit is None else min(total, offset + limit)
+        chunk = content[offset:end]
+        return ToolResult(
+            ok=True,
+            output={
+                "path": args.get("path"),
+                "content": chunk,
+                "offset": offset,
+                "total_chars": total,
+                "truncated": end < total,
+            },
+        )
 
     def file_write(self, args: dict[str, object]) -> ToolResult:
         """Escribe (o reemplaza) un fichero del workspace: TODO o NADA.

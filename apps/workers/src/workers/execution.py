@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,7 +79,7 @@ from workers.run_spec import (
     _agent_spec,
     _resolve_tool_spec_images,
 )
-from workers.secrets import StagedSecrets
+from workers.secrets import SECRETS_DIR, StagedSecrets, stage_secrets
 from workers.tracked_paths import TRACKED_PATHS_ENV, compute_tracked_paths
 
 # Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
@@ -1824,6 +1826,66 @@ async def _provision_workspace(
     return ws
 
 
+RUNTIME_SPEC_FILENAME = "task-spec.json"
+RUNTIME_TOKEN_FILENAME = "internal-token"
+
+
+def _stage_runtime_secrets(
+    env: dict[str, str], *, settings: Settings, existing: StagedSecrets | None = None
+) -> tuple[dict[str, str], StagedSecrets | None]:
+    """Saca el spec y el token interno del env del contenedor y los deja en
+    `/run/secrets` (`task_cv_20`, auditoría 2026-09-01 D-01).
+
+    El patrón es el de la credencial del modelo (prod-07): ficheros read-only
+    en un staging del worker, bind-mounteado en `/run/secrets`, y en el env
+    sólo los PUNTEROS (`AGENT_TASK_SPEC_FILE`, `AGENTIC_INTERNAL_TOKEN_FILE`).
+    Lo que se protege: las cabeceras y env de los servidores MCP, las acciones
+    aprobadas y el código de las python_function que viajan en el spec, y el
+    token que autoriza `mcp-oauth-token` — todo legible antes por cualquier
+    hijo del runtime.
+
+    Un contenedor sólo puede montar `/run/secrets` una vez: si la credencial
+    del modelo ya tiene su staging (``existing``), los ficheros se escriben en
+    ESE directorio y se devuelve ``None`` (su ``cleanup()`` los retira); si no,
+    se crea uno propio. Mismo flag y misma caída en abierto que la credencial:
+    si el staging no se puede escribir, se vuelve al formato en línea con aviso
+    (y el runtime nuevo lo retira igualmente del env al arrancar)."""
+    if not settings.model_credential_file:
+        return env, None
+    files: dict[str, str] = {}
+    if "AGENT_TASK_SPEC" in env:
+        files[RUNTIME_SPEC_FILENAME] = env["AGENT_TASK_SPEC"]
+    if env.get("AGENTIC_INTERNAL_TOKEN"):
+        files[RUNTIME_TOKEN_FILENAME] = env["AGENTIC_INTERNAL_TOKEN"]
+    if not files:
+        return env, None
+    staged: StagedSecrets | None = None
+    try:
+        if existing is not None:
+            for name, payload in files.items():
+                target = existing.staging_dir / name
+                target.write_text(payload, encoding="utf-8")
+                os.chmod(target, 0o444)
+        else:
+            staging_root = Path(settings.data_root) / STAGING_SUBDIR
+            staging_root.mkdir(parents=True, exist_ok=True)
+            staged = stage_secrets(files, base_dir=str(staging_root))
+    except OSError as exc:
+        _log.warning(
+            "workers.runtime_secrets_staging_failed",
+            error=str(exc),
+            detail="el spec y el token siguen en el env del contenedor (formato antiguo)",
+        )
+        return env, None
+    public = {
+        k: v for k, v in env.items() if k not in ("AGENT_TASK_SPEC", "AGENTIC_INTERNAL_TOKEN")
+    }
+    public["AGENT_TASK_SPEC_FILE"] = f"{SECRETS_DIR}/{RUNTIME_SPEC_FILENAME}"
+    if RUNTIME_TOKEN_FILENAME in files:
+        public["AGENTIC_INTERNAL_TOKEN_FILE"] = f"{SECRETS_DIR}/{RUNTIME_TOKEN_FILENAME}"
+    return public, staged
+
+
 def _stage_model_credentials(
     resolved_model: dict[str, Any] | None,
     *,
@@ -1996,6 +2058,18 @@ async def _launch_and_stream(  # noqa: PLR0912, PLR0915 - lanzamiento + streamin
         workspace_read_only=workspace.read_only,
         extra_mounts=tuple(staged_credentials.mounts) if staged_credentials else (),
     )
+    # `task_cv_20`: el spec y el token salen del env y van por fichero.
+    runtime_env, staged_runtime_secrets = _stage_runtime_secrets(
+        dict(container_spec.env), settings=settings, existing=staged_credentials
+    )
+    container_spec = dataclasses.replace(
+        container_spec,
+        env=runtime_env,
+        extra_mounts=(
+            *container_spec.extra_mounts,
+            *(staged_runtime_secrets.mounts if staged_runtime_secrets is not None else ()),
+        ),
+    )
     active_runner = runner or AgentContainerRunner(settings)
     cancel_seen = False
 
@@ -2070,6 +2144,8 @@ async def _launch_and_stream(  # noqa: PLR0912, PLR0915 - lanzamiento + streamin
         try:
             if staged_credentials is not None:
                 staged_credentials.cleanup()
+            if staged_runtime_secrets is not None:
+                staged_runtime_secrets.cleanup()
         finally:
             watcher.cancel()
             # Sólo la cancelación es esperable aquí. Cualquier otra excepción del

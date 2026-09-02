@@ -514,6 +514,32 @@ def _start_review_aux_services(
         return None, []
 
 
+def _preview_run_kwargs(settings: Any, *, worktree_host_path: str, services: Any) -> dict[str, Any]:
+    """Los kwargs del contenedor principal del preview (`task_cv_26`, B-06).
+
+    El worktree del plan va bind-mounteado en `/workspace` en SÓLO LECTURA por
+    defecto: el preview corre la app del tenant hasta 48 h y cualquier cosa que
+    la app escriba —o cualquier fallo de la propia app— modificaría el código
+    que el humano va a validar. Las rutas que la app necesite escribir se
+    declaran en `repository_config.preview.writable_paths` y se montan como
+    tmpfs encima; `preview.workspace_rw: true` es el opt-in al comportamiento
+    anterior."""
+    from workers.isolation import build_hardened_run_kwargs
+
+    read_only = not services.preview_workspace_rw
+    kwargs = build_hardened_run_kwargs(
+        settings, workspace_host_path=worktree_host_path, workspace_read_only=read_only
+    )
+    if read_only and services.preview_writable_paths:
+        tmpfs = dict(kwargs.get("tmpfs") or {})
+        for rel in services.preview_writable_paths:
+            tmpfs[f"/workspace/{rel}"] = (
+                f"rw,nosuid,size={settings.container_workspace_size},uid=1000,gid=1000"
+            )
+        kwargs["tmpfs"] = tmpfs
+    return kwargs
+
+
 def _spawn_review_runtime(
     request: dict[str, Any], session_id: str, settings: Settings
 ) -> tuple[str, ...]:
@@ -542,10 +568,7 @@ def _spawn_review_runtime(
         return ()
 
     try:
-        from workers.isolation import (
-            assert_no_docker_socket,
-            build_hardened_run_kwargs,
-        )
+        from workers.isolation import assert_no_docker_socket
         from workers.runtime_services import (
             RuntimeServicesConfigError,
             build_project_runtime_services,
@@ -573,7 +596,7 @@ def _spawn_review_runtime(
 
     worktree_host_path = str(request["worktree_host_path"])
 
-    kwargs = build_hardened_run_kwargs(settings, workspace_host_path=worktree_host_path)
+    kwargs = _preview_run_kwargs(settings, worktree_host_path=worktree_host_path, services=services)
     kwargs["detach"] = True
     # Deterministic name + shared internal network so the api-server can reverse
     # -proxy the running app by name (ADR 0062). agentic-agents is internal (no

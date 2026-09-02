@@ -31,7 +31,7 @@ estático).
 | Comando    | El **CMD de la imagen** debe arrancar la app **sin argumentos externos** (auto-servible) y escuchar en `0.0.0.0`.                                                                                              |
 | Puerto     | `repository_config.review_port` (default **8080**).                                                                                                                                                            |
 | Usuario    | uid **1000** no-root (forzado); la imagen no puede asumir root.                                                                                                                                                |
-| Filesystem | Root **read-only** + `/tmp` tmpfs; escribe solo en `/tmp` o `/workspace`.                                                                                                                                      |
+| Filesystem | Root **read-only** + `/tmp` tmpfs; `/workspace` también **read-only** salvo las `preview.writable_paths` declaradas (tmpfs) o `preview.workspace_rw`.                                                          |
 | Red        | Bridge **interno** `agentic-agents` — sin salida a internet. La app solo es alcanzable vía el proxy firmado (`/api/review/{session}/app/...`).                                                                 |
 | Hardening  | `cap_drop: ALL`, `no-new-privileges`, límites de memoria/procesos, **sin socket Docker** (tripwire).                                                                                                           |
 | Cabeceras  | El proxy **respeta el `Content-Type` del upstream**: si tu app sirve HTML como `application/json`, el navegador mostrará texto plano — es un defecto de la app, no del proxy (lección del plan CI4, ADR 0107). |
@@ -44,6 +44,15 @@ Ajustes del proyecto → sección **«App-preview de validación»**:
   `mi-app-preview:latest`). Precedencia: `review_image` → `main_image` →
   `worker_config.review_main_image`.
 - **Puerto** → `repository_config.review_port` (default 8080).
+- **Escritura en el worktree** → desde el 2026-09-02 (`task_cv_26`) el worktree
+  del plan se monta en `/workspace` en **sólo lectura**: el preview corre la
+  app del tenant hasta 48 h y nada de lo que la app escriba (caché, uploads,
+  logs) puede tocar el código que el humano valida. Las rutas que la app
+  necesite escribir se declaran en `repository_config.preview.writable_paths`
+  (relativas al worktree, p. ej. `["writable", "storage/logs"]`; tienen que
+  existir en el repositorio) y se montan como tmpfs encima.
+  `repository_config.preview.workspace_rw: true` es el opt-in al montaje RW
+  completo de antes.
 
 Sin imagen configurada la plataforma **no lanza ningún contenedor** (nada de
 placeholders muertos): la sesión y sus URLs firmadas se crean igual, y tanto

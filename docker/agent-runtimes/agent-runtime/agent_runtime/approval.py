@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from shared_domain.approval_action import action_fingerprint
-from shared_domain.approval_categories import APPROVAL_CATEGORIES
+from shared_domain.approval_categories import APPROVAL_CATEGORIES, spec_approval_category
 from shared_domain.tool_names import to_canonical
 
 # Builtin tool → sensitive-action category. Keyed on CANONICAL tool names
@@ -138,7 +138,15 @@ def tool_categories_from_specs(
     for spec in raw_specs or ():
         name = spec.get("name")
         category = spec.get("approval_category")
-        if not name or not category or name in base:
+        if not name or name in base:
+            continue
+        if not category:
+            # `task_cv_23`: un spec LISTADO sin categoría es el opt-out explícito
+            # del operador (`security_level` sin gate en el api-server). Se
+            # anota como tal para que el fallback de nombres con namespace no
+            # lo gatee: la diferencia entre «nadie lo catalogó» y «se decidió
+            # que no gatea» es justo lo que este mapa tiene que conservar.
+            merged[str(name)] = UNGATED_TOOL
             continue
         if category not in APPROVAL_CATEGORIES:
             continue
@@ -275,6 +283,21 @@ def unlisted_category_reason(policy: dict[str, Any] | None, category: str) -> st
     )
 
 
+# `task_cv_23` (auditoría 2026-09-01, D-04): `register_mcp_server` registra TODO
+# lo que lista el servidor, también lo que el api-server no serializó en
+# `tool_specs`; para esos nombres el gate devolvía `None` hasta bajo «Cliente
+# Externo». Un nombre con namespace (`servidor.tool`) sin categoría cae al
+# criterio de `spec_approval_category` para `mcp_tool`. Fail-closed por diseño.
+_NAMESPACE_SEPARATOR = "."
+#: Valor centinela del mapa tool→categoría para una tool que un spec listó SIN
+#: categoría: decisión explícita de no gatear, distinta de «no catalogada».
+UNGATED_TOOL = ""
+_NAMESPACED_FALLBACK_CATEGORY: str = (
+    spec_approval_category(implementation_type="mcp_tool", security_level=None)
+    or "external_http_post"
+)
+
+
 class ApprovalGate:
     """Decides whether a tool call must pause for human approval."""
 
@@ -313,15 +336,32 @@ class ApprovalGate:
         """
         if not tool:
             return None
+        category = self._gating_category(tool)
+        if category is None or self._redeem(tool, args):
+            return None
+        return category
+
+    def _gating_category(self, tool: str) -> str | None:
+        """La categoría que exige humano para ``tool`` bajo esta política, o
+        ``None`` si la llamada puede correr sin aprobación."""
         # Resolve legacy aliases (file_write → write_file, http_request →
         # http_get/http_post) to canonical names (ADR 0048) before lookup, so a
         # sensitive call cannot slip past the gate by mere name mismatch.
-        for canonical in to_canonical(tool):
+        canonicals = to_canonical(tool)
+        for canonical in canonicals:
             category = self._tool_categories.get(canonical)
+            if category == UNGATED_TOOL:
+                return None  # opt-out explícito del operador (`task_cv_23`)
             if category is not None and requires_human(self._policy, category):
-                if self._redeem(tool, args):
-                    return None
                 return category
+        catalogued = any(canonical in self._tool_categories for canonical in canonicals)
+        # `task_cv_23`: tool con namespace que ningún spec catalogó.
+        if (
+            not catalogued
+            and _NAMESPACE_SEPARATOR in tool
+            and requires_human(self._policy, _NAMESPACED_FALLBACK_CATEGORY)
+        ):
+            return _NAMESPACED_FALLBACK_CATEGORY
         return None
 
     def gate_reason(self, category: str) -> str | None:

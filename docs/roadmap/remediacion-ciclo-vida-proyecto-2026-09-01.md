@@ -224,7 +224,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_20` — El spec y el token interno no viven en el env del proceso del agente (D-01)
 
-- [ ] **Título**: `shell_exec` hereda el env completo (`subprocess.run` sin `env=`) y
+- [x] _(hecho 2026-09-02, tests en verde; paso 1: env mínimo explícito en `shell_exec` (allowlist PATH/HOME/locale/proxy); paso 2: spec y token en `/run/secrets` (`AGENT_TASK_SPEC_FILE`, `AGENTIC_INTERNAL_TOKEN_FILE`, mismo staging que la credencial del modelo) y el boot los retira de `os.environ` aunque un worker antiguo los mande en línea; desplegar la imagen del runtime antes que el worker)_ **Título**: `shell_exec` hereda el env completo (`subprocess.run` sin `env=`) y
       `python_function` comparte uid con el runtime: `AGENT_TASK_SPEC` (headers de MCP,
       `approved_actions`, código de python_function) y `AGENTIC_INTERNAL_TOKEN` (que autoriza
       `mcp-oauth-token`) son legibles por el modelo o por una inyección. Paso 1 (S): `env`
@@ -236,7 +236,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_21` — Tope anunciado por observación y en `steps_log` (D-02)
 
-- [ ] **Título**: una lectura de 900 KB entra dos veces al prompt (1,8 M chars, ~450k tokens en un
+- [x] _(hecho 2026-09-02, tests en verde; `_MAX_OBSERVATION_CHARS = 24_000` aplicado en `act()` al mismo valor que va al step (`truncated`, `bytes_total`) y a la observación, y `read_file` con `offset`/`limit` en caracteres y `total_chars`)_ **Título**: una lectura de 900 KB entra dos veces al prompt (1,8 M chars, ~450k tokens en un
       turno) y entera al `steps_log`; el presupuesto de tokens se evalúa al turno siguiente.
       `_MAX_OBSERVATION_CHARS` (~24k) aplicado en `act()` con marcador explícito al estilo de
       `list_files` («showing the first N of M chars; use offset/limit»), `offset`/`limit` reales
@@ -247,7 +247,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_22` — El hook `pre_llm` escanea lo que de verdad se manda (D-03)
 
-- [ ] **Título**: el hook lee `entry["content"]` y las observaciones son
+- [x] _(hecho 2026-09-02, tests en verde; el hook escanea el mensaje real de `_decide_messages` (sistema + usuario) con cabeza y cola ante el tope de 50k, así que una tarea sin contexto también se escanea una vez)_ **Título**: el hook lee `entry["content"]` y las observaciones son
       `{"role":"observation","tool":…,"output":{…}}`: cero eventos con la forma real, uno con la
       forma sintética del test que cerró B-05. Escanear `_decide_messages(state)[1].content` (cabeza
       y cola ante el cap de 50k).
@@ -256,7 +256,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_23` — Toda tool MCP pasa por el gate de aprobación (D-04)
 
-- [ ] **Título**: `register_mcp_server` registra todas las tools que lista el servidor y
+- [x] _(hecho 2026-09-02, tests en verde; fallback `external_http_post` para nombres con namespace que ningún spec catalogó; un spec listado SIN categoría sigue siendo el opt-out explícito del operador (`UNGATED_TOOL`))_ **Título**: `register_mcp_server` registra todas las tools que lista el servidor y
       `ApprovalGate.review` devuelve `None` para cualquier nombre sin categoría, también bajo
       «Cliente Externo». Fallback `external_http_post` para nombres con namespace no mapeados (el
       criterio de `spec_approval_category` para `mcp_tool`) y/o registrar sólo lo catalogado.
@@ -266,7 +266,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_24` — La dep-cache se acota por tenant y deja de ser 0777 (B-04)
 
-- [ ] **Título**: `cache_path_for` devuelve `{prefix}-{lock_hash}` sin tenant, montado RW en el
+- [x] _(hecho 2026-09-02, tests en verde; clave `{tenant_slug}/{prefix}-{hash}` en `cache_path_for`/`ensure_entry`/`mount_for`/`invalidate`, 0755 + chown 1000 en vez de 0777, purga del layout plano anterior en `purge_expired`, y el endpoint de invalidación acotado al tenant que llama)_ **Título**: `cache_path_for` devuelve `{prefix}-{lock_hash}` sin tenant, montado RW en el
       contenedor no confiable y con `chmod 0777`: dos tenants con el mismo lockfile comparten el
       directorio donde maven/bundler/composer no verifican contenido. Clave
       `{tenant_slug}/{prefix}-{hash}` en `cache_path_for`/`invalidate`/`purge_expired`; `chown 1000`
@@ -276,7 +276,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_25` — Un bridge efímero por ejecución en vez de una L2 compartida (B-07)
 
-- [ ] **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
+- [ ] _(pendiente al cierre de la sesión del 2026-09-02: es la única de la ola 2 sin hacer; el patrón está en `test_runtime.py:_create_bridge` + `_attach_registry_proxy` y el runner del agente tendría que conectar `egress-proxy` y `api-server` —y los servidores MCP internos que declare el proyecto— al bridge de cada ejecución, además de actualizar el ADR 0012)_ **Título**: todos los sandboxes de todos los tenants, previews, api-server y workers
       comparten `agentic-agents` con ICC (`isolation.py` promete lo contrario). Bridge interno por
       ejecución (patrón de `test_runtime.py:_create_bridge`) con `network.connect` del egress-proxy
       y del api-server. Actualizar ADR 0012.
@@ -285,7 +285,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_26` — El preview de review no monta el worktree en RW (B-06)
 
-- [ ] **Título**: `review_runtime_task.py` lanza la app del tenant 48 h con el worktree del plan en
+- [x] _(hecho 2026-09-02, tests en verde; `repository_config.preview.writable_paths` (tmpfs) y `preview.workspace_rw` (opt-in), documentado en `docs/03-guides/app-review-images.md`)_ **Título**: `review_runtime_task.py` lanza la app del tenant 48 h con el worktree del plan en
       RW. `workspace_read_only=True` por defecto con `tmpfs` para rutas de escritura declaradas
       (opt-in `preview_workspace_rw`).
       **Test**: `Mounts[/workspace].RW == false`.
@@ -293,7 +293,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_27` — Las memorias recuperadas van valladas y un hit bloqueado se descarta (E-03)
 
-- [ ] **Título**: las memorias entran al prompt como JSON bajo «Context so far» sin
+- [x] _(hecho 2026-09-02, tests en verde; valla compartida en `agent_runtime/untrusted.py`, bloque propio «RECALLED MEMORY AND KNOWLEDGE» y descarte de hits bloqueados en `recall`)_ **Título**: las memorias entran al prompt como JSON bajo «Context so far» sin
       `_fence_untrusted`, y el guardrail del `recall` es sólo LOG. Bloque propio vallado para
       `role in {memory, knowledge}` y descarte de hits con `action == "block"`.
       **Test**: memoria con `UNTRUSTED_DATA>>>` dentro → neutralizada y dentro de la valla; hit
