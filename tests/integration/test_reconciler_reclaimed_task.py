@@ -36,26 +36,39 @@ pytestmark = pytest.mark.integration
 
 
 class _FakeRedis:
-    """Captura los `xadd` (directos y por pipeline, como publica `api_server.events`)."""
+    """Captura los `xadd` (copia del doble de `test_reconciler.py`: el publicador
+    acumula en un pipeline SÍNCRONO y ejecuta en `await execute()`; un `xadd`
+    async aquí dejaría corrutinas sin consumir y el test pasaría sin publicar)."""
 
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
 
-    async def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> str:
+    async def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> None:
         self.events.append({"stream": stream, **fields})
-        return "0-1"
 
-    def pipeline(self, *_a: Any, **_k: Any) -> _FakeRedis:
-        return self
+    def pipeline(self) -> _FakePipeline:
+        return _FakePipeline(self)
+
+    async def aclose(self) -> None:  # pragma: no cover - injected, never closed here
+        ...
+
+
+class _FakePipeline:
+    def __init__(self, redis: _FakeRedis) -> None:
+        self._redis = redis
+        self._pendientes: list[dict[str, Any]] = []
+
+    def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> None:
+        self._pendientes.append({"stream": stream, **fields})
+
+    def expire(self, *_a: Any, **_kw: Any) -> None:
+        """`events.py` encadena un `expire` en el mismo pipeline."""
 
     async def execute(self) -> list[Any]:
-        return []
-
-    async def __aenter__(self) -> _FakeRedis:
-        return self
-
-    async def __aexit__(self, *_exc: Any) -> bool:
-        return False
+        self._redis.events.extend(self._pendientes)
+        enviados = len(self._pendientes)
+        self._pendientes = []
+        return [None] * enviados
 
 
 @pytest.fixture()
