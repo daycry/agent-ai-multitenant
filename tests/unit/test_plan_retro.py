@@ -177,22 +177,31 @@ class _AsyncNull:
         return None
 
 
-def test_the_retro_carries_the_id_of_its_plan() -> None:
+def test_the_retro_carries_the_id_of_its_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     # Se guardaba con `tags` fijo a ["plan_retro"], así que una vez escrita no
     # había forma de saber de qué plan era: el detalle del plan no podía
-    # enseñarla y la retro se escribía para nadie.
-    import json
-
+    # enseñarla y la retro se escribía para nadie. Desde `task_cv_45` (E-06)
+    # la fila entra por la persistencia común del memorizer, con sus tags.
+    from api_server.memorizer import persistence
     from workers.plan_retro import DbRetroPersister
 
-    captured: list[dict[str, Any]] = []
+    captured: list[Any] = []
+
+    async def _persist(_session: Any, candidates: Any, **_kw: Any) -> list[Any]:
+        captured.extend(candidates)
+        return []
+
+    monkeypatch.setattr(persistence, "persist_memory_candidates", _persist)
     plan = _plan()
-    persister = DbRetroPersister(lambda: _CapturingSession(captured))
-    asyncio.run(persister.save(plan=plan, content="Retrospectiva…"))
+
+    class _TxSession(_CapturingSession):
+        def begin(self) -> Any:
+            return self
+
+    asyncio.run(DbRetroPersister(lambda: _TxSession([])).save(plan=plan, content="Retrospectiva…"))
 
     assert len(captured) == 1
-    tags = json.loads(captured[0]["tags"])
-    assert tags == ["plan_retro", f"plan:{plan.plan_id}"]
+    assert list(captured[0].tags) == ["plan_retro", f"plan:{plan.plan_id}"]
 
 
 def test_the_plan_tag_is_the_same_string_both_sides_read() -> None:

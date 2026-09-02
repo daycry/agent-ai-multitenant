@@ -6,6 +6,7 @@ WATCHDOG_SERVICES=postgres,redis python -m watchdog
 
 from __future__ import annotations
 
+import functools
 import os
 import signal
 import sys
@@ -107,7 +108,15 @@ def _build_monitors() -> list[ServiceMonitor]:
         if container is None:
             _logger.warning("watchdog.container_missing", project=project, service=svc)
             continue
-        monitors.append(ServiceMonitor(name=svc, container=container, alert_sink=sink))
+        monitors.append(
+            ServiceMonitor(
+                name=svc,
+                container=container,
+                alert_sink=sink,
+                # `task_cv_45` (G-11): tras un recreate, volver a encontrarlo.
+                resolver=functools.partial(resolve_container, client, project, svc),
+            )
+        )
     return monitors
 
 

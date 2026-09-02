@@ -55,7 +55,8 @@ def _request(*checks: dict[str, Any]) -> dict[str, Any]:
     return {
         "tenant_id": str(uuid4()),
         "task_id": str(uuid4()),
-        "worktree_host_path": "/data/wt/t1",
+        # `task_cv_45` (B-10): el worktree tiene que vivir bajo `data_root`.
+        "worktree_host_path": "/data/agent-platform/projects/acme/app/worktrees/t1",
         "acceptance_criteria": list(checks) or [_check()],
     }
 

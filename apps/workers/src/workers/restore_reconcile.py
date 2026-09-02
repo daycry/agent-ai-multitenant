@@ -316,7 +316,7 @@ class RestoreReconciler:
             (
                 await session.execute(
                     text(
-                        "SELECT p.id, p.title, p.slug, pr.slug AS project_slug,"
+                        "SELECT p.id, p.title, p.slug, p.status, pr.slug AS project_slug,"
                         "       o.slug AS tenant_slug"
                         "  FROM plans p"
                         "  JOIN projects pr ON pr.id = p.project_id"
@@ -350,15 +350,23 @@ class RestoreReconciler:
                 )
                 continue
             if not any(self._git.branch_exists(bare, branch) for bare in bares):
+                # `task_cv_45` (G-09): la rama nace en el primer `worktree add`;
+                # un plan `approved` sin rama es lo normal, no un DR fallido.
+                approved = str(row.get("status") or "") == "approved"
                 out.append(
                     Divergence(
                         check="db<->git",
-                        severity=SEVERITY_CRITICAL,
+                        severity=SEVERITY_WARNING if approved else SEVERITY_CRITICAL,
                         subject=f"plan {row['title']} ({row['id']})",
                         detail=(
                             f"la rama {branch!r} no está en ninguno de los repos "
-                            f"{[b.name for b in bares]}: el trabajo de los agentes "
-                            f"sobre ese plan no está restaurado"
+                            f"{[b.name for b in bares]}: "
+                            + (
+                                "el plan está aprobado y aún no ha ejecutado nada, "
+                                "así que puede no tener rama todavía"
+                                if approved
+                                else "el trabajo de los agentes sobre ese plan no está restaurado"
+                            )
                         ),
                     )
                 )

@@ -22,10 +22,12 @@ Endpoints:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
+from prometheus_client import REGISTRY, Counter
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -566,6 +568,26 @@ async def memory_store(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _recall_embedding_failures_counter() -> Counter:
+    """`task_cv_45` (E-10): contador registrado UNA vez por proceso (los tests
+    recargan el módulo)."""
+    name = "agentic_recall_embedding_failures_total"
+    existing = getattr(REGISTRY, "_names_to_collectors", {}).get(name)
+    if existing is not None:
+        return cast(Counter, existing)
+    return Counter(
+        name,
+        "Recall queries whose embedding failed (recall degraded to BM25).",
+        registry=REGISTRY,
+    )
+
+
+RECALL_EMBEDDING_FAILURES = _recall_embedding_failures_counter()
+_log = structlog.get_logger(__name__)
+
+
 async def _embed_query(embedder: Embedder | None, query: str) -> list[float] | None:
     """Embebe la query del recall (best-effort).
 
@@ -576,7 +598,10 @@ async def _embed_query(embedder: Embedder | None, query: str) -> list[float] | N
         return None
     try:
         vectors = await embedder.embed([query])
-    except EmbeddingError:
+    except EmbeddingError as exc:
+        # `task_cv_45` (E-10): el recall degrada a BM25 — que se vea.
+        RECALL_EMBEDDING_FAILURES.inc()
+        _log.warning("memory.recall.embedding_failed", error=str(exc))
         return None
     return list(vectors[0]) if vectors else None
 

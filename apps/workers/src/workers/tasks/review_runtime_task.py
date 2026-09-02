@@ -22,6 +22,7 @@ from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine
 from workers.docker_client import get_docker_client
+from workers.host_paths import HostPathError, ensure_under_data_root
 
 _log = structlog.get_logger("workers.tasks")
 
@@ -280,6 +281,12 @@ def _resolve_review_worktree_host_path(request: dict[str, Any], settings: Settin
     failing the whole spawn."""
     explicit = request.get("worktree_host_path")
     if isinstance(explicit, str) and explicit:
+        # `task_cv_45` (B-10): una ruta de host fuera de `data_root` no se monta.
+        try:
+            explicit = ensure_under_data_root(explicit, data_root=settings.data_root)
+        except HostPathError as exc:
+            _log.error("review_runtime.worktree_host_path_rejected", error=str(exc))
+            return ""
         _sync_explicit_review_worktree(explicit, request, settings)
         return explicit
     tenant_slug = request.get("tenant_slug")
