@@ -19,6 +19,7 @@ import structlog
 from workers.celery_app import app
 from workers.config import get_settings
 from workers.db import worker_engine
+from workers.maintenance.singleton import beat_singleton
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -50,6 +51,7 @@ def idle_sweep_pools() -> dict[str, Any]:
 
 
 @app.task(name="workers.purge_dep_cache")  # type: ignore[untyped-decorator]
+@beat_singleton("purge_dep_cache", ttl_s=3600)
 def purge_dep_cache() -> dict[str, Any]:
     """Drop dep-cache entries older than the configured TTL (default 30d).
 
@@ -167,6 +169,7 @@ def _housekeep_bare(repo_path: Path, prunable_branches: set[str]) -> tuple[int, 
 
 
 @app.task(name="workers.git_housekeeping")  # type: ignore[untyped-decorator]
+@beat_singleton("git_housekeeping", ttl_s=3600)
 def git_housekeeping() -> dict[str, Any]:
     """Higiene mensual de los bare repos (G-08): ``git worktree prune`` + gc
     ligero (`--prune=30.days.ago`), borra locks huérfanos (>24h, restos de
@@ -205,44 +208,65 @@ def git_housekeeping() -> dict[str, Any]:
     return result
 
 
-async def _build_worktree_policy(settings: Any) -> dict[str, str]:
-    """G-07: política de poda por worktree (nombre = task id) leída de la DB.
+_CLOSED_PLAN_STATUSES = ("completed", "cancelled", "archived")
 
-    - plan CERRADO (completed/cancelled/archived o soft-borrado) → ``closed``
-      (TTL 48h);
-    - task ``blocked`` → ``keep`` (la escena del crimen se conserva);
-    - resto → sin entrada (``default``, TTL 30d).
-    Best-effort: si la DB no responde, policy vacía = poda clásica por TTL.
+
+def _worktree_policy_from_rows(rows: Any) -> dict[str, str]:
+    """Política de poda a partir de filas ``(task_id, task_status, plan_status,
+    plan_deleted_at, running_executions)``. Pura, para poder fijarla sin DB.
+
+    - EJECUCIÓN `running` dentro del worktree → ``keep``, gane quien gane en el
+      plan (`task_cv_42`, auditoría 2026-09-01 G-01: la poda decidía por el
+      estado del plan y borraba el worktree bajo los pies del contenedor);
+    - plan CERRADO (completed/cancelled/archived o soft-borrado) → ``closed``;
+    - task ``blocked`` → ``keep``;
+    - resto → sin entrada (``default``).
     """
-    from api_server.db.domain import Plan, Task
-    from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
-    closed = ("completed", "cancelled", "archived")
-    engine = worker_engine(settings)
-    try:
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        async with sessionmaker() as db:
-            rows = (
-                await db.execute(
-                    select(Task.id, Task.status, Plan.status, Plan.deleted_at).join(
-                        Plan, Task.plan_id == Plan.id, isouter=True
-                    )
-                )
-            ).all()
-    finally:
-        await engine.dispose()
-
     policy: dict[str, str] = {}
-    for task_id, task_status, plan_status, plan_deleted in rows:
-        if plan_status in closed or plan_deleted is not None:
+    for task_id, task_status, plan_status, plan_deleted, running in rows:
+        if running:
+            policy[str(task_id)] = "keep"
+        elif plan_status in _CLOSED_PLAN_STATUSES or plan_deleted is not None:
             policy[str(task_id)] = "closed"
         elif task_status == "blocked":
             policy[str(task_id)] = "keep"
     return policy
 
 
+async def _build_worktree_policy(settings: Any) -> dict[str, str]:
+    """G-07: política de poda por worktree (nombre = task id) leída de la DB.
+
+    Ver :func:`_worktree_policy_from_rows` para las reglas. Best-effort: si la
+    DB no responde, policy vacía = poda clásica por TTL.
+    """
+    from api_server.db.domain import Execution, Plan, Task
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    running_executions = (
+        select(func.count(Execution.id))
+        .where(Execution.task_id == Task.id, Execution.status == "running")
+        .correlate(Task)
+        .scalar_subquery()
+    )
+    engine = worker_engine(settings)
+    try:
+        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessionmaker() as db:
+            rows = (
+                await db.execute(
+                    select(
+                        Task.id, Task.status, Plan.status, Plan.deleted_at, running_executions
+                    ).join(Plan, Task.plan_id == Plan.id, isouter=True)
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    return _worktree_policy_from_rows(rows)
+
+
 @app.task(name="workers.prune_worktrees")  # type: ignore[untyped-decorator]
+@beat_singleton("prune_worktrees", ttl_s=3600)
 def prune_worktrees() -> dict[str, Any]:
     """Remove worktrees past their TTL, aware of plan/task state (G-07).
 

@@ -57,6 +57,15 @@ ENSURE_PARTITIONS_BEAT_ENTRY = "ensure-partitions-daily"
 #   - purge_dep_cache      → test    (touches the dep-cache directory the
 #                                      test queue manages)
 #   - prune_worktrees      → default (cross-cutting filesystem walk)
+# `task_cv_42` (auditoría 2026-09-01, G-04): beat no garantiza instancia única —
+# dos beats (despliegue solapado) encolan la misma tarea dos veces y las de
+# efecto en DISCO (poda de worktrees, dep-cache, housekeeping de git, purga de
+# soft-borrados, backup, sweeper) corren en paralelo sobre la misma carpeta.
+# `expires` es el primer cerrojo: una copia que espere en la cola más que esto
+# se descarta en vez de ejecutarse a destiempo. Va POR DEBAJO de la cadencia.
+_DISK_EFFECT_EXPIRES_S = 3600
+_SWEEP_EXPIRES_S = 240
+
 BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "idle-sweep-pools-every-30s": {
         "task": "workers.idle_sweep_pools",
@@ -87,7 +96,7 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "sweep-stale-executions-every-5m": {
         "task": "workers.sweep_stale_executions",
         "schedule": schedule(run_every=300.0),
-        "options": {"queue": "default"},
+        "options": {"expires": _SWEEP_EXPIRES_S, "queue": "default"},
     },
     "expire-review-runtimes-every-5m": {
         "task": "workers.expire_review_runtimes",
@@ -143,7 +152,7 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
         "schedule": crontab(hour="3", minute="0"),
-        "options": {"queue": "test"},
+        "options": {"expires": _DISK_EFFECT_EXPIRES_S, "queue": "test"},
     },
     # ADR 0122: vigía de credenciales LLM — sondea los proveedores activos
     # y avisa ANTES de que un run muera por credencial caducada.
@@ -176,7 +185,7 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "prune-worktrees-daily": {
         "task": "workers.prune_worktrees",
         "schedule": crontab(hour="3", minute="30"),
-        "options": {"queue": "default"},
+        "options": {"expires": _DISK_EFFECT_EXPIRES_S, "queue": "default"},
     },
     # G-08 (auditoría proyecto 2026-07-17) — higiene mensual de los bare repos:
     # worktree prune + gc ligero + locks huérfanos + poda de ramas plan/* de
@@ -190,7 +199,7 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "git-housekeeping-monthly": {
         "task": "workers.git_housekeeping",
         "schedule": crontab(day_of_month="1", hour="3", minute="50"),
-        "options": {"queue": "default"},
+        "options": {"expires": _DISK_EFFECT_EXPIRES_S, "queue": "default"},
     },
     # Plan 06.11 — safety net: re-enqueue documents stuck in `pending`
     # (a missed enqueue, a worker crash mid-flight, or an upload while
@@ -237,7 +246,7 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     PURGE_SOFT_DELETED_BEAT_ENTRY: {
         "task": "workers.purge_soft_deleted",
         "schedule": crontab(hour="4", minute="30"),
-        "options": {"queue": "ingestion"},
+        "options": {"expires": _DISK_EFFECT_EXPIRES_S, "queue": "ingestion"},
     },
     # `task_wf_52b`: latido de shadow evals. `record_shadow_eval` existia desde
     # el Plan 14 sin ningun llamante — el mecanismo entero y nunca disparado.
@@ -392,7 +401,7 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
             default=_cron_default("backup_cron"),
             environment=cfg.environment,
         ),
-        "options": {"queue": "privileged"},
+        "options": {"expires": _DISK_EFFECT_EXPIRES_S, "queue": "privileged"},
     }
     # Plan 15 task_15_17: Vault credential rotation on a CONFIGURABLE cadence
     # (WORKERS_CRED_ROTATION_CRON, default weekly Sunday 02:00). Pinned to the

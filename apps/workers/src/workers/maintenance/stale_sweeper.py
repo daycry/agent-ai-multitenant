@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine
+from workers.maintenance.singleton import beat_singleton
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -239,6 +240,7 @@ async def _commit_recovered_worktree(
 
 
 @app.task(name="workers.sweep_stale_executions")  # type: ignore[untyped-decorator]
+@beat_singleton("sweep_stale_executions", ttl_s=240)
 def sweep_stale_executions() -> dict[str, Any]:
     """Close zombie executions + reap their orphan containers.
 

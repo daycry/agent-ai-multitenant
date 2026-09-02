@@ -384,20 +384,35 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_41` — Escaladas visibles y despacho de review que respeta pausa y proyecto (C-05, C-06, C-07)
 
-- [ ] **Título**: las tres escaladas del bucle AI-reviewer no emiten notificación ni salen en el
+- [x] **Título**: las tres escaladas del bucle AI-reviewer no emiten notificación ni salen en el
       panel; `_on_task_in_review` esquiva `budget_pause_block` y `status == active`; el reviewer
       puede acabar siendo el implementador cuando no hay preset. Emitir `task_blocked`, panel con
       `blocked` + `review_comment.escalated`, y excluir `reviewer_agent_id` del pool.
       **Coste**: 1 d.
+      _Cerrada el 2026-09-02_: `_notify_execution_outcome` recibe el estado final de la tarea y
+      emite `task_blocked` (razón = `abort_code` o `escalated`) cuando queda bloqueada;
+      `_on_task_in_review` aplica las mismas guardas que el despacho de implementación
+      (proyecto `active`, sin `budget_pause_block`); `_pick` retira `reviewer_agent_id` del
+      pool; el panel de la tarea muestra la escalada del último `review_comment`
+      (`task-review-criteria.tsx`). Tests: `test_execution_outcome_notify.py`,
+      `test_assignment_policies.py`, `test_in_review_dispatch.py`, `task-review-criteria.test.tsx`.
 
 ### `task_cv_42` — Beat con instancia única y poda que respeta ejecuciones vivas (G-05, G-06, G-04)
 
-- [ ] **Título**: ninguna tarea beat tiene `expires` ni lock (`acks_late` las reentrega: dos backups
+- [x] **Título**: ninguna tarea beat tiene `expires` ni lock (`acks_late` las reentrega: dos backups
       con dos quiesces); la poda hace `unlock` + `remove --force` confiando sólo en el mtime del
       directorio (dependencia no fijada por ningún test: hoy la refresca el ocultado del `.git`);
       el worktree `plan-docs-*` nunca se retira. `expires` + `SET NX` en las tareas con efectos en
       disco; `executions.status='running'` → `keep`; no soltar un lock cuyo `execution_id` esté
       `running`; `_remove_worktree` en el `finally` de `write_plan_docs_to_branch`. Actualizar ADR 0163 §5.
+      _Cerrada el 2026-09-02_: las seis tareas con efecto en disco (poda de worktrees, dep-cache,
+      housekeeping de git, purga de soft-borrados, backup, sweeper) llevan `expires` en su entrada
+      del beat y el cerrojo `SET NX EX` de `workers.maintenance.singleton` (sin Redis corren igual
+      y lo registran); la política de poda lee `executions.status` y un worktree con run `running`
+      es `keep` aunque el plan esté cerrado (con ello no se suelta su lock); `write_plan_docs_to_branch`
+      retira el worktree de docs en un `finally` (`WorktreeManager.remove`). ADR 0163 con addendum
+      del 2026-09-02. Tests: `test_el_mantenimiento_respeta_las_ejecuciones_vivas.py`,
+      `test_plan_closure_docs.py::test_the_docs_worktree_is_removed_after_the_push`.
       **Coste**: 1,5 d.
 
 ### `task_cv_43` — Timeouts de git remoto, DLQ con lector y quiesce que no deja facturando (G-07, A-09, G-08)
@@ -408,6 +423,11 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
       métrica `agentic_dlq_depth` + endpoint System Admin; señal `worker_shutting_down` que mata
       los contenedores del worker y sella las filas (`failed:quiesced`).
       **Coste**: 1,5 d.
+      _Parcial el 2026-09-02_: `WORKERS_GIT_REMOTE_TIMEOUT_S` (300 s por defecto) acota
+      fetch/push/pull/ls-remote/clone en `_run_git`, lo local sigue a 120 s y el vencimiento es un
+      `GitCommandError` (`test_el_git_remoto_tiene_timeout.py`); `dlq:executions` entra en
+      `agentic_dlq_depth` (`test_the_executions_dead_letter_stream_is_sampled`). Pendientes: el
+      endpoint System Admin de la DLQ y la señal `worker_shutting_down`.
 
 ### `task_cv_44` — Imágenes del tenant por digest y con allowlist (B-05, B-09)
 

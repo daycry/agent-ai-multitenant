@@ -46,7 +46,9 @@ async def _collect_queue_depths(redis: Any, queue_names: tuple[str, ...]) -> dic
 
 
 # Streams DLQ conocidos (dispatcher de notificaciones), en el events redis.
-_DLQ_STREAMS: tuple[str, ...] = ("dlq:notifications",)
+# `task_cv_43` (auditoría 2026-09-01, A-09): `dlq:executions` (run_cycle) existía
+# sin lector ni métrica. Entra en `agentic_dlq_depth{stream=...}`, que ya alerta.
+_DLQ_STREAMS: tuple[str, ...] = ("dlq:notifications", "dlq:executions")
 
 
 async def _collect_dlq_depths(redis: Any, streams: tuple[str, ...]) -> dict[str, int]:

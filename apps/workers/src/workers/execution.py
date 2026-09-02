@@ -2498,6 +2498,51 @@ async def _notify_execution_outcome(
     status: str,
     abort_code: str | None,
     output: str | None = None,
+    task_status: str | None = None,
+) -> None:
+    """Emite el evento del run (`_notify_run_outcome`) y, si la TAREA quedó
+    ``blocked`` (`task_cv_41`, auditoría 2026-09-01 C-05), ``task_blocked``:
+    las escalaciones del bucle de review con reviewer IA —commit perdido,
+    tercer rechazo, run muerto— bloqueaban la tarea sin avisar a nadie; el
+    evento existía (plantillas ES/EN) pero sólo lo emitían los raíles humanos.
+    Best-effort como el resto: un broker caído jamás rompe el run terminado."""
+    await _notify_run_outcome(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        task_title=task_title,
+        status=status,
+        abort_code=abort_code,
+        output=output,
+    )
+    if task_status != "blocked":
+        return
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": "task_blocked",
+                "tenant_id": tenant_id,
+                "context": {
+                    "task_title": task_title,
+                    "task_id": task_id,
+                    "status": status,
+                    "reason": abort_code or "escalated",
+                },
+            }
+        )
+    except Exception as exc:
+        _log.warning("workers.notify_task_blocked_failed", task_id=task_id, error=str(exc))
+
+
+async def _notify_run_outcome(
+    *,
+    tenant_id: str,
+    task_id: str,
+    task_title: str,
+    status: str,
+    abort_code: str | None,
+    output: str | None = None,
 ) -> None:
     """Encola execution_failed/execution_finished al dispatcher (NOTIF-3).
 
@@ -2765,6 +2810,8 @@ async def conduct_execution(
         abort_code=result.abort_code,
         # AUD16-23: la salida del abort lleva los marcadores de credencial.
         output=result.output,
+        # `task_cv_41`: si la tarea quedó bloqueada, se avisa (task_blocked).
+        task_status=task_event[2] if task_event is not None else None,
     )
 
     _log.info("workers.execution_finished", execution_id=exec_id, status=result.status)

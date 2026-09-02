@@ -12,7 +12,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
-import { latestReviewCriteria, TaskReviewCriteria } from "@/components/tasks/task-review-criteria";
+import {
+  latestReviewCriteria,
+  latestReviewEscalation,
+  TaskReviewCriteria,
+} from "@/components/tasks/task-review-criteria";
 
 function event(at: number, criteria: unknown, kind = "review_comment") {
   return { id: `e${at}`, at, kind, actor: "agent:reviewer", payload: { criteria } };
@@ -92,5 +96,46 @@ describe("TaskReviewCriteria", () => {
     renderSection();
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("task-review-criteria")).toBeNull();
+  });
+});
+
+// `task_cv_41` (auditoría 2026-09-01, C-05): las escaladas del bucle con
+// reviewer IA dejaban la tarea en `blocked` sin que el panel lo dijera.
+function escalated(at: number, reason: string, abortCode?: string) {
+  return {
+    id: `e${at}`,
+    at,
+    kind: "review_comment",
+    actor: "ai-reviewer",
+    payload: { escalated: true, reason, abort_code: abortCode ?? null },
+  };
+}
+
+describe("latestReviewEscalation", () => {
+  it("returns the escalation when the latest review comment escalated", () => {
+    const events = [event(1, PASS_FAIL), escalated(2, "review_inconclusive", "provider_error")];
+    expect(latestReviewEscalation(events)).toEqual({
+      reason: "review_inconclusive",
+      abortCode: "provider_error",
+    });
+  });
+
+  it("returns null when a later review superseded the escalation", () => {
+    const events = [escalated(1, "review_inconclusive"), event(2, PASS_FAIL)];
+    expect(latestReviewEscalation(events)).toBeNull();
+  });
+
+  it("ignores other event kinds", () => {
+    expect(latestReviewEscalation([event(1, PASS_FAIL, "status_changed")])).toBeNull();
+  });
+});
+
+describe("TaskReviewCriteria escalation", () => {
+  it("shows the escalation even without criteria", async () => {
+    apiFetchMock.mockResolvedValueOnce({ events: [escalated(3, "escalated_review_approve")] });
+    renderSection();
+    const alert = await screen.findByTestId("task-review-escalated");
+    expect(alert.textContent).toContain("escalated_review_approve");
+    expect(screen.queryByTestId("review-criterion-0")).toBeNull();
   });
 });

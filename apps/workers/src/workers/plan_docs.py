@@ -24,6 +24,7 @@ fallo se degrada a un string de estado que el log recoge.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -130,6 +131,7 @@ def write_plan_docs_to_branch(
         return "skipped:no_bare_repo"
 
     worktree_id = _docs_worktree_id(plan_id)
+    wt: WorktreeManager | None = None
     try:
         mgr = BareRepoManager(layout)
         mgr.ensure_repo(project_slug)
@@ -169,6 +171,13 @@ def write_plan_docs_to_branch(
     except Exception as exc:  # best-effort: el plan ya está cerrado en BD
         _log.exception("plan_docs.failed", plan_id=str(plan_id), error=str(exc))
         return f"error:{exc}"
+    finally:
+        # `task_cv_42` (auditoría 2026-09-01, G-03): el worktree de docs se
+        # creaba y NUNCA se retiraba — uno por plan cerrado, registrado en el
+        # bare, que sólo la poda por TTL tocaba a los 30 días.
+        if wt is not None:
+            with contextlib.suppress(Exception):
+                wt.remove(worktree_id)
     _log.info("plan_docs.written", plan_id=str(plan_id), branch=branch)
     return "written"
 

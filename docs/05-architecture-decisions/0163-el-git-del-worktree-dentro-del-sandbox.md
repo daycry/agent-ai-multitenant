@@ -309,6 +309,26 @@ Los tres se reprodujeron con git real antes de tocar nada.
    reparado o no (quien provisiona o cierra es el dueño legítimo), y el reaper
    hace `worktree unlock` antes de `remove`.
 
+### Addendum del 2026-09-02: la poda mira la ejecución, no sólo el mtime (`task_cv_42`)
+
+El punto 3 dejó al reaper soltando el lock y borrando por `mtime` del
+directorio, y la auditoría del 2026-09-01 (G-04, G-05, G-06) midió lo que eso
+no cubría: el mtime lo refrescaba de rebote el ocultado del `.git`, ningún test
+lo fijaba, y una ejecución `running` en un plan que se cierra veía su worktree
+podado bajo los pies del contenedor. Desde el 2026-09-02:
+
+- **Una ejecución `running` es `keep`**, gane quien gane en el plan: la política
+  de poda (`_worktree_policy_from_rows`) lee `executions.status` y no suelta
+  ni poda un worktree cuyo lock pertenezca a un run vivo. Deja de depender del
+  mtime para el caso que importa.
+- **El worktree `plan-docs-*` se retira** en el `finally` de
+  `write_plan_docs_to_branch` (`WorktreeManager.remove`): antes uno por plan
+  cerrado quedaba registrado en el bare hasta la poda a 30 días.
+- **Las tareas beat con efecto en disco no corren dos veces a la vez**: llevan
+  `expires` en su entrada y un cerrojo `SET NX EX` por tarea
+  (`workers.maintenance.singleton`), porque beat no garantiza instancia única y
+  `acks_late` reentrega.
+
 ## Lo que esta decisión NO garantiza
 
 - **La ventana existe.** Entre retirar y reponer hay hasta dos horas en las que

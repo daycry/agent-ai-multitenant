@@ -1605,6 +1605,26 @@ class TaskDispatcher:
             if project is None:
                 _log.info("orchestrator.review_skip_deleted_project", task_id=str(task_id))
                 return
+            # `task_cv_41` (auditoría 2026-09-01, C-05): las mismas guardas que el
+            # despacho de implementación — un proyecto pausado, o en pausa por
+            # presupuesto, no gasta en runs de review.
+            if project.status != "active":
+                _log.info(
+                    "orchestrator.review_skip_inactive_project",
+                    task_id=str(task_id),
+                    project_status=str(project.status),
+                )
+                return
+            block = await budget_pause_block(
+                session, tenant_id=tenant_id, project_id=task.project_id
+            )
+            if block is not None:
+                _log.info(
+                    "orchestrator.review_paused_by_budget",
+                    task_id=str(task_id),
+                    **block.as_log_fields(),
+                )
+                return
             # C3 F09: idempotent review dispatch. The task stays `in_review` for
             # the whole review, so a re-delivered `in_review` event would launch a
             # SECOND review run. Guard on an already-running execution for the task
@@ -2935,6 +2955,11 @@ class TaskDispatcher:
         """
         if task.assigned_agent_id is not None:
             return str(task.assigned_agent_id)
+        reviewer_id = getattr(task, "reviewer_agent_id", None)
+        if reviewer_id is not None:
+            # `task_cv_41` (auditoría 2026-09-01, C-05): el reviewer de la tarea
+            # no puede ser también su implementador.
+            candidates = [c for c in candidates if c.agent_id != str(reviewer_id)]
         policy = AssignmentPolicy.LOAD_BALANCED
         if project is not None and isinstance(project.worker_config, dict):
             raw = project.worker_config.get("assignment_policy")

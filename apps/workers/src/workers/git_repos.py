@@ -46,6 +46,7 @@ from typing import Any
 
 import structlog
 
+from workers.config import get_settings
 from workers.git_identity import git_identity_env
 
 _log = structlog.get_logger("workers.git_repos")
@@ -140,13 +141,50 @@ def clean_args(preserve: Sequence[str]) -> tuple[str, ...]:
     return tuple(args)
 
 
+#: `task_cv_43`: tope de una operación LOCAL de git (status, commit, worktree…).
+LOCAL_GIT_TIMEOUT_S = 120
+
+#: Subcomandos que hablan con un remoto: llevan `Settings.git_remote_timeout_s`.
+_REMOTE_GIT_COMMANDS = frozenset({"fetch", "push", "pull", "ls-remote", "clone"})
+
+
+def _git_subcommand(args: tuple[str, ...]) -> str | None:
+    """El subcomando de ``git ARGS`` saltando las opciones globales (``-C dir``,
+    ``-c k=v``, ``--git-dir=…``)."""
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in {"-C", "-c", "--git-dir", "--work-tree"}:
+            skip_next = True
+            continue
+        if arg.startswith("-"):
+            continue
+        return arg
+    return None
+
+
+def _git_timeout_s(args: tuple[str, ...]) -> float:
+    """Remoto → ``git_remote_timeout_s``; local → :data:`LOCAL_GIT_TIMEOUT_S`."""
+    if _git_subcommand(args) not in _REMOTE_GIT_COMMANDS:
+        return LOCAL_GIT_TIMEOUT_S
+    try:
+        return float(get_settings().git_remote_timeout_s)
+    except Exception:  # settings no construibles (tests sin env): tope conservador
+        return 300.0
+
+
 def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | None = None) -> str:
     """Run ``git ARGS`` in ``cwd``, return stdout. Raises on non-zero rc.
 
     Sets ``GIT_TERMINAL_PROMPT=0`` so a misconfigured remote that
     would normally ask for a password fails loudly instead of
-    hanging the worker forever. Each caller adds a ``timeout=`` to
-    bound wall-clock too.
+    hanging the worker forever. Wall-clock is bounded too
+    (`task_cv_43`): local operations at :data:`LOCAL_GIT_TIMEOUT_S`,
+    remote ones (fetch/push/pull/ls-remote/clone) at
+    ``Settings.git_remote_timeout_s``; a hung remote surfaces as
+    :class:`GitCommandError`, never as a bare ``TimeoutExpired``.
 
     Also injects ``safe.bareRepository=all`` (prod-18): the platform operates on
     its OWN bare repos under ``data_root`` (``git -C <repo>.git branch``…), but
@@ -217,17 +255,24 @@ def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | No
     # log, un cuerpo HTTP, el env del contenedor), o sea que cambia un fallo
     # ruidoso y local por otro a distancia. Con `replace` ese nombre exótico se
     # queda sin protección —igual que hoy— pero nada se cae.
-    result = subprocess.run(  # — explicit args, no shell
-        ["git", *args],
-        cwd=str(cwd) if cwd is not None else None,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        timeout=120,
-        check=False,
-    )
+    timeout_s = _git_timeout_s(args)
+    try:
+        result = subprocess.run(  # — explicit args, no shell
+            ["git", *args],
+            cwd=str(cwd) if cwd is not None else None,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitCommandError(
+            f"git {' '.join(args)} timed out after {timeout_s:g}s "
+            "(WORKERS_GIT_REMOTE_TIMEOUT_S bounds remote operations)"
+        ) from exc
     if result.returncode != 0:
         raise GitCommandError(
             f"git {' '.join(args)} failed (rc={result.returncode}): "
@@ -484,6 +529,16 @@ class WorktreeManager:
             )
 
     # --- task_06_18 -----------------------------------------------------
+
+    def remove(self, task_id: str) -> None:
+        """Retira el worktree de ``task_id`` (best-effort, `task_cv_42`): lo
+        desregistra del bare y borra la carpeta. Sin worktree, no hace nada."""
+        path = self._layout.worktree_path(task_id)
+        if path.exists():
+            self._remove_worktree(path)
+        else:
+            with contextlib.suppress(GitCommandError):
+                _run_git("worktree", "prune", cwd=self._repo_path)
 
     def add(self, task_id: str, *, branch: str, base: str | None = None) -> Path:
         """Create a *detached-HEAD* worktree for ``task_id``.

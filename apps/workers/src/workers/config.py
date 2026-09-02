@@ -583,6 +583,15 @@ class Settings(BaseSettings):
         "the live ON/OFF lever is the `git_fetch_sweep_enabled` platform setting "
         "(default OFF). The beat process reads this at boot.",
     )
+    git_remote_timeout_s: int = Field(
+        default=300,
+        ge=5,
+        description="`task_cv_43` (auditoría 2026-09-01, B-11): segundos máximos "
+        "para un git contra un REMOTO (fetch/push/pull/ls-remote/clone). Las "
+        "operaciones locales siguen acotadas a 120 s. Un remoto colgado se "
+        "convierte en GitCommandError con el comando y el límite, no en una traza "
+        "de TimeoutExpired que mata el auto-PR o el sync del worktree.",
+    )
     ecb_fx_feed_url: str = Field(
         default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
         description="URL of the ECB daily reference-rates XML feed (the default "

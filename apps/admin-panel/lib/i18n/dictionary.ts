@@ -6519,6 +6519,10 @@ export const dictionary = {
     reviewAllPassed: { es: "{total} criterios cumplidos", en: "{total} criteria met" },
     reviewPassedIcon: { es: "cumplido", en: "met" },
     reviewFailedIcon: { es: "sin cumplir", en: "not met" },
+    reviewEscalated: {
+      es: "El reviewer escaló la tarea a un humano ({reason}).",
+      en: "The reviewer escalated this task to a human ({reason}).",
+    },
   },
 
   /**
