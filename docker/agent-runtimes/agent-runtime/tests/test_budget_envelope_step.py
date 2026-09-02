@@ -74,3 +74,38 @@ def test_the_envelope_is_json_serialisable() -> None:
     import json
 
     json.dumps(_recall_step(Budgets())["budgets"])
+
+
+# --------------------------------------------------------------- task_cv_40
+# El punto 5 de `verificar-antes-de-implementar`: el mecanismo no está hecho si
+# nadie lo llama. `run_agent` es quien ata el restante del wall-clock al cliente
+# y quien pasa los precios del spec al tracker.
+
+
+def test_run_agent_binds_the_remaining_wall_clock_to_the_model_client() -> None:
+    from agent_runtime.graph import _bind_model_deadline
+    from agent_runtime.safeguards import Budgets, SafeguardTracker
+
+    class _Model:
+        def __init__(self) -> None:
+            self.remaining: Any = None
+
+        def bind_deadline(self, fn: Any) -> None:
+            self.remaining = fn
+
+    clock = [100.0]
+    tracker = SafeguardTracker(Budgets(max_wall_clock_s=60.0), clock=lambda: clock[0])
+    model = _Model()
+
+    _bind_model_deadline(model, tracker)
+
+    assert model.remaining is not None
+    clock[0] = 145.0
+    assert model.remaining() == 15.0
+
+
+def test_a_model_without_the_hook_is_left_alone() -> None:
+    from agent_runtime.graph import _bind_model_deadline
+    from agent_runtime.safeguards import Budgets, SafeguardTracker
+
+    _bind_model_deadline(object(), SafeguardTracker(Budgets()))  # no explota

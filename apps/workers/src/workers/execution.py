@@ -23,6 +23,7 @@ import contextlib
 import dataclasses
 import json
 import os
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -160,6 +161,63 @@ def _task_is_launchable(status: str, *, is_review: bool) -> bool:
     else means the task moved on and the run must be a no-op (R5).
     """
     return status == _LAUNCHABLE_STATUS_BY_KIND[is_review]
+
+
+_PRICE_UNIT_SCALE = {"per_1m_tokens": 1.0, "per_1k_tokens": 1000.0}
+
+
+def _price_hint(get: Callable[[str], Any], model_ids: Sequence[str]) -> dict[str, float] | None:
+    """USD por millón de tokens del primer ``model_id`` con fila abierta en el
+    catálogo (`task_cv_40`). Sólo USD; ``None`` si no hay fila usable."""
+    for model_id in model_ids:
+        if not model_id:
+            continue
+        row = get(str(model_id))
+        if row is None:
+            continue
+        if str(getattr(row, "currency", "USD") or "USD").upper() != "USD":
+            continue
+        scale = _PRICE_UNIT_SCALE.get(str(getattr(row, "unit", "per_1m_tokens")))
+        if scale is None:
+            continue
+        try:
+            return {
+                "input_usd_per_1m": float(row.input_price) * scale,
+                "output_usd_per_1m": float(row.output_price) * scale,
+            }
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return None
+
+
+async def _attach_price_hint(
+    session: AsyncSession, resolved_model: dict[str, Any] | None, requested_model: dict[str, Any]
+) -> None:
+    """`task_cv_40` (D-06): adjunta ``prices`` al modelo resuelto para que el
+    runtime estime el coste de los proveedores que lo devuelven a 0. Best-effort."""
+    if resolved_model is None:
+        return
+    hint = await _catalog_price_hint(session, resolved_model, requested_model)
+    if hint is not None:
+        resolved_model["prices"] = hint
+
+
+async def _catalog_price_hint(
+    session: AsyncSession, resolved_model: dict[str, Any], requested_model: dict[str, Any]
+) -> dict[str, float] | None:
+    """`_price_hint` contra el catálogo vivo; cualquier fallo es ``None``."""
+    try:
+        from api_server.chat.cost_resolution import load_price_catalog
+
+        catalog = await load_price_catalog(session)
+    except Exception as exc:
+        _log.info("workers.price_hint_unavailable", error=str(exc))
+        return None
+    candidates = [
+        str(resolved_model.get("model") or ""),
+        str(requested_model.get("model") or ""),
+    ]
+    return _price_hint(catalog.get, candidates)
 
 
 def _internal_mcp_hosts(request: ExecutionRequest) -> list[str]:
@@ -1728,6 +1786,7 @@ async def _prepare_run(
     except ModelResolutionError as exc:
         resolution_error = str(exc)
         resolution_abort_code = exc.abort_code
+    await _attach_price_hint(session, resolved_model, dict(request.model or {}))
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,

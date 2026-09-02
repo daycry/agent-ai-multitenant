@@ -59,7 +59,7 @@ from agent_runtime.review_harvest import (
     _workspace_root,
     worktree_file_list,
 )
-from agent_runtime.safeguards import Budgets, SafeguardCode, SafeguardTracker
+from agent_runtime.safeguards import Budgets, ModelPrices, SafeguardCode, SafeguardTracker
 from agent_runtime.state import (
     STATUS_ABORTED,
     STATUS_AWAITING_APPROVAL,
@@ -2078,6 +2078,16 @@ def build_agent_graph(
     return _AgentLoop(deps, tracker, detector).build()
 
 
+def _bind_model_deadline(model: Any, tracker: SafeguardTracker) -> None:
+    """`task_cv_40` (D-05): el cliente del proveedor conoce el restante del
+    wall-clock y lo usa como `timeout` de cada llamada. Un cliente sin el hook
+    (scripted, fakes) se deja como está."""
+    bind = getattr(model, "bind_deadline", None)
+    if not callable(bind):
+        return
+    bind(lambda: tracker.budgets.max_wall_clock_s - tracker.elapsed_s())
+
+
 def run_agent(
     deps: AgentDeps,
     task: AgentTask,
@@ -2088,6 +2098,7 @@ def run_agent(
     on_step: Callable[[dict[str, Any]], None] | None = None,
     system_preamble: str | None = None,
     agent_seal: str | None = None,
+    model_prices: ModelPrices | None = None,
 ) -> ExecutionResult:
     """Run one execution of the agent loop end to end.
 
@@ -2108,7 +2119,8 @@ def run_agent(
     `None` yields the pre-`task_gov_03` label, unchanged.
     """
     budgets = budgets or Budgets()
-    tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
+    tracker = SafeguardTracker(budgets, clock=clock or time.monotonic, prices=model_prices)
+    _bind_model_deadline(deps.model, tracker)
     detector = LoopDetector(threshold=loop_threshold)
     graph = build_agent_graph(deps, tracker=tracker, detector=detector)
 

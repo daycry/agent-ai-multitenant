@@ -277,3 +277,20 @@ post_tool`, el run termina `done` (no se bloquea), y el worker escribe la fila
 ## Estado de implementación (2026-07-13)
 
 COMPLETO salvo los hooks pre_llm/post_llm (sin checks que los necesiten hoy; la costura run_hook ya los acepta). Implementado: D1 post_tool LOG (2026-07-04) + extension a recall/KB; D4 persistencia RLS; D7 inyeccion AgentDeps; y cerrado 2026-07-13: **D3** transporte completo (to_dict en shared-guardrails, capa PLATAFORMA en platform_settings.guardrails_config con tipo/validacion/editor JSON en el panel, capa PROYECTO en projects.guardrails_config (migracion 0110), fusion resolve_config con locked-gana en \_resolve_effective_guardrails del worker, cap 64KB con degradacion a plataforma-sola, spec["guardrails"] -> build_pipeline); **D5** on_error por check (warn=fail-open, block=fail-closed); **D6** truncado 50k del input escaneado con marca en metadata; **D2 enforce de block**: \_screened_tool_call envuelve cada tool call (principal y lote 0111) — block en pre_tool RECHAZA la llamada (deny visible), block en post_tool SUSTITUYE el output. El baseline sigue warn/LOG: enforce solo actua si el operador configura action:block (calibrar en warn antes de subir a block, como pedia el ADR).
+
+## Addendum del 2026-09-02: sin motor, una política `block` no corre a ciegas (`task_cv_40`)
+
+D5 cubre el fallo de UN check dentro de un pipeline que arrancó. La auditoría
+del 2026-09-01 (D-07) midió el caso anterior: `build_pipeline` devuelve `None`
+si el motor no arranca (paquete ausente, config irrecuperable) y el run seguía
+sin ningún guardrail, también en un proyecto cuya política tenía reglas
+`block`. Un `warn` que no se evalúa es ruido perdido; un `block` que no se
+evalúa es una promesa rota al tenant.
+
+Desde el 2026-09-02 el entrypoint del runtime pregunta a la config resuelta
+(`declares_block`: `action: block` en cualquier hook, o `on_error: block`) y, si
+declara `block` y el pipeline es `None`, el run termina `aborted` con
+`abort_code=guardrails_unavailable` antes de la primera llamada al modelo
+(`abort_if_unscreened_block`). Una política sólo `warn` sigue corriendo sin
+motor, como antes: fail-open para lo advisory, fail-closed para lo que promete
+bloquear, que es la misma asimetría de D5 llevada al arranque.

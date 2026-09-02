@@ -154,3 +154,56 @@ def run_hook(
     except Exception:
         _log.warning("guardrail hook %s failed; tool output NOT screened", hook, exc_info=True)
         return []
+
+
+# --------------------------------------------------------------- task_cv_40
+# Auditoría 2026-09-01 (D-07): `build_pipeline` devuelve None si el motor no
+# arranca y el run seguía SIN NINGÚN guardrail — también en un proyecto cuya
+# política tenía reglas `block`. Un `warn` que no se evalúa es ruido perdido;
+# un `block` que no se evalúa es una promesa rota al tenant.
+
+GUARDRAILS_UNAVAILABLE = "guardrails_unavailable"
+
+
+def declares_block(source: Any) -> bool:
+    """¿La config de guardrails promete bloquear algo? (`action: block` en
+    cualquier hook, o `on_error: block`)."""
+    if not isinstance(source, dict):
+        return False
+    if str(source.get("on_error") or "").lower() == "block":
+        return True
+    hooks = source.get("guardrails")
+    if not isinstance(hooks, dict):
+        hooks = source
+    for rules in hooks.values():
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if isinstance(rule, dict) and str(rule.get("action") or "").lower() == "block":
+                return True
+    return False
+
+
+def abort_if_unscreened_block(spec: dict[str, Any], *, pipeline: Any) -> dict[str, Any] | None:
+    """El resultado terminal (`aborted`, `guardrails_unavailable`) cuando el spec
+    declara `block` y el pipeline no arrancó; `None` en cualquier otro caso."""
+    if pipeline is not None or not declares_block((spec or {}).get("guardrails")):
+        return None
+    _log.error("guardrail policy declares `block` but the engine is unavailable; aborting the run")
+    return {
+        "status": "aborted",
+        "abort_code": GUARDRAILS_UNAVAILABLE,
+        "output": (
+            "The project's guardrail policy declares `block` rules and the guardrail "
+            "engine could not start, so the run was aborted instead of proceeding "
+            "unscreened. Check the shared-guardrails install and the resolved "
+            "`guardrails` config on the task spec."
+        ),
+        "iterations": 0,
+        "usage": {},
+        "approval": None,
+        "finish_status": None,
+        "guardrail_events": [],
+        "prompt_version": None,
+        "check_declarations": [],
+    }

@@ -193,3 +193,72 @@ def test_decide_does_not_retry_an_auth_error(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(AuthError):
         client.decide({"task": {"title": "haz algo"}, "context": []})
     assert provider.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# `task_cv_40` (auditoría 2026-09-01, D-05): el wall-clock sólo se miraba entre
+# iteraciones; una llamada podía rebasarlo 45 min. El cliente conoce el restante
+# y lo usa como `timeout` de la llamada.
+# ---------------------------------------------------------------------------
+
+
+class _QuietProvider:
+    name = "ollama"
+
+    async def complete(self, _messages: Sequence[Message], **_kwargs: Any) -> CompletionResponse:
+        return CompletionResponse(
+            content="listo", model="m", provider="ollama", usage=Usage(1, 2, 0.0)
+        )
+
+
+def _capture_timeouts(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    import agent_runtime.providers as providers_mod
+
+    seen: list[float] = []
+    original = providers_mod._run_with_retry
+
+    def _spy(make_coro: Any, **kwargs: Any) -> Any:
+        seen.append(float(kwargs.get("timeout", providers_mod._DEFAULT_CALL_TIMEOUT_S)))
+        return original(make_coro, **kwargs)
+
+    monkeypatch.setattr(providers_mod, "_run_with_retry", _spy)
+    return seen
+
+
+def test_the_call_timeout_never_exceeds_the_remaining_wall_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _capture_timeouts(monkeypatch)
+    client = _ProviderModelClient(provider=_QuietProvider(), model="m")
+    client.bind_deadline(lambda: 7.5)
+
+    client.decide({"task": {"title": "haz algo"}, "context": []})
+
+    assert seen == [7.5]
+
+
+def test_without_a_deadline_the_default_timeout_applies(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_runtime.providers as providers_mod
+
+    seen = _capture_timeouts(monkeypatch)
+    client = _ProviderModelClient(provider=_QuietProvider(), model="m")
+
+    client.decide({"task": {"title": "haz algo"}, "context": []})
+
+    assert seen == [float(providers_mod._DEFAULT_CALL_TIMEOUT_S)]
+
+
+def test_an_exhausted_wall_clock_still_leaves_a_floor_for_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restante ≤ 0: el tracker abortará en el siguiente check; la llamada en
+    curso no se lanza con `timeout=0` (que reventaría con un error confuso)."""
+    import agent_runtime.providers as providers_mod
+
+    seen = _capture_timeouts(monkeypatch)
+    client = _ProviderModelClient(provider=_QuietProvider(), model="m")
+    client.bind_deadline(lambda: -12.0)
+
+    client.decide({"task": {"title": "haz algo"}, "context": []})
+
+    assert seen == [float(providers_mod._MIN_CALL_TIMEOUT_S)]

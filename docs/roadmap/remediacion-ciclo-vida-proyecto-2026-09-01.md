@@ -374,12 +374,20 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_40` — Presupuestos que se aplican antes del gasto (D-05, D-06, D-07)
 
-- [ ] **Título**: el wall-clock sólo se mira al inicio de `plan` (una llamada puede rebasarlo 45
+- [x] **Título**: el wall-clock sólo se mira al inicio de `plan` (una llamada puede rebasarlo 45
       min y el worker mata antes); `max_cost_usd` es 0 en tres de cuatro proveedores; un fallo del
       motor de guardrails deja un proyecto con reglas `block` corriendo sin ninguna. Pasar el
       restante como `timeout` a `_run_with_retry`/`stack_exec`; estimar coste con precios del
       catálogo cuando el proveedor devuelva 0; abortar (`guardrails_unavailable`) si el spec trae
       `block` y el pipeline no arranca.
+      _Cerrada el 2026-09-02_: `run_agent` ata el restante del wall-clock al cliente del
+      proveedor (`bind_deadline`) y cada llamada viaja con ese `timeout` (suelo 5 s); el worker
+      adjunta `model.prices` (USD/1M tokens, del catálogo `model_prices`) y el tracker estima el
+      coste de las llamadas que llegan a 0 (`cost_estimated_calls` en el envelope), con lo que
+      `max_cost_usd` tripa en los cuatro proveedores; con reglas `block` y sin motor el run
+      aborta `guardrails_unavailable` antes de la primera llamada (ADR 0102, addendum). Tests:
+      `test_budgets_before_spend.py`, `test_provider_retries.py`, `test_budget_envelope_step.py`,
+      `test_el_spec_lleva_los_precios_del_catalogo.py`.
       **Coste**: 1,5 d.
 
 ### `task_cv_41` — Escaladas visibles y despacho de review que respeta pausa y proyecto (C-05, C-06, C-07)
