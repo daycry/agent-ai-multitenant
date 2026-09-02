@@ -129,7 +129,7 @@ def test_explicit_cwd_wins_over_project_root() -> None:
     runner = TestRuntimeRunner(Settings(), client=client)
     runner.run_command(_spec(project_root="ci4build"), "php spark migrate", cwd="apps/api")
 
-    assert _commands(started[0]) == ["timeout 600 sh -c 'cd apps/api && php spark migrate'"]
+    assert _commands(started[0]) == ["timeout -k 10 600 sh -c 'cd apps/api && php spark migrate'"]
 
 
 def test_stack_exec_falls_back_to_project_root_when_the_agent_says_nothing() -> None:
@@ -141,7 +141,7 @@ def test_stack_exec_falls_back_to_project_root_when_the_agent_says_nothing() -> 
     runner = TestRuntimeRunner(Settings(), client=client)
     runner.run_command(_spec(project_root="ci4build"), "php spark migrate")
 
-    assert _commands(started[0]) == ["timeout 600 sh -c 'cd ci4build && php spark migrate'"]
+    assert _commands(started[0]) == ["timeout -k 10 600 sh -c 'cd ci4build && php spark migrate'"]
 
 
 def test_stack_exec_without_either_is_unchanged() -> None:
@@ -151,7 +151,7 @@ def test_stack_exec_without_either_is_unchanged() -> None:
     runner = TestRuntimeRunner(Settings(), client=client)
     runner.run_command(_spec(), "php spark migrate")
 
-    assert _commands(started[0]) == ["timeout 600 sh -c 'php spark migrate'"]
+    assert _commands(started[0]) == ["timeout -k 10 600 sh -c 'php spark migrate'"]
 
 
 @pytest.mark.parametrize("blank", [None, "", "   "])

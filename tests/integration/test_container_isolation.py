@@ -119,7 +119,11 @@ def test_inspect_confirms_the_lockdown(probe: ContainerResult) -> None:
 
 
 def test_runs_on_the_dedicated_network(probe: ContainerResult) -> None:
-    assert probe.networks == ("agentic-agents",)
+    # `task_cv_25` (auditoría 2026-09-01, B-07): la red dedicada ya no es la
+    # compartida `agentic-agents` sino un bridge `internal` POR EJECUCIÓN
+    # (`agent-run-<exec>-<hex>`), que se desmonta al terminar.
+    assert len(probe.networks) == 1, probe.networks
+    assert probe.networks[0].startswith("agent-run-"), probe.networks
     assert "bridge" not in probe.networks
     assert "host" not in probe.networks
 
