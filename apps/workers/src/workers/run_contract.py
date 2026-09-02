@@ -155,6 +155,11 @@ class ExecutionRequest:
     # (retro-compat con un orchestrator anterior, y el runtime cae a hashear la
     # persona por su cuenta).
     agent_prompt_version: dict[str, Any] | None = None
+    # `task_cv_13` (auditoría 2026-09-01, A-05): identidad de la reclamación que
+    # encoló este mensaje. El worker lo compara con `tasks.claim_id` y descarta
+    # (`skipped/stale_claim`) el mensaje de una reclamación ya revertida. `None`
+    # = orquestador anterior al campo o invocación manual: no se comprueba.
+    claim_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -209,6 +214,7 @@ class ExecutionRequest:
             human_answers=raw.get("human_answers"),
             agent_persona=raw.get("agent_persona"),
             agent_prompt_version=raw.get("agent_prompt_version"),
+            claim_id=raw.get("claim_id"),
         )
 
 

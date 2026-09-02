@@ -75,6 +75,17 @@ TABLES_WITHOUT_A_MODEL: dict[str, str] = {
         "reproduce ese revoke en el arnés. Un modelo aquí sería un camino de "
         "lectura hacia un respaldo que el diseño quiere cerrado."
     ),
+    "agents_model_config_backfill_0147": (
+        "Misma familia que las tres de arriba. La migración 0147 despinea "
+        "`provider=anthropic` —un kind que no existe en el catálogo cerrado— en "
+        "las copias de tenant de los agentes built-in, y guarda el `model_config` "
+        "ENTERO anterior para que el `downgrade` lo restaure tal cual en vez de "
+        "recalcularlo (una copia despineada por la migración y una que un "
+        "administrador despineó a mano son indistinguibles después). La "
+        "aplicación no la consulta y NO debe poder: la 0147 le retira todo acceso "
+        "al crearla, y `tests/integration/conftest.py::_APP_REVOKED_TABLES` "
+        "reproduce ese revoke en el arnés."
+    ),
 }
 
 #: Consulta las relaciones que son **partición** de otra (tablas e índices).

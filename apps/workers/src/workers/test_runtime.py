@@ -566,13 +566,23 @@ def default_aux_services() -> tuple[AuxServiceSpec, ...]:
 # leaves ``mem_limit`` unset, so we can pick the right operator default.
 _REDIS_MEM_HINT = "redis"
 
-# Common lockdown applied to every aux sidecar AND the DinD proxy: zero
+# Common lockdown applied to every aux sidecar AND the DinD proxy: minimal
 # Linux capabilities + no privilege escalation through setuid binaries.
 # Mirrors :func:`isolation.build_hardened_run_kwargs` (same principles,
 # CLAUDE.md §2) without the read-only root / non-root uid bits, which the
 # stateful sidecars (postgres/redis write their data dirs as root) can't
 # take. The resource caps are what bound a runaway / fork-bomb.
 _AUX_SECURITY_OPT = ["no-new-privileges:true"]
+
+# The capabilities the OFFICIAL images need to initialise as root and then
+# drop to their service user (`gosu postgres`, `su-exec redis`, `gosu mysql`):
+# chown the data dir, override DAC on it, and setuid/setgid to drop. This is
+# the SAME set the main compose grants those images as `x-infra-caps`, and the
+# gotcha `docker-cap-drop-all-breaks-official-images.md` documents why a bare
+# `cap_drop ALL` crash-loops them. Audit 2026-09-01 (B-02): the sidecars were
+# launched with `cap_drop ALL` and NO cap_add, so every project declaring
+# `services` failed at `_wait_healthy` — and the only "test" was a MagicMock.
+_AUX_CAP_ADD = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
 
 
 def build_aux_run_kwargs(
@@ -603,6 +613,7 @@ def build_aux_run_kwargs(
         "network_mode": None,
         "hostname": aux.resolved_alias(),
         "cap_drop": ["ALL"],
+        "cap_add": list(_AUX_CAP_ADD),
         "security_opt": list(_AUX_SECURITY_OPT),
         "mem_limit": mem_limit,
         "pids_limit": pids_limit,
@@ -1291,7 +1302,10 @@ class TestRuntimeRunner:
             if container is None:
                 continue
             with contextlib.suppress(Exception):
-                container.remove(force=True)
+                # `v=True`: postgres/mysql/redis declaran `VOLUME`, y sin esto cada
+                # sidecar deja un volumen anónimo que el proxy (`VOLUMES=0`) no
+                # deja podar desde el worker (auditoría 2026-09-01, B-02).
+                container.remove(force=True, v=True)
         with contextlib.suppress(Exception):
             network.remove()
 

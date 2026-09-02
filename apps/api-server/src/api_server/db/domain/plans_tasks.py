@@ -209,6 +209,12 @@ class Task(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("3"))
 
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # `task_cv_13` (auditoría 2026-09-01, A-05): identidad de la reclamación
+    # vigente. El dispatch la escribe al reclamar (`ready → in_progress`) y la
+    # manda en el `ExecutionRequest`; el worker descarta todo mensaje cuyo
+    # `claim_id` no sea éste. Se limpia al revertir la reclamación (orquestador
+    # `_revert_to_ready` y reconciler `_revert_orphan_claim`).
+    claim_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
 

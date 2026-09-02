@@ -121,6 +121,7 @@ _APP_REVOKED_TABLES: tuple[str, ...] = (
     "approval_policy_backfill_0133",
     "agent_tools_backfill_0145",
     "agent_tools_backfill_0146",
+    "agents_model_config_backfill_0147",
 )
 
 

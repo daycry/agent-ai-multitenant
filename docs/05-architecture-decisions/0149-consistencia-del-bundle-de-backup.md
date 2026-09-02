@@ -138,8 +138,14 @@ Parar los servicios de aplicación (`api-server`, `orchestrator`, `workers`,
 PostgreSQL / MinIO / Redis / Vault, que son los que se leen.
 
 - **Coste**: 1-3 min de indisponibilidad diaria a las 03:00. Las ejecuciones de
-  agentes en vuelo se interrumpen (el reaper las recupera, pero un run largo
-  pierde su iteración). Los webhooks entrantes de esa ventana se pierden salvo
+  agentes en vuelo se interrumpen. _Corrección 2026-09-02 (`task_cv_12`)_: la
+  versión original decía «el reaper las recupera», y no describía ninguna
+  mecánica. Lo que hay es esto: si el contenedor llegó a escribir su
+  `execution.finished` antes de morir, el sweeper de ejecuciones rancias lo
+  lee de los logs del contenedor `exited` y finaliza la fila con ese
+  resultado (commit del worktree incluido); si murió a medias, la sella como
+  `failed` en la primera pasada y la tarea queda `blocked` para relanzarla.
+  Un run largo interrumpido pierde su iteración en curso; no se «recupera». Los webhooks entrantes de esa ventana se pierden salvo
   reintento del emisor.
 - **Gana**: elimina la clase (2) por completo y reduce la clase (1) a lo que
   escriba la propia infraestructura.

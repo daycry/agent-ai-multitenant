@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from api_server.agent_persona import effective_prompt_hash, resolve_agent_persona
@@ -83,7 +83,7 @@ from api_server.review_autostart import (
 from api_server.task_state_machine import transition_task_status
 from celery import Celery
 from redis.asyncio import Redis
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, true, update
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -1192,6 +1192,35 @@ class _HumanDispatch:
     assigned_to_user_id: str | None
 
 
+def _not_the_reviewers_run(reviewer_agent_id: Any) -> Any:
+    """Predicado «esta ejecución NO es del reviewer de la tarea».
+
+    Las ejecuciones del implementador y las del reviewer viven en la misma
+    tabla con el mismo ``task_id``; lo único que las distingue es ``agent_id``.
+    Toda lectura que quiera «lo que entregó el implementador» tiene que llevar
+    este predicado (auditoría 2026-09-01, C-03): sin él, tras un rechazo la
+    ejecución más reciente es el veredicto. Un ``agent_id`` nulo (runs sin
+    agente asignado) cuenta como del implementador. Sin reviewer, no filtra.
+    """
+    if reviewer_agent_id is None:
+        return true()
+    return or_(Execution.agent_id.is_(None), Execution.agent_id != reviewer_agent_id)
+
+
+def _implementer_outputs_query(task: Any, reviewer_agent_id: Any) -> Any:
+    """Las últimas salidas del IMPLEMENTADOR de la tarea, más reciente primero."""
+    return (
+        select(Execution.output)
+        .where(
+            Execution.task_id == task.id,
+            Execution.tenant_id == task.tenant_id,
+            _not_the_reviewers_run(reviewer_agent_id),
+        )
+        .order_by(Execution.created_at.desc())
+        .limit(_REVIEW_PRIOR_OUTPUTS)
+    )
+
+
 class TaskDispatcher:
     """Assigns ready tasks to agents and enqueues the worker run."""
 
@@ -1778,15 +1807,14 @@ class TaskDispatcher:
         # ciclo con reintentos el reviewer perdía el histórico (qué se intentó ya
         # y volvió a fallar). Ahora los últimos 3, más reciente primero y
         # etiquetados; cada uno con cola acotada para no inflar el prompt.
+        #
+        # Y SÓLO los del implementador (auditoría 2026-09-01, C-03): las
+        # ejecuciones del reviewer viven en la misma tabla con el mismo
+        # `task_id`, así que sin este filtro «[attempt N — latest]» era el propio
+        # `<verdict>reject</verdict>` del reviewer y el entregable real quedaba
+        # como «earlier», recortado. El reviewer se anclaba a su rechazo anterior.
         prior_rows = list(
-            (
-                await session.execute(
-                    select(Execution.output)
-                    .where(Execution.task_id == task.id, Execution.tenant_id == task.tenant_id)
-                    .order_by(Execution.created_at.desc())
-                    .limit(_REVIEW_PRIOR_OUTPUTS)
-                )
-            ).scalars()
+            (await session.execute(_implementer_outputs_query(task, reviewer.id))).scalars()
         )
         prior_output = _format_prior_outputs([str(o or "") for o in prior_rows])
 
@@ -2005,6 +2033,7 @@ class TaskDispatcher:
                 task.status = _READY
                 task.assigned_agent_id = None
                 task.started_at = None
+                task.claim_id = None
                 reverted = True
         except Exception as revert_exc:  # pragma: no cover - defensive
             _log.error(
@@ -2337,6 +2366,10 @@ class TaskDispatcher:
         # run. A single conditional `UPDATE ... WHERE status='ready' RETURNING id`
         # lets exactly ONE delivery win (the same guard `_on_task_done` uses for
         # the plan transition); the loser is a no-op.
+        # `task_cv_13` (A-05): cada reclamación lleva identidad propia. Viaja en
+        # el mensaje y el worker descarta el que no sea el vigente, así que un
+        # mensaje viejo que gane la carrera tras un revert + redespacho no corre.
+        claim_id = uuid4().hex
         claimed = (
             await session.execute(
                 update(Task)
@@ -2349,6 +2382,7 @@ class TaskDispatcher:
                     status=_IN_PROGRESS,
                     assigned_agent_id=agent.id,
                     started_at=datetime.now(UTC),
+                    claim_id=claim_id,
                 )
                 .returning(Task.id)
             )
@@ -2363,6 +2397,7 @@ class TaskDispatcher:
         request = await self._assemble_run_request(
             session, task=task, agent=agent, project=project, model_spec=model_spec
         )
+        request["claim_id"] = claim_id
 
         # Inter-run reviewer feedback (A2). If THIS task was rejected by the AI
         # reviewer on a prior pass (in_review → backlog → ready → here), thread the
@@ -2537,13 +2572,18 @@ class TaskDispatcher:
         e.g. the failure was transient and a retry finished) supersedes the
         failure, so a stale crash does not haunt the agent forever. Review
         rejections travel by their own rail (``prior_review_feedback``).
-        BYPASSRLS → explicit ``tenant_id`` predicate (defence-in-depth)."""
+        BYPASSRLS → explicit ``tenant_id`` predicate (defence-in-depth).
+
+        And never the reviewer's own run (audit 2026-09-01, C-03): it shares the
+        table and the ``task_id``, and a reviewer run that ended ``failed`` would
+        otherwise be replayed to the implementer as ITS prior failure."""
         latest = (
             await session.execute(
                 select(Execution.status, Execution.abort_code, Execution.output)
                 .where(
                     Execution.task_id == task.id,
                     Execution.tenant_id == task.tenant_id,
+                    _not_the_reviewers_run(getattr(task, "reviewer_agent_id", None)),
                 )
                 .order_by(Execution.created_at.desc())
                 .limit(1)
@@ -2595,7 +2635,7 @@ class TaskDispatcher:
         rows = list(
             (
                 await session.execute(
-                    select(Task.id, Task.title)
+                    select(Task.id, Task.title, Task.reviewer_agent_id)
                     .where(
                         Task.id.in_(dep_ids),
                         Task.tenant_id == task.tenant_id,
@@ -2607,6 +2647,9 @@ class TaskDispatcher:
         )
         briefs: list[dict[str, str]] = []
         for row in rows:
+            # La última `done` de una dependencia con reviewer IA es el VEREDICTO
+            # del reviewer, no lo que entregó su implementador (auditoría
+            # 2026-09-01, C-03): se excluye al reviewer de esa dependencia.
             output = (
                 await session.execute(
                     select(Execution.output)
@@ -2614,6 +2657,7 @@ class TaskDispatcher:
                         Execution.task_id == row.id,
                         Execution.tenant_id == task.tenant_id,
                         Execution.status == "done",
+                        _not_the_reviewers_run(getattr(row, "reviewer_agent_id", None)),
                     )
                     .order_by(Execution.created_at.desc())
                     .limit(1)

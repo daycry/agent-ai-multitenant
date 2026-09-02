@@ -182,3 +182,33 @@ def test_an_implementer_run_carries_no_diff() -> None:
     spec: dict[str, Any] = _agent_spec(request, None, code_diff="lo que sea")
 
     assert "review_context" not in spec
+
+
+def test_a_sibling_commit_between_two_attempts_is_not_part_of_the_task_diff(repo: Path) -> None:
+    """Auditoría 2026-09-01 (C-02): el rango `oldest^..newest` arrastraba lo ajeno.
+
+    Tras un rechazo, el worktree se sincroniza al HEAD de la rama del plan —que
+    ya lleva lo que empujaron las tareas hermanas— y el segundo intento se
+    rebasea encima. Entre A1 y A2 hay un commit B de otra tarea, y el diff que
+    juzgaba el reviewer lo incluía: rechazaba por trabajo que no era de la tarea
+    o certificaba trabajo que nadie le pidió revisar. Reproducido con git real.
+    """
+    otra = "99999999-8888-7777-6666-555555555555"
+    (repo / "app.py").write_text("def a():\n    return 2\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-qm", f"feat: primer intento\n\nTask-Id: {_TASK_ID}", cwd=repo)
+    (repo / "otro.py").write_text("x = 1\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-qm", f"feat: tarea hermana\n\nTask-Id: {otra}", cwd=repo)
+    (repo / "app.py").write_text("def a():\n    return 3\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-qm", f"feat: segundo intento\n\nTask-Id: {_TASK_ID}", cwd=repo)
+
+    diff = compute_task_review_diff(str(repo), _TASK_ID)
+
+    assert diff is not None
+    assert "otro.py" not in diff, "el diff de la tarea lleva el commit de la hermana"
+    assert (
+        "+    return 2" in diff and "+    return 3" in diff
+    ), "los dos intentos de la tarea tienen que estar, en orden"
+    assert diff.index("return 2") < diff.index("return 3")

@@ -44,7 +44,7 @@ from sqlalchemy import select
 from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
-from api_server.celery_client import enqueue_event_dispatch, enqueue_open_plan_pr
+from api_server.celery_client import auto_pr_request, enqueue_event_dispatch, enqueue_open_plan_pr
 from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
@@ -523,15 +523,8 @@ async def submit_verdict(
     # autenticado + abre el PR/MR según push_policy (no-op si no hay remoto/PAT).
     if pr_ctx is not None:
         project_id, plan_id, plan_title = pr_ctx
-        await enqueue_open_plan_pr(
-            project_id,
-            plan_id,
-            title=f"Plan: {plan_title}" if plan_title else f"Plan {str(plan_id)[:8]}",
-            body=(
-                "PR automático tras la validación humana del plan.\n\n"
-                f"Plan: {plan_title}\nID: {plan_id}"
-            ),
-        )
+        pr_title, pr_body = auto_pr_request(plan_id, plan_title)
+        await enqueue_open_plan_pr(project_id, plan_id, title=pr_title, body=pr_body)
     # NOTIF-3 (auditoría 2026-07-12): plan_rejected estaba registrado
     # (+plantillas ES/EN) pero NADIE lo emitía. Post-commit (el begin() de
     # arriba ya cerró) y best-effort — nunca rompe el veredicto ya persistido.

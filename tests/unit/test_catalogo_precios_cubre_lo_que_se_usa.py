@@ -37,11 +37,15 @@ HUECO_CONOCIDO = {"claude-haiku-4-5-20251001"}
 
 
 def test_todo_modelo_de_un_agente_builtin_tiene_precio_de_respaldo() -> None:
+    from api_server.db.platform_settings import DEFAULT_MODEL_CONFIG
+
+    # Desde el 2026-09-01 (auditoría, F-01) los built-in NO pinean modelo: heredan
+    # por la cadena del ADR 0055, así que el conjunto sembrado suele estar vacío.
+    # Para que la guarda no pase en vacío, entra también el modelo que de verdad
+    # ejecuta a quien no pinea: el default de plataforma.
     sembrados = {agent.model_name for agent in BUILTIN_AGENTS if agent.model_name}
-    # «Encontré algo»: si la tupla de semillas se vacía o cambia de forma, esta
-    # guarda pasaría vacía y envejecería sin avisar
-    # (`docs/03-guides/verificar-antes-de-implementar.md` §4).
-    assert len(sembrados) >= 3, f"apenas {len(sembrados)} modelos sembrados: ¿parser roto?"
+    sembrados.add(str(DEFAULT_MODEL_CONFIG["model"]))
+    assert sembrados, "ni un modelo que cobrar: ¿DEFAULT_MODEL_CONFIG sin `model`?"
 
     sin_precio = {m for m in sembrados if DEFAULT_AI_PRICE_CATALOG.get(m) is None}
     huerfanos = sorted(sin_precio - HUECO_CONOCIDO)

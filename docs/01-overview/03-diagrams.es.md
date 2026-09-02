@@ -52,6 +52,7 @@ flowchart LR
         api_server["api-server<br/>FastAPI · REST/WS/SSE<br/>+ asistente · memorizer · webhooks"]
         orchestrator["orchestrator<br/>asigna tareas a los workers"]
         workers["workers<br/>Celery: default/heavy/gpu/test/review/ingestion"]
+        workers_aux["workers-aux<br/>Celery: test/review (drenador dedicado, adenda ADR 0129)"]
         workers_privileged["workers-privileged"]
         workers_marketplace["workers-marketplace"]
         cortex_beat["cortex-beat<br/>planificador (singleton)"]
@@ -87,7 +88,7 @@ flowchart LR
     admin_panel --> api_server
     api_server --> postgres & redis & minio & vault & clamav & docling_serve
     orchestrator --> postgres & redis
-    workers & workers_privileged & workers_marketplace --> postgres & redis & minio
+    workers & workers_aux & workers_privileged & workers_marketplace --> postgres & redis & minio
     cortex_beat --> redis
     notification_dispatcher --> postgres & redis
     migrations --> postgres

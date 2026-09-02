@@ -374,9 +374,9 @@ def test_each_profile_confines_writes_to_a_bounded_set_of_dirs() -> None:
     for path in _all_profiles():
         writable = _writable_path_rules(_read(path))
         assert writable, f"{path.name}: no writable path rule at all — unusable"
-        assert any(r.startswith("/tmp") for r in writable), (
-            f"{path.name}: /tmp must be writable (scratch space) — got {writable}"
-        )
+        assert any(
+            r.startswith("/tmp") for r in writable
+        ), f"{path.name}: /tmp must be writable (scratch space) — got {writable}"
 
 
 def test_the_container_home_is_writable_under_the_agent_profile() -> None:
@@ -468,15 +468,15 @@ def test_agent_runtime_profile_is_stricter_than_the_default() -> None:
     )
     # And it explicitly denies the broad write dirs the shared default allows.
     for denied in (r"deny\s+/var/lib/\*\*", r"deny\s+/data/\*\*", r"deny\s+/root/\*\*"):
-        assert re.search(denied, agent_text), (
-            f"agent-runtime.profile must deny writes matching {denied!r}"
-        )
+        assert re.search(
+            denied, agent_text
+        ), f"agent-runtime.profile must deny writes matching {denied!r}"
     # The shared default DOES grant /var/lib + /data (trusted services need them)
     # — proving the agent profile is the strictly tighter one.
     default_writable = _writable_path_rules(_read(DEFAULT_PROFILE))
-    assert any(r.startswith("/var/lib") for r in default_writable), (
-        "the shared default should grant /var/lib writes (it runs trusted code)"
-    )
+    assert any(
+        r.startswith("/var/lib") for r in default_writable
+    ), "the shared default should grant /var/lib writes (it runs trusted code)"
 
 
 # ---------------------------------------------------------------------------
@@ -644,3 +644,42 @@ def test_empty_apparmor_setting_relies_on_docker_default() -> None:
     opts = kwargs["security_opt"]
     assert "no-new-privileges:true" in opts
     assert not any(o.startswith("apparmor=") for o in opts)
+
+
+# ---------------------------------------------------------------------------
+# Auditoría 2026-09-01 (B-03): el perfil estricto daba `x` sólo a las raíces
+# FHS (/usr, /bin, /sbin, /lib, /lib64) más /workspace y /home/agent. Los
+# toolchains de java-maven / java-gradle viven en /opt (JAVA_HOME de
+# eclipse-temurin, /opt/gradle/lib) y Chromium de las imágenes Playwright en
+# /ms-playwright: bajo el perfil que pina el instalador, `java`, `gradle` y
+# `chrome` morían con EACCES al `execve`, y sólo en producción Linux.
+# ---------------------------------------------------------------------------
+
+#: Raíz de ejecución → plantillas que ejecutan desde ella. Se mantiene a mano
+#: porque las rutas las fijan las imágenes BASE, no nuestros Dockerfiles.
+TOOLCHAIN_EXEC_ROOTS: dict[str, tuple[str, ...]] = {
+    "/opt": ("java-maven", "java-gradle"),
+    "/ms-playwright": ("node-playwright", "browser-runtime"),
+}
+
+
+def _grants_exec_under(profile_text: str, root: str) -> bool:
+    pattern = re.compile(rf"^\s*{re.escape(root)}/\*\*\s+[rwkl]*ix,\s*$", re.M)
+    return pattern.search(profile_text) is not None
+
+
+@pytest.mark.parametrize("root", sorted(TOOLCHAIN_EXEC_ROOTS))
+def test_the_strict_profile_lets_every_toolchain_root_execute(root: str) -> None:
+    text = _read(AGENT_PROFILE)
+    assert _grants_exec_under(text, root), (
+        f"{AGENT_PROFILE.name} no da `ix` bajo {root}/**: las plantillas "
+        f"{TOOLCHAIN_EXEC_ROOTS[root]} no pueden ejecutar su toolchain con el perfil cargado"
+    )
+
+
+def test_the_exec_roots_inventory_matches_the_images_that_need_them() -> None:
+    """Si una plantilla nueva ejecuta desde otra raíz, hay que declararla aquí."""
+    dockerfiles = APPARMOR_DIR.parent / "agent-runtimes"
+    for templates in TOOLCHAIN_EXEC_ROOTS.values():
+        for template in templates:
+            assert (dockerfiles / template / "Dockerfile").is_file(), template

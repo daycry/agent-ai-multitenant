@@ -242,6 +242,7 @@ async def test_reconcile_pipeline_state(
         "completed_plans": 1,
         "unblocked_plans": 0,
         "pushed_worktrees": 0,
+        "retried_plan_prs": 0,
     }
 
     engine = create_async_engine(workers_settings.database_url)  # type: ignore[attr-defined]

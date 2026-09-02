@@ -11,15 +11,18 @@ Reutiliza la resolución de git del proyecto (config + secreto de Vault) de
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import structlog
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.git_auth import build_git_auth_env, host_de_remote
 from workers.git_repos import BareRepoLayout, BareRepoManager
 from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, plan_git_identity
@@ -92,19 +95,65 @@ async def _persist_pr_result(
 
     ``keep_existing_url`` protects a PR that ALREADY exists: the closure runs more
     than once (re-veredicto, reintento del operador), and a later skip must not
-    erase the URL of a PR that is open on the provider."""
+    erase the URL of a PR that is open on the provider.
+
+    Un fallo persistido se AVISA (`task_cv_14`, D-02): la ficha del plan lo
+    mostraba a quien la abriera y nadie más se enteraba. El evento sale después
+    de cerrar la transacción y es best-effort, como el resto de la función."""
     from api_server.db.domain import Plan
 
+    failed: tuple[str, str, str] | None = None
     try:
         async with sessionmaker() as session, session.begin():
             plan = await session.get(Plan, UUID(plan_id))
             if plan is None or (keep_existing_url and plan.pr_url):
                 return
             plan.pr_url = pr_url
-            plan.pr_branch = pr_branch
+            if pr_branch is not None:
+                plan.pr_branch = pr_branch
             plan.pr_error = pr_error
+            if pr_error:
+                failed = (str(plan.tenant_id), str(plan.title or ""), pr_error)
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning("plan_pr.persist_failed", plan_id=plan_id, error=str(exc))
+        return
+    if failed is not None:
+        await _notify_plan_pr_failed(plan_id, *failed)
+
+
+async def _notify_plan_pr_failed(plan_id: str, tenant_id: str, plan_name: str, reason: str) -> None:
+    """Encola ``plan_pr_failed`` al dispatcher. Best-effort: nunca rompe el cierre."""
+    try:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": "plan_pr_failed",
+                "tenant_id": tenant_id,
+                "context": {"plan_name": plan_name, "plan_id": plan_id, "reason": reason[:500]},
+            }
+        )
+    except Exception as exc:  # pragma: no cover - best-effort
+        _log.warning("plan_pr.notify_failed", plan_id=plan_id, error=str(exc))
+
+
+async def _persist_task_failure(settings: Settings, plan_id: str, error: str) -> None:
+    """La task Celery captura TODO lo que `_open_plan_pr_async` no capturó (docs de
+    cierre, contexto del PR, motor de BD): eso también tiene que llegar a
+    `pr_error`, o el plan queda `completed` sin URL ni motivo, indistinguible de
+    «aún en cola» (`task_cv_14`). Conserva un PR ya abierto."""
+    engine = worker_engine(settings)
+    try:
+        await _persist_pr_result(
+            async_sessionmaker(engine, expire_on_commit=False),
+            plan_id,
+            pr_url=None,
+            pr_branch=None,
+            pr_error=error,
+            keep_existing_url=True,
+        )
+    finally:
+        await engine.dispose()
 
 
 async def push_plan_branch_to_remote(
@@ -288,6 +337,74 @@ async def _resolve_pr_context(sessionmaker: Any, project_id: UUID, plan_id: str)
         )
 
 
+_LOST_WORK_ABORT_CODES: frozenset[str] = frozenset({"commit_failed", "rebase_conflict"})
+
+
+def _done_tasks_without_commits(
+    done_tasks: list[tuple[UUID, str | None]], *, has_commit: Callable[[UUID], bool]
+) -> list[UUID]:
+    """Tareas `done` cuyo trabajo NO está en la rama del plan (`task_cv_11`, C-04).
+
+    Decisión pura. ``done_tasks`` son ``(task_id, abort_code del último run)``.
+    Sólo cuentan las que acabaron en un fallo real de commit/rebase Y no tienen
+    ningún commit con su trailer `Task-Id` en la rama: una tarea de diseño o
+    análisis nunca tuvo commit y no lo necesita, y una cuyo conflicto resolvió
+    alguien a mano ya tiene su commit. Abrir el PR con una de estas dentro es
+    entregar como hecho un trabajo que no existe."""
+    return [
+        task_id
+        for task_id, abort_code in done_tasks
+        if abort_code in _LOST_WORK_ABORT_CODES and not has_commit(task_id)
+    ]
+
+
+async def _done_tasks_with_lost_work(
+    sessionmaker: Any, plan_id: str, *, bare_path: Path, plan_branch: str
+) -> list[UUID]:
+    """La mitad con I/O de :func:`_done_tasks_without_commits`: lee las tareas
+    `done` del plan con el `abort_code` de su último run y consulta la rama."""
+    from api_server.db.domain import Execution, Task, TaskStatus
+    from sqlalchemy import select
+
+    from workers.git_repos import _run_git
+
+    async with sessionmaker() as session:
+        done_ids = list(
+            (
+                await session.execute(
+                    select(Task.id).where(
+                        Task.plan_id == UUID(plan_id), Task.status == TaskStatus.DONE.value
+                    )
+                )
+            ).scalars()
+        )
+        latest: list[tuple[UUID, str | None]] = []
+        for task_id in done_ids:
+            code = (
+                await session.execute(
+                    select(Execution.abort_code)
+                    .where(Execution.task_id == task_id)
+                    .order_by(Execution.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            latest.append((task_id, code))
+
+    def _has_commit(task_id: UUID) -> bool:
+        out = _run_git(
+            "log",
+            "--format=%H",
+            "-n",
+            "1",
+            f"--grep=Task-Id: {task_id}",
+            plan_branch,
+            cwd=bare_path,
+        )
+        return bool(str(out or "").strip())
+
+    return _done_tasks_without_commits(latest, has_commit=_has_commit)
+
+
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
@@ -384,9 +501,19 @@ async def _open_plan_pr_async(
                 # crudo del proveedor.
                 base_branch=base,
             )
-            info = wf.open_plan_pr(title=title, body=body)
-            pr_url = info.url
-            pr_error = None if info.url else (info.skipped_reason or "no PR opened")
+            # `task_cv_11`: una tarea `done` cuyo último run acabó en
+            # commit_failed/rebase_conflict y sin commit en la rama es trabajo
+            # perdido; el PR no se abre y el motivo queda en `pr_error`.
+            lost = await _done_tasks_with_lost_work(
+                sessionmaker, plan_id, bare_path=bare_path, plan_branch=plan_branch
+            )
+            if lost:
+                pr_error = "skipped:done_tasks_without_commits:" + ",".join(str(t) for t in lost)
+                _log.error("plan_pr.lost_work_guard", plan_id=plan_id, tasks=[str(t) for t in lost])
+            else:
+                info = wf.open_plan_pr(title=title, body=body)
+                pr_url = info.url
+                pr_error = None if info.url else (info.skipped_reason or "no PR opened")
         except Exception as exc:  # PR opening is best-effort — record WHY it failed (P6).
             pr_error = str(exc)
             _log.exception("plan_pr.open_failed", project_id=str(project_id), error=str(exc))
@@ -394,8 +521,15 @@ async def _open_plan_pr_async(
             auth.cleanup()
         # Persist the auto-PR outcome on the plan (P6) so it is visible in API/UI,
         # not just worker logs. Stops the failure from being swallowed silently.
+        # `keep_existing_url`: un reintento que falla (422 no recuperado, remoto
+        # caído) no borra la URL del PR que ya está abierto (`task_cv_14`).
         await _persist_pr_result(
-            sessionmaker, plan_id, pr_url=pr_url, pr_branch=plan_branch, pr_error=pr_error
+            sessionmaker,
+            plan_id,
+            pr_url=pr_url,
+            pr_branch=plan_branch,
+            pr_error=pr_error,
+            keep_existing_url=True,
         )
         _log.info(
             "plan_pr.done",
@@ -433,4 +567,8 @@ def open_plan_pr(project_id: str, plan_id: str, title: str, body: str) -> dict[s
         )
     except Exception as exc:
         _log.exception("plan_pr.failed", project_id=project_id, plan_id=plan_id, error=str(exc))
+        try:
+            asyncio.run(_persist_task_failure(settings, plan_id, f"{type(exc).__name__}: {exc}"))
+        except Exception as persist_exc:  # pragma: no cover - best-effort
+            _log.warning("plan_pr.persist_failed", plan_id=plan_id, error=str(persist_exc))
         return {"project_id": project_id, "plan_id": plan_id, "status": f"error:{exc}"}

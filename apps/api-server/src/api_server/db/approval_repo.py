@@ -377,12 +377,22 @@ async def request_approval_if_needed(
     project: Project,
     category: str,
     action: dict[str, Any],
+    policy: dict[str, Any] | None = None,
 ) -> ApprovalRequest | None:
-    """Evaluate `category` against the project's policy.
+    """Evaluate `category` against the policy the RUNTIME parked with.
 
     Returns the persisted `ApprovalRequest` and parks the execution in
     `awaiting_human_approval` when a human is required; returns None
     (the action may proceed) otherwise. The caller owns the transaction.
+
+    ``policy`` es la política EFECTIVA con la que el worker lanzó el run (ADR
+    0104: el preset por defecto de plataforma cuando el proyecto no tiene
+    ninguna). Sin ella se usa ``project.human_approval_policy`` cruda, y ésa es
+    la trampa que la auditoría del 2026-09-01 (A-01) midió: el runtime aparcaba
+    con la efectiva, aquí la cruda (``None``) decía «no hace falta», no se creaba
+    ninguna solicitud y la ejecución quedaba ``awaiting_human_approval`` sin nada
+    que la recuperase — tarea ``in_progress`` para siempre. Las dos mitades del
+    gate tienen que leer la MISMA política.
 
     ADR 0135 (N3): cuando esta acción se parece a una que el humano YA aprobó en
     esta misma task, la solicitud se persiste con una clave hermana
@@ -395,10 +405,11 @@ async def request_approval_if_needed(
     (la política no nombra esa categoría por ningún sitio) y la aprueba sin
     leer, que es exactamente el hábito que un gate nuevo no debe crear.
     """
-    if not requires_human_approval(project.human_approval_policy, category):
+    effective = project.human_approval_policy if policy is None else policy
+    if not requires_human_approval(effective, category):
         return None
 
-    reason = unlisted_category_reason(project.human_approval_policy, category)
+    reason = unlisted_category_reason(effective, category)
     if reason is not None:
         action = {**action, "gate_reason": reason}
 

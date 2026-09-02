@@ -601,12 +601,12 @@ async def test_the_reviewers_own_runs_do_not_crowd_out_the_implementers_commands
 
         block = _run_request(await _drain(redis, "default"))["review_context"]["commands_run"]
         assert "8.3.33" in block, "la evidencia del implementador no puede quedar fuera"
-        assert "git log --oneline -5" not in block, (
-            "lo que ejecutó el reviewer no es evidencia del implementador"
-        )
-        assert "[latest attempt" in block, (
-            "el run bajo revisión es el ÚLTIMO del implementador, no un intento anterior"
-        )
+        assert (
+            "git log --oneline -5" not in block
+        ), "lo que ejecutó el reviewer no es evidencia del implementador"
+        assert (
+            "[latest attempt" in block
+        ), "el run bajo revisión es el ÚLTIMO del implementador, no un intento anterior"
         assert "earlier attempt" not in block
     finally:
         await redis.delete("default")
@@ -638,3 +638,30 @@ async def test_a_task_that_ran_no_commands_gets_an_empty_key_not_a_section(
         await redis.delete("default")
         await redis.aclose()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_reviewers_own_verdict_is_never_the_implementer_output(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Auditoría 2026-09-01 (C-03). Tras tres runs del reviewer sobre la misma
+    tarea, «lo que entregó el implementador» seguía siendo lo que entregó el
+    implementador — y no «[attempt 4 — latest] <verdict>reject</verdict>»."""
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm, reviewer_type="ai", prior_output="implemented the parser", reviewer_runs_after=3
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        request = _run_request(await _drain(redis, "default"))
+        assert (
+            request["review_context"]["implementer_output"] == "implemented the parser"
+        ), "el reviewer recibe su propio veredicto anterior como salida del implementador"
+    finally:
+        await engine.dispose()
+        await redis.aclose()

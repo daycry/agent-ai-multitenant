@@ -232,6 +232,10 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
     async def ok_worktrees(*_a: Any, **_k: Any) -> int:
         return 2
 
+    async def ok_plan_prs(*_a: Any, **_k: Any) -> int:
+        return 5
+
+    monkeypatch.setattr(m, "_reconcile_plans_without_pr", ok_plan_prs)
     monkeypatch.setattr(m, "_reconcile_stuck_tasks", ok_stuck)
     monkeypatch.setattr(m, "_reconcile_orphan_reviews", boom_reviews)
     monkeypatch.setattr(m, "_reconcile_unblocked_plans", ok_unblocked)
@@ -253,6 +257,7 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
         "unblocked_plans": 4,
         "completed_plans": 1,
         "pushed_worktrees": 2,
+        "retried_plan_prs": 5,
         # G-04/P1-08: la pasada de vigilancia sin DB falla best-effort → 0.
         "tenant_ghost_children": 0,
     }
@@ -290,3 +295,96 @@ def test_an_ai_task_without_a_run_still_is_one() -> None:
     from workers.maintenance.reconciler import is_orphan_claim_candidate
 
     assert is_orphan_claim_candidate(is_human_route=False) is True
+
+
+# ------------------------------------------------------------------- case (a3) A-05
+# Auditoría 2026-09-01 (A-05): `_reconcile_stuck_tasks` tomaba la ÚLTIMA ejecución
+# de la tarea sin preguntarse si pertenecía a la reclamación actual. Una tarea
+# re-reclamada (rechazo → backlog → ready → in_progress) conserva las ejecuciones
+# de la vuelta anterior; si el run nuevo aún no ha creado su fila, la «última» es
+# la vieja —terminal y asentada— y el reconciler transicionaba la tarea con el
+# veredicto de un run que no es el suyo. La regla, pura: una ejecución es de esta
+# reclamación sólo si se creó DESPUÉS de `started_at`.
+from workers.maintenance import _execution_belongs_to_claim  # noqa: E402
+
+
+def test_an_execution_older_than_the_claim_is_not_this_claims_run() -> None:
+    """Ejecución de hace 10 min, reclamación de hace 6: es del intento anterior."""
+    started = _NOW - timedelta(minutes=6)
+    created = _NOW - timedelta(minutes=10)
+    assert _execution_belongs_to_claim(created, started_at=started) is False
+
+
+def test_an_execution_created_after_the_claim_is_this_claims_run() -> None:
+    started = _NOW - timedelta(minutes=10)
+    created = _NOW - timedelta(minutes=6)
+    assert _execution_belongs_to_claim(created, started_at=started) is True
+
+
+def test_an_execution_created_at_the_claim_instant_is_this_claims_run() -> None:
+    """Igualdad cuenta como «después»: el claim y la fila comparten el `now()` de BD."""
+    started = _NOW - timedelta(minutes=6)
+    assert _execution_belongs_to_claim(started, started_at=started) is True
+
+
+def test_without_started_at_every_execution_counts_as_the_claims() -> None:
+    """Sin `started_at` no hay con qué comparar: se conserva el comportamiento previo."""
+    created = _NOW - timedelta(minutes=10)
+    assert _execution_belongs_to_claim(created, started_at=None) is True
+
+
+# --------------------------------------------------------------------- case (e) D-01
+# Auditoría 2026-09-01 (D-01): el auto-PR se encola UNA vez al validar el plan y
+# nadie vuelve a mirar. Si el broker no estaba, o el worker murió con la task en
+# la mano, el plan queda `completed` sin `pr_url` ni `pr_error` para siempre —y
+# como el cierre no se repite, nadie lo reintenta. La decisión, pura: un plan
+# `completed` sin resultado de PR y con más de `min_age` desde su último cambio
+# se reencola; uno que ya tiene URL o motivo de fallo, no; y uno más viejo que
+# `max_age` tampoco, porque un plan cerrado hace meses sin PR es un hecho
+# histórico, no un encolado perdido.
+from workers.maintenance import _plan_needs_pr_retry  # noqa: E402
+
+_PR_MIN_AGE = timedelta(minutes=10)
+_PR_MAX_AGE = timedelta(days=7)
+
+
+def _needs_retry(**kw: Any) -> bool:
+    base: dict[str, Any] = {
+        "status": "completed",
+        "pr_url": None,
+        "pr_error": None,
+        "updated_at": _NOW - timedelta(minutes=20),
+        "now": _NOW,
+        "min_age": _PR_MIN_AGE,
+        "max_age": _PR_MAX_AGE,
+    }
+    base.update(kw)
+    return _plan_needs_pr_retry(**base)
+
+
+def test_a_completed_plan_without_pr_outcome_past_the_age_is_retried() -> None:
+    assert _needs_retry() is True
+
+
+def test_a_plan_whose_closure_is_recent_is_left_for_the_live_path() -> None:
+    """La task puede estar en cola: 10 minutos es mucho más que un encolado normal."""
+    assert _needs_retry(updated_at=_NOW - timedelta(minutes=3)) is False
+
+
+def test_a_plan_with_a_pr_url_is_never_retried() -> None:
+    assert _needs_retry(pr_url="https://github.com/o/r/pull/7") is False
+
+
+def test_a_plan_whose_pr_failed_with_a_reason_is_not_retried_blindly() -> None:
+    """El fallo YA es visible en la ficha (P6) y lo reintenta el operador: reencolar
+    a ciegas cada barrido convertiría un remoto caído en una tormenta."""
+    assert _needs_retry(pr_error="GitHub PR falló (401)") is False
+
+
+@pytest.mark.parametrize("status", ["in_progress", "pending_human_validation", "rejected"])
+def test_only_completed_plans_owe_a_pr(status: str) -> None:
+    assert _needs_retry(status=status) is False
+
+
+def test_a_plan_closed_long_ago_is_history_not_a_lost_enqueue() -> None:
+    assert _needs_retry(updated_at=_NOW - timedelta(days=30)) is False

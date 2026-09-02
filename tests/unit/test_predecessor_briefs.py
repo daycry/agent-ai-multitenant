@@ -97,3 +97,81 @@ async def test_a_long_summary_is_capped_before_it_reaches_the_prompt() -> None:
     session = _Session(["dep-1"], [_Row("dep-1", "T")], "x" * 9000)
     briefs = await _dispatcher()._read_predecessor_briefs(session, _Task())
     assert len(briefs[0]["summary"]) == TaskDispatcher._PREDECESSOR_SUMMARY_MAX
+
+
+# ---------------------------------------------------------------------------
+# Auditoría 2026-09-01 (C-03): lo que se lee de `executions` como «lo que
+# entregó el implementador» NO puede ser el veredicto del reviewer, que vive en
+# la misma tabla con el mismo `task_id`. El filtro existía sólo para
+# `<commands-run>`; aquí se fija para las otras tres lecturas.
+# ---------------------------------------------------------------------------
+
+
+class _ResultConFirst(_Result):
+    def first(self) -> Any:
+        return self._payload
+
+
+class _RecordingSession(_Session):
+    """Como `_Session`, pero guarda cada statement para inspeccionar su WHERE."""
+
+    def __init__(self, *payloads: Any) -> None:
+        super().__init__(*payloads)
+        self.statements: list[Any] = []
+
+    async def execute(self, stmt: Any) -> _Result:
+        self.statements.append(stmt)
+        self.queries += 1
+        return _ResultConFirst(self._payloads.pop(0))
+
+
+class _RowConReviewer(_Row):
+    def __init__(self, id_: str, title: str, reviewer_agent_id: str | None) -> None:
+        super().__init__(id_, title)
+        self.reviewer_agent_id = reviewer_agent_id
+
+
+def _excludes_reviewer(stmt: Any) -> bool:
+    sql = str(stmt)
+    return "executions.agent_id" in sql and "IS NULL" in sql
+
+
+class _TaskWithReviewer(_Task):
+    reviewer_agent_id = "reviewer-1"
+
+
+@pytest.mark.asyncio
+async def test_a_predecessor_brief_never_comes_from_the_reviewers_run() -> None:
+    session = _RecordingSession(
+        ["task-1"],  # ids de las dependencias directas
+        [_RowConReviewer("task-1", "Parser", "reviewer-9")],  # la dependencia y SU reviewer
+        "lo que entregó el implementador",
+    )
+
+    briefs = await _dispatcher()._read_predecessor_briefs(session, _TaskWithReviewer())
+
+    assert briefs and briefs[0]["summary"] == "lo que entregó el implementador"
+    assert _excludes_reviewer(session.statements[2]), (
+        "la lectura de la salida de la dependencia no excluye al reviewer: la última "
+        "`done` de una tarea con reviewer IA es el VEREDICTO, no el entregable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_prior_failure_is_the_implementers_not_the_reviewers() -> None:
+    session = _RecordingSession(None)
+
+    await _dispatcher()._read_prior_failure(session, _TaskWithReviewer())
+
+    assert _excludes_reviewer(session.statements[0])
+
+
+def test_the_implementer_outputs_query_excludes_the_reviewer() -> None:
+    from orchestrator.dispatch import _implementer_outputs_query
+
+    stmt = _implementer_outputs_query(_TaskWithReviewer(), "reviewer-1")
+
+    assert _excludes_reviewer(stmt), (
+        "`implementer_output` se lee sin excluir al reviewer: recibe su propio "
+        "veredicto anterior como «lo que entregó el implementador»"
+    )
