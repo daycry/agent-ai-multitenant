@@ -209,15 +209,13 @@ def test_the_migration_is_idempotent(alembic_config: object, migrations_pg_dsn: 
 
 @pytest.mark.asyncio
 async def test_the_backfill_table_is_unreachable_from_the_app(
-    alembic_config: object, migrations_pg_dsn: str
+    _migrated: None, migrations_pg_dsn: str
 ) -> None:
     """La tabla de respaldo de la 0147 no la puede leer la aplicación: nace sin
     `tenant_id` ni RLS, así que la única defensa es que `app_user` y
     `service_user` no tengan NINGÚN privilegio sobre ella (lección de la 0138)."""
     import asyncpg
-    from alembic import command
 
-    command.upgrade(alembic_config, "head")
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         for role in ("app_user", "service_user"):
