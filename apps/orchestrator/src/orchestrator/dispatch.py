@@ -1755,7 +1755,13 @@ class TaskDispatcher:
         # P0-1 (investigación 2026-07-11): la persona del agente (system_prompt /
         # model_config.system_prompts) viaja al run — el runtime la prepende como
         # PRIMER bloque del system preamble. Sin persona → clave ausente.
-        agent_persona = resolve_agent_persona(agent, language=_project_language(project))
+        # `task_cv_33`: la guía de ejecución de la persona sigue a las tools
+        # efectivas del run (`agent_tool_names`), no al texto horneado al sembrar.
+        agent_persona = resolve_agent_persona(
+            agent,
+            language=_project_language(project),
+            tool_slugs=sorted(agent_tool_names) if agent_tool_names is not None else None,
+        )
         if agent_persona is not None:
             request["agent_persona"] = agent_persona
             # `task_gov_03`: el sello del prompt del agente, para que

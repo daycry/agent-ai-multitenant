@@ -15,6 +15,7 @@ una persona real en el otro idioma que ninguna.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from typing import Any
 
 # Cap defensivo: las personas built-in más ricas rondan 2k chars; 8k deja sitio
@@ -40,7 +41,9 @@ def _bilingual_prompt(model_config: Any, *, language: str | None = None) -> str:
     return ""
 
 
-def resolve_agent_persona(agent: Any, *, language: str | None = None) -> dict[str, str] | None:
+def resolve_agent_persona(
+    agent: Any, *, language: str | None = None, tool_slugs: Iterable[str] | None = None
+) -> dict[str, str] | None:
     """La persona efectiva de ``agent`` como payload del run, o ``None``.
 
     Claves emitidas: ``prompt`` (siempre), ``role``/``name`` (si existen).
@@ -55,6 +58,13 @@ def resolve_agent_persona(agent: Any, *, language: str | None = None) -> dict[st
         return None
     if len(prompt) > PERSONA_MAX_CHARS:
         prompt = prompt[:PERSONA_MAX_CHARS] + _TRUNCATION_MARKER
+    if tool_slugs is not None:
+        # `task_cv_33` (F-03): la guía de ejecución sigue a las tools EFECTIVAS
+        # del run, no al texto horneado al sembrar (que las copias heredan
+        # congelado). Va después del recorte para que siempre llegue entera.
+        from api_server.seeds.tool_usage_guidance import with_execution_guidance
+
+        prompt = with_execution_guidance(prompt, tool_slugs, language)
 
     persona: dict[str, str] = {"prompt": prompt}
     role = getattr(agent, "role", None)

@@ -332,7 +332,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_33` — La guía de ejecución se genera en el dispatch y `merge` absorbe capacidades (F-03)
 
-- [ ] **Título**: la guía se hornea en `agents.system_prompt` al sembrar, las copias la heredan
+- [x] _(hecho 2026-09-02, tests en verde; `resolve_agent_persona(agent, tool_slugs=)` retira la guía horneada y añade la de las tools efectivas (`strip_execution_guidance` / `with_execution_guidance`), el dispatch la pide con `agent_tool_names`, y `POST /agents/{fork_id}/merge` acepta `capabilities: ["tools","skills"]`; los seeds siguen horneando la guía para la UI, el dispatch la sustituye)_ **Título**: la guía se hornea en `agents.system_prompt` al sembrar, las copias la heredan
       congelada y las migraciones cambian tools sin tocar texto. `resolve_agent_persona` recibe
       las tools efectivas y añade `execution_guidance`; `POST /agents/{fork_id}/merge` acepta
       `capabilities: ["tools","skills"]`.

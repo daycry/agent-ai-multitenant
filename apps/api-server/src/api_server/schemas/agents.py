@@ -11,7 +11,7 @@ Callers using Python objects pass `llm_config=...`; HTTP clients see
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -302,7 +302,17 @@ class AgentMergeRequest(BaseModel):
 
     model_config = _BASE_CONFIG
 
-    fields: list[str] = Field(min_length=1)
+    fields: list[str] = Field(default_factory=list)
+    #: `task_cv_33` (auditoría 2026-09-01, F-03): además de campos escalares, el
+    #: fork puede absorber las CAPACIDADES actuales del origen — sus tools y
+    #: skills asignadas —, que es lo que una migración cambia sin tocar texto.
+    capabilities: list[Literal["tools", "skills"]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _something_to_merge(self) -> AgentMergeRequest:
+        if not self.fields and not self.capabilities:
+            raise ValueError("nothing to merge: give `fields` and/or `capabilities`")
+        return self
 
 
 class AgentCapabilitiesDiff(BaseModel):

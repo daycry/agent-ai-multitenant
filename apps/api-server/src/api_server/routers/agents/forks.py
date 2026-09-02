@@ -25,6 +25,7 @@ from api_server.routers._helpers import get_writable_or_404, require_tenant_id
 from api_server.routers.agents.common import (
     _agent_capability_ids,
     _clone_agent_capabilities,
+    _merge_agent_capabilities,
 )
 from api_server.schemas.agents import (
     AgentCapabilitiesDiff,
@@ -294,6 +295,15 @@ async def merge_from_source(
         elif isinstance(src_val, list):
             src_val = list(src_val)
         setattr(fork, field, src_val)
+    if payload.capabilities:
+        # `task_cv_33`: tools/skills actuales del origen → el fork.
+        await _merge_agent_capabilities(
+            session,
+            source_id=source.id,
+            fork_id=fork.id,
+            tenant_id=fork.tenant_id,
+            kinds=set(payload.capabilities),
+        )
 
     # Re-anchor: from now on, "source moved?" compares against this snapshot.
     fork.forked_from_version = (

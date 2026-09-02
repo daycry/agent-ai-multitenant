@@ -14,7 +14,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal
@@ -41,6 +41,53 @@ async def _teams_by_agent(
     for agent_id, team_id, team_name in rows.all():
         out.setdefault(agent_id, []).append((team_id, team_name))
     return out
+
+
+async def _merge_agent_capabilities(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    fork_id: UUID,
+    tenant_id: UUID,
+    kinds: set[str],
+) -> None:
+    """El fork ABSORBE las capacidades actuales del origen (`task_cv_33`):
+    reemplaza sus `agent_tools` y/o `agent_skills` por las del origen. Las KBs
+    no entran (ADR 0026: las grantea el tenant). Las filas nuevas llevan el
+    tenant del fork, nunca el del origen."""
+    if "tools" in kinds:
+        await session.execute(delete(AgentTool).where(AgentTool.agent_id == fork_id))
+        tool_rows = await session.execute(
+            select(AgentTool.tool_id, AgentTool.config_override).where(
+                AgentTool.agent_id == source_id
+            )
+        )
+        for tool_id, config_override in tool_rows.all():
+            session.add(
+                AgentTool(
+                    agent_id=fork_id,
+                    tool_id=tool_id,
+                    tenant_id=tenant_id,
+                    config_override=dict(config_override) if config_override is not None else None,
+                )
+            )
+    if "skills" in kinds:
+        await session.execute(delete(AgentSkill).where(AgentSkill.agent_id == fork_id))
+        skill_rows = await session.execute(
+            select(AgentSkill.skill_id, AgentSkill.proficiency).where(
+                AgentSkill.agent_id == source_id
+            )
+        )
+        for skill_id, proficiency in skill_rows.all():
+            session.add(
+                AgentSkill(
+                    agent_id=fork_id,
+                    skill_id=skill_id,
+                    tenant_id=tenant_id,
+                    proficiency=proficiency,
+                )
+            )
+    await session.flush()
 
 
 async def _clone_agent_capabilities(
