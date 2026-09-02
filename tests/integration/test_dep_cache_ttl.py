@@ -19,7 +19,9 @@ pytestmark = pytest.mark.integration
 
 def _seed(root: Path, name: str, age_seconds: float) -> Path:
     """Create a fake cache dir and set its mtime back ``age_seconds``."""
-    path = root / name
+    # `task_cv_24`: la caché vive por tenant (`{tenant}/{prefix}-{hash}`); una
+    # entrada plana en la raíz es layout antiguo y la purga la trata aparte.
+    path = root / "acme" / name
     path.mkdir(parents=True, exist_ok=True)
     (path / "marker").write_text("cache content")
     past = time.time() - age_seconds
