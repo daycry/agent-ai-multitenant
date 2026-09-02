@@ -35,9 +35,10 @@ from api_server.auth.internal_agent import (
     get_agent_principal,
     get_agent_tenant_session,
 )
-from api_server.db.domain import Agent, MemoryScope, Project, Task
+from api_server.db.domain import Agent, MemoryScope, Project, Task, Team
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.platform_settings import (
+    get_default_memory_scope,
     get_global_agent_uses_task_project,
     get_rag_reranker_enabled,
 )
@@ -500,18 +501,32 @@ async def memory_store(
     # For a project-bound agent this is just its own project (no change).
     project = await _resolve_effective_project(session, agent=agent, principal=principal)
 
-    scope = payload.scope or agent.memory_scope
+    # `task_cv_31`: el scope se calcula como en el memorizer (política del
+    # equipo > agente > default de plataforma, y enrutado por tipo). El cliente
+    # puede nombrarlo, pero sólo si coincide: no hay forma de ensancharlo.
+    team_scope: str | None = None
+    if project is not None and project.team_id is not None:
+        team = await session.get(Team, project.team_id)
+        team_scope = team.memory_scope if team is not None else None
+    platform_default = await get_default_memory_scope(session)
+    routed = _store_scope_for(
+        agent_scope=agent.memory_scope,
+        team_scope=team_scope,
+        platform_default=platform_default,
+        mem_type=payload.type,
+    )
+    scope = payload.scope or routed
     if scope not in {s.value for s in MemoryScope}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unsupported memory scope: {scope!r}",
         )
-    if scope != agent.memory_scope:
+    if scope != routed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                f"agent memory_scope is {agent.memory_scope!r}; "
-                f"cannot store memories in scope {scope!r}"
+                f"agent memory_scope is {agent.memory_scope!r} and this {payload.type!r} memory "
+                f"routes to {routed!r}; cannot store memories in scope {scope!r}"
             ),
         )
 
@@ -566,23 +581,52 @@ async def _embed_query(embedder: Embedder | None, query: str) -> list[float] | N
     return list(vectors[0]) if vectors else None
 
 
+_SHARED_READ_SCOPES: tuple[str, ...] = ("team_shared", "project_shared", "global")
+
+
 def _default_readable_scopes(agent_scope: str) -> list[str]:
     """The scope set an agent reads when it doesn't specify one.
 
-    The contract: an agent can read everything at or below its own
-    write scope. So:
-      private        -> private + team_shared + project_shared + global
-      team_shared    -> team_shared + project_shared + global
-      project_shared -> project_shared + global
-      global         -> global
+    `task_cv_30` (auditoría 2026-09-01, E-01; ADR 0071): un agente de IA lee
+    TODO scope compartido con puntero — `global`, el `project_shared` de su
+    proyecto efectivo y el `team_shared` del equipo de ese proyecto. La versión
+    anterior aplicaba una escalera (`team_shared` más estrecho que
+    `project_shared`) sobre el scope de ESCRITURA del agente, así que un agente
+    `project_shared` nunca leía la memoria de su equipo y uno `global` sólo leía
+    `global`. Los punteros (`team_id`, `project_id`) los resuelve el endpoint
+    desde el agente, nunca el cliente, así que ensanchar la lista no ensancha
+    lo que se ve: `recall` filtra `team_shared` por el equipo del proyecto y
+    `project_shared` por el proyecto.
 
-    This widens reads but never widens writes (writes still pin to the
-    agent's own memory_scope). The order is most-specific-first.
+    `private` (un agente humano) conserva sus filas propias delante; un scope
+    fuera del catálogo canónico sigue leyendo sólo `global`. Widening reads
+    never widens writes (writes go through :func:`_store_scope_for`).
     """
-    ladder = ["private", "team_shared", "project_shared", "global"]
-    if agent_scope not in ladder:
-        return ["global"]  # an agent opted out of canonical scopes reads only global
-    return ladder[ladder.index(agent_scope) :]
+    if agent_scope == MemoryScope.PRIVATE.value:
+        return ["private", *_SHARED_READ_SCOPES]
+    if agent_scope not in {s.value for s in MemoryScope}:
+        return ["global"]  # an agent opted out of canonical scopes: global only
+    return list(_SHARED_READ_SCOPES)
+
+
+def _store_scope_for(
+    *,
+    agent_scope: str | None,
+    team_scope: str | None,
+    platform_default: str,
+    mem_type: str | None,
+) -> str:
+    """El scope donde `memory_store` persiste (`task_cv_31`, E-02): el MISMO
+    cálculo que el memorizer — la política del equipo manda sobre la del agente
+    y sobre el default de plataforma (`resolve_effective_memory_scope`), y el
+    tipo enruta: `semantic` al scope efectivo, `episodic` acotado a
+    `project_shared` (`route_scope_for_type`). Antes la tool escribía con
+    `agent.memory_scope` crudo y el memorizer con esto: dos respuestas para la
+    misma pregunta."""
+    from api_server.memorizer.policy import resolve_effective_memory_scope, route_scope_for_type
+
+    effective = resolve_effective_memory_scope(team_scope, agent_scope, platform_default)
+    return route_scope_for_type(effective, mem_type)
 
 
 # ---------------------------------------------------------------------------

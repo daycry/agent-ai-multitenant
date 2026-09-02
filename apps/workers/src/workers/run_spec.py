@@ -37,6 +37,14 @@ from workers.run_contract import ExecutionRequest
 # The SDK keeps `delete_file`/`move_file` as host tools, so nothing legitimate is
 # lost; a project that wants raw `rm` grants it in its own `allowed_commands`,
 # which is the frontier ADR 0164 documents.
+# El subconjunto de SÓLO LECTURA de la base del SDK, que reciben TODOS los
+# proveedores (`task_cv_34`): lo que la guía de ejecución promete para inspeccionar
+# el workspace, y nada que escriba. Un proyecto que quiera más lo pone en su
+# `allowed_commands`.
+_READ_ONLY_SHELL_COMMANDS: frozenset[str] = frozenset(
+    {"ls", "cat", "grep", "find", "head", "tail", "wc"}
+)
+
 _SDK_BASE_SHELL_COMMANDS: frozenset[str] = frozenset(
     {
         "cp",
@@ -144,6 +152,12 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     allowed_commands = request.allowed_commands
     if kind == "claude_sdk":
         allowed_commands = sorted(_SDK_BASE_SHELL_COMMANDS.union(allowed_commands or []))
+    else:
+        # `task_cv_34` (auditoría 2026-09-01, F-02): la guía de ejecución promete
+        # `grep/ls/cat` por `shell_exec` a todos los agentes; sin esto, en
+        # Ollama/Copilot/Azure cada `ls` era «command not allowed» y el agente
+        # quemaba iteraciones en reintentos estériles. Sólo la mitad de lectura.
+        allowed_commands = sorted(_READ_ONLY_SHELL_COMMANDS.union(allowed_commands or []))
     if allowed_commands is not None:
         spec["allowed_commands"] = allowed_commands
     # Forward the project's HTTP-tools domain allowlist (prod-12 Fase B /

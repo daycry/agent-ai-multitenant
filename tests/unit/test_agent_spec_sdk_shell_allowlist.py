@@ -77,11 +77,27 @@ def test_sdk_registers_shell_with_base_even_when_project_allowlist_absent() -> N
     assert {"ls", "cat"} <= set(spec["allowed_commands"])
 
 
-def test_thin_provider_allowlist_is_unchanged() -> None:
+# `task_cv_34` (auditoría 2026-09-01, F-02): la guía de ejecución promete
+# `grep/ls/cat` por `shell_exec` a TODOS los agentes y sólo `claude_sdk` recibía
+# la base: en Ollama/Copilot/Azure cada `ls` era «command not allowed». Los
+# proveedores finos reciben ahora el subconjunto de SÓLO LECTURA de la base.
+
+
+def test_thin_provider_gets_the_read_only_subset_on_top_of_its_allowlist() -> None:
     spec = _agent_spec(_request(kind="ollama", allowed_commands=["pytest"]), None)
-    assert spec["allowed_commands"] == ["pytest"]
+    assert "pytest" in spec["allowed_commands"]
+    assert {"ls", "cat", "grep", "find", "head", "tail", "wc"} <= set(spec["allowed_commands"])
 
 
-def test_thin_provider_absent_allowlist_stays_absent() -> None:
+def test_thin_provider_absent_allowlist_becomes_the_read_only_subset() -> None:
     spec = _agent_spec(_request(kind="ollama", allowed_commands=None), None)
-    assert "allowed_commands" not in spec
+    assert set(spec["allowed_commands"]) == {"ls", "cat", "grep", "find", "head", "tail", "wc"}
+
+
+def test_thin_provider_never_gets_the_writing_half_of_the_sdk_base() -> None:
+    """`cp`/`mkdir`/`touch`/`sed`/`awk` siguen siendo del SDK (y de la allowlist del
+    proyecto): la promesa de la guía es leer, no escribir por shell."""
+    spec = _agent_spec(_request(kind="ollama", allowed_commands=None), None)
+    assert not {"cp", "mkdir", "rmdir", "touch", "sed", "awk", "rm", "mv"} & set(
+        spec["allowed_commands"]
+    )

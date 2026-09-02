@@ -306,7 +306,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_30` — La escalera de lectura sigue al ADR 0071 (E-01)
 
-- [ ] **Título**: `_default_readable_scopes` usa el orden viejo (`team_shared` más estrecho que
+- [x] _(hecho 2026-09-02, tests en verde; un agente de IA lee `team_shared` + `project_shared` + `global` sea cual sea su scope de escritura (los punteros los pone el endpoint); `private` conserva sus filas delante y un scope no canónico sigue leyendo sólo `global`)_ **Título**: `_default_readable_scopes` usa el orden viejo (`team_shared` más estrecho que
       `project_shared`) sobre el scope crudo del agente: un agente `project_shared` nunca lee
       `team_shared` y uno `global` sólo lee `global`. Leer «todo scope compartido con puntero»
       (`global` + `project_shared` del proyecto + `team_shared` del equipo).
@@ -315,7 +315,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_31` — `memory_store` aplica la política de equipo y el enrutado (E-02)
 
-- [ ] **Título**: la tool interna persiste con `agent.memory_scope` crudo; el memorizer usa
+- [x] _(hecho 2026-09-02, tests en verde; `memory_store` calcula el scope con `_store_scope_for` (política del equipo > agente > default de plataforma, y enrutado por tipo), y un `scope` explícito distinto del enrutado sigue dando 403)_ **Título**: la tool interna persiste con `agent.memory_scope` crudo; el memorizer usa
       `resolve_effective_memory_scope` + `route_scope_for_type`. Unificar.
       **Test**: agente `global` + `episodic` → `project_shared`.
       **Coste**: 0,5 d.
@@ -341,7 +341,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_34` — Comandos base de sólo lectura para todos los proveedores (F-02)
 
-- [ ] **Título**: la guía promete `grep/ls/cat` por `shell_exec` y sólo `claude_sdk` recibe la
+- [x] _(hecho 2026-09-02, tests en verde; los proveedores finos reciben el subconjunto de sólo lectura de la base del SDK (`ls cat grep find head tail wc`), nunca la mitad que escribe)_ **Título**: la guía promete `grep/ls/cat` por `shell_exec` y sólo `claude_sdk` recibe la
       base: en Ollama/Copilot/Azure cada `ls` es «command not allowed». Unir un subconjunto de
       sólo lectura (`ls cat grep find head tail wc`) para todos los kinds, o hacer la guía
       consciente del kind.
