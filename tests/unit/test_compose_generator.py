@@ -1008,7 +1008,8 @@ def test_docker_socket_proxy_acl_matches_the_dev_compose() -> None:
     gen_env = generate_compose(_config())["services"]["docker-socket-proxy"]["environment"]
     for key in ("CONTAINERS", "IMAGES", "NETWORKS", "POST", "EXEC", "VOLUMES", "SWARM"):
         assert str(gen_env.get(key)) == str(dev_env.get(key)), (
-            f"socket-proxy {key}: generator={gen_env.get(key)!r} vs manuals.yml={dev_env.get(key)!r}"
+            f"socket-proxy {key}: generator={gen_env.get(key)!r}"
+            f" vs manuals.yml={dev_env.get(key)!r}"
         )
 
 
