@@ -128,3 +128,16 @@ siempre tienen proyecto. Si faltara (caso degenerado), el episódico cae a R.
 - Persistencia: el puntero correcto (team_id/project_id/user_id) se setea según el
   scope resultante (CHECK `ck_memory_entries_scope_pointer`).
 - Retro-compat: `Team.memory_scope` nullable → comportamiento previo.
+
+## Addendum del 2026-09-02: la escalera de lectura sigue a esta decisión (`task_cv_30`)
+
+La auditoría del 2026-09-01 (E-01) midió que el recall del runtime leía con una
+escalera de scopes propia, no con la de esta decisión: el `store` del agente
+ignoraba la política del equipo y el `recall` podía devolver memorias de un
+scope que el equipo no gobierna. Desde el 2026-09-02 `internal_agent.py`
+resuelve el scope efectivo con la misma cadena (equipo del proyecto > agente >
+default de plataforma) tanto al guardar (`_store_scope_for`) como al leer
+(`_default_readable_scopes`), y el enrutado `semantic→R` /
+`episodic→min(R, project_shared)` es el que describe la sección «Decisión». La
+memoria `private` de un humano sigue fuera del alcance de cualquier agente
+(CLAUDE.md, «Cosas que NO hacer»).

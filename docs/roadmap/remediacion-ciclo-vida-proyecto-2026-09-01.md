@@ -1,7 +1,7 @@
 ---
 plan_id: remediacion-ciclo-vida-proyecto-2026-09-01
 title: Remediación del ciclo de vida de un proyecto — workers, agentes, memorias y runtimes
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-09-02
 completed_at: null
