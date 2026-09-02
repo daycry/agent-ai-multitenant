@@ -273,7 +273,8 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
     que el agente puede leer. Lo que puede leer un agente de IA es TODO scope
     compartido con puntero (`team_shared` de su equipo, `project_shared` de su
     proyecto, `global`); lo que no puede leer nunca es `private` (memoria de una
-    persona). Un agente ``project_shared`` que pide ``private`` no lo recibe: la
+    persona) ni lo de otro equipo. Un agente ``project_shared`` que pide
+    ``private`` no lo recibe: la
     intersección vacía cae al conjunto completo del agente (no a vacío, para que
     una petición mal formada no esterilice el run), y en ese conjunto SÍ está la
     memoria de su equipo — antes se le recortaba, y era el hallazgo E-01."""
@@ -301,14 +302,21 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
             "asyncpg nota del PROYECTO",
             seeded["project_id"],
         )
+        other_team_id = uuid4()
+        await conn.execute(
+            "INSERT INTO teams (id, tenant_id, name) VALUES ($1, $2, $3)",
+            other_team_id,
+            seeded["tenant_id"],
+            "Team Other",
+        )
         await conn.execute(
             "INSERT INTO memory_entries"
-            " (id, tenant_id, scope, type, content, user_id, metadata)"
-            " VALUES ($1, $2, 'private', 'semantic', $3, $4, '{}'::jsonb)",
+            " (id, tenant_id, scope, type, content, team_id, metadata)"
+            " VALUES ($1, $2, 'team_shared', 'semantic', $3, $4, '{}'::jsonb)",
             uuid4(),
             seeded["tenant_id"],
-            "asyncpg apunte PRIVADO de una persona",
-            uuid4(),
+            "asyncpg secreto de OTRO equipo",
+            other_team_id,
         )
     finally:
         await conn.close()
@@ -325,8 +333,9 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
 
     assert resp.status_code == 200, resp.text
     contents = [h["content"] for h in resp.json()["hits"]]
-    # `private` no está en lo que un agente de IA puede leer, nunca…
-    assert not any("PRIVADO" in c for c in contents), contents
+    # `private` no está en lo que un agente de IA puede leer, y el `team_shared`
+    # de OTRO equipo tampoco: los punteros los pone el endpoint, no la petición…
+    assert not any("OTRO" in c for c in contents), contents
     # …y la intersección vacía cae al conjunto completo del agente (no a vacío),
     # que desde `task_cv_30` incluye la memoria de su propio equipo.
     assert any("EQUIPO" in c for c in contents), contents
