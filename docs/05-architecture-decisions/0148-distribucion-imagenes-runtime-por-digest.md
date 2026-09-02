@@ -206,6 +206,27 @@ puede empujar a un namespace escrito a mano. La alternativa —conservar
 descarta: entrega un secreto de alcance amplio y permanente a cambio de un
 nombre, que es peor cadena de suministro que el problema que resuelve.
 
+## Addendum del 2026-09-02: lo que el pin no cubría (`task_cv_44`)
+
+La auditoría del 2026-09-01 (B-05, B-09) midió dos huecos que esta decisión y
+la de las seis apps del instalador dejaban entre medias:
+
+1. **Las dos imágenes que el worker LANZA por tarea** —`agent-runtime:v1` y
+   `browser-runtime:v1`— no se publicaban ni pineaban: los 14 templates iban
+   por la matriz y las apps por el manifiesto del instalador, y estas dos sólo
+   existían como build local. Desde el 2026-09-02 entran en `release-images.yml`
+   (job `runtimes`, con Trivy) y en `PLATFORM_APPS` del manifiesto de digests;
+   el compose generado se las pasa al worker por `WORKERS_AGENT_RUNTIME_IMAGE` y
+   `WORKERS_BROWSER_RUNTIME_IMAGE`, pineadas cuando hay release. El instalador
+   pinea ocho, no seis, y sigue siendo todo o nada.
+2. **Las imágenes que declara un tenant** en `repository_config.runtime_services`
+   aceptaban cualquier `host/repo:tag`, y `version` en un sidecar del catálogo
+   recomponía `repo:tag` deshaciendo el pin por digest. Ahora una `image:` propia
+   o un `runtime_image` lleva `@sha256:` o viene de un registry/prefijo de
+   `WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST` (vacía por defecto: sólo digest), y
+   una `version` del catálogo resuelve contra un mapa versión→imagen pineada;
+   la que no está en el mapa se rechaza nombrando las que hay.
+
 ## Referencias
 
 - [ADR 0051 — endpoint del catálogo de runtime templates](./0051-runtime-templates-endpoint.md)

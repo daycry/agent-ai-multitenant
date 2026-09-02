@@ -442,11 +442,18 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_44` — Imágenes del tenant por digest y con allowlist (B-05, B-09)
 
-- [ ] **Título**: `runtime_services.py` acepta cualquier `host/repo:tag` y `version` deshace el pin
+- [x] **Título**: `runtime_services.py` acepta cualquier `host/repo:tag` y `version` deshace el pin
       por digest de los sidecars; `agent-runtime:v1` y `browser-runtime:v1` no se publican ni
       fijan por digest (ADR 0148 sólo cubrió las 14 plantillas). Exigir `@sha256:` o allowlist
       de registries; mapa versión→digest; añadir las dos imágenes al pipeline de release.
       **Coste**: 1,5 d.
+      _Cerrada el 2026-09-02_: una `image:`/`runtime_image` del tenant lleva `@sha256:` o viene
+      de `WORKERS_TENANT_IMAGE_REGISTRY_ALLOWLIST` (por segmentos enteros; vacía = sólo digest);
+      `version` resuelve contra `pinned_versions()` del catálogo y una versión no pineada se
+      rechaza nombrando las que hay; `agent-runtime` y `browser-runtime` se construyen y escanean
+      en `release-images.yml` (job `runtimes`), entran en `PLATFORM_APPS` y el compose del
+      instalador se las pasa al worker por `WORKERS_*_RUNTIME_IMAGE`. ADR 0148 con addendum.
+      Tests: `test_runtime_services.py`, `test_platform_images_wiring.py`.
 
 ### `task_cv_45` — Restos de menor riesgo
 

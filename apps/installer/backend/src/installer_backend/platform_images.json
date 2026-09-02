@@ -1,6 +1,6 @@
 {
   "_generated_by": ".github/workflows/release-images.yml (job `installer`) vía `python -m installer_backend.platform_release`. NO EDITAR A MANO: un digest escrito por una persona no tiene vía de refresco y congela sus CVEs para siempre (ADR 0148, condición 1).",
-  "_state": "Sin release publicada todavía: `digests` vacío significa vacío. El compose generado referencia las seis imágenes por `${PLATFORM_REGISTRY:-…}/<app>:${PLATFORM_IMAGE_TAG:-…}`, igual que antes de existir este fichero. En cuanto una release las publique y el pipeline resuelva sus digests, la misma referencia pasa a llevar `@sha256:…` sin que nadie toque el generador (ADR 0161, orden duro: el instalador no se publica antes de esto).",
+  "_state": "Sin release publicada todavía: `digests` vacío significa vacío. El compose generado referencia las ocho imágenes por `${PLATFORM_REGISTRY:-…}/<app>:${PLATFORM_IMAGE_TAG:-…}`, igual que antes de existir este fichero. En cuanto una release las publique y el pipeline resuelva sus digests, la misma referencia pasa a llevar `@sha256:…` sin que nadie toque el generador (ADR 0161, orden duro: el instalador no se publica antes de esto).",
   "registry": "ghcr.io/daycry",
   "version": "v1.0.0",
   "digests": {}

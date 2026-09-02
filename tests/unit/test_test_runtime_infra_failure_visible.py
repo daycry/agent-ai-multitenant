@@ -301,7 +301,7 @@ async def test_a_bad_aux_services_config_is_recorded_and_the_checks_still_run(
 
     calls: list[Any] = []
 
-    def _services(config: Any) -> Any:
+    def _services(config: Any, **_kw: Any) -> Any:
         calls.append(config)
         if len(calls) == 1:
             raise runtime_services.RuntimeServicesConfigError("`services[0].image` vacío")

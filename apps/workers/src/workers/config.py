@@ -82,6 +82,14 @@ class Settings(BaseSettings):
         default="agent-runtime:v1",
         description="Image the worker launches for each agent task.",
     )
+    tenant_image_registry_allowlist: list[str] = Field(
+        default_factory=list,
+        description="`task_cv_44` (auditoría 2026-09-01, B-05): registries/prefijos "
+        '(JSON, p.ej. ["ghcr.io/acme", "registry.corp:5000"]) de los que un proyecto '
+        "puede declarar imágenes SIN digest en `runtime_services` (`image:` de un "
+        "sidecar propio o `runtime_image`). Fuera de esta lista, una imagen del "
+        "tenant tiene que llevar `@sha256:`. Vacía por defecto: sólo digest.",
+    )
     browser_runtime_image: str = Field(
         default="browser-runtime:v1",
         description=(

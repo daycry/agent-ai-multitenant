@@ -63,11 +63,13 @@ motivo de omisión.
 
 **Reparto de Trivy entre los tres workflows**, para que ninguna imagen quede sin
 escanear ni se escanee dos veces por inercia: los 14 templates van con su build
-en la matriz; las 5 publicables en la release; y en `ci.yml` lo que no cae en
-ninguno de los dos — `api-server` (la base pesada de la que heredan tres
-backends vía `BASE_IMAGE`), `agent-runtime` y `browser-runtime` (los
-contenedores donde corre el código NO confiable, Principio Rector 2) y las dos
-del installer.
+en la matriz; las publicables en la release (las 5 apps y, desde el 2026-09-02
+—`task_cv_44`—, `agent-runtime` y `browser-runtime`, los contenedores donde corre
+el código NO confiable, Principio Rector 2, que hasta entonces sólo existían
+como build local sin publicar ni pinear); y en `ci.yml` lo que no cae en ninguno
+de los dos o hace falta ver ANTES de la release — `api-server` (la base pesada
+de la que heredan tres backends vía `BASE_IMAGE`), los dos runtimes en cada PR
+que los toca, y las dos del installer.
 
 > **Modo del gate desde 2026-08-19**: `security-scan` declara
 > `continue-on-error: false` — **un hallazgo SCA rompe el job**. Se pudo encender

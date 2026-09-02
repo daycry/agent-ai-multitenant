@@ -63,9 +63,15 @@ def _app_images_in_compose() -> dict[str, str]:
     prefix = APP_IMAGE_REGISTRY + "/"
     found: dict[str, str] = {}
     for service in compose["services"].values():
-        image = str(service.get("image", ""))
-        if image.startswith(prefix):
-            found[image[len(prefix) :].split(":", 1)[0]] = image
+        candidates = [str(service.get("image", ""))]
+        # `task_cv_44`: las imágenes que el worker LANZA (agent-runtime,
+        # browser-runtime) no son `image:` de un servicio; viajan en su env.
+        environment = service.get("environment") or {}
+        if isinstance(environment, dict):
+            candidates.extend(str(v) for v in environment.values())
+        for image in candidates:
+            if image.startswith(prefix):
+                found[image[len(prefix) :].split(":", 1)[0]] = image
     return found
 
 
@@ -353,3 +359,26 @@ def test_el_manifiesto_dice_que_no_se_edita_a_mano() -> None:
         "el manifiesto no dice quién lo escribe; sin esa marca el siguiente que "
         "lo abra lo tratará como configuración y teclerá un digest a mano"
     )
+
+
+def test_los_runtimes_que_lanza_el_worker_salen_del_manifiesto() -> None:
+    """`task_cv_44` (auditoría 2026-09-01, B-09): `agent-runtime:v1` y
+    `browser-runtime:v1` no se publicaban ni pineaban — el ADR 0148 cubrió las
+    plantillas y el instalador las seis apps, y las dos imágenes que el worker
+    lanza para cada tarea quedaron fuera de ambos. Entran en el manifiesto y el
+    compose se las pasa al worker por su env."""
+    from installer_backend.compose_generator import generate_compose
+    from installer_backend.platform_images import PLATFORM_APPS, load_platform_manifest
+
+    assert {"agent-runtime", "browser-runtime"} <= set(PLATFORM_APPS)
+    manifest = load_platform_manifest()
+    compose = generate_compose(_config(), monitoring=False)  # type: ignore[arg-type]
+    worker_envs = [
+        svc.get("environment") or {}
+        for name, svc in compose["services"].items()
+        if name.startswith("workers")
+    ]
+    assert worker_envs, "el compose generado no tiene lanes de workers"
+    for env in worker_envs:
+        assert env.get("WORKERS_AGENT_RUNTIME_IMAGE") == manifest.reference("agent-runtime")
+        assert env.get("WORKERS_BROWSER_RUNTIME_IMAGE") == manifest.reference("browser-runtime")

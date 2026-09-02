@@ -255,7 +255,10 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
     # ADR 0129: project-declared runtime services (sidecars + connection env) +
     # optional custom runtime image. Invalid config → actionable error, not crash.
     try:
-        services = build_project_runtime_services(repo_cfg)
+        services = build_project_runtime_services(
+            repo_cfg,
+            image_registry_allowlist=tuple(get_settings().tenant_image_registry_allowlist),
+        )
     except RuntimeServicesConfigError as exc:
         return {
             "exit_code": -1,

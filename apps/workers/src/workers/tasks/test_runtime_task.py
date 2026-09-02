@@ -504,7 +504,10 @@ async def _launch_test_runtime_plans(
     # carries `repository_config` when the orchestrator threads it; absent →
     # empty (backward-compatible, no services).
     try:
-        services = build_project_runtime_services(request.get("repository_config"))
+        services = build_project_runtime_services(
+            request.get("repository_config"),
+            image_registry_allowlist=tuple(get_settings().tenant_image_registry_allowlist),
+        )
     except RuntimeServicesConfigError as exc:
         # A bad services config must not sink the whole test run — run without
         # them (the checks that need a DB will fail visibly, which is truthful).

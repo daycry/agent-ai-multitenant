@@ -583,7 +583,10 @@ def _spawn_review_runtime(
     # ADR 0129: resolve the project's declared services (sidecars + connection
     # env). Invalid config must NOT strand the review — fall back to main only.
     try:
-        services = build_project_runtime_services(request.get("repository_config"))
+        services = build_project_runtime_services(
+            request.get("repository_config"),
+            image_registry_allowlist=tuple(get_settings().tenant_image_registry_allowlist),
+        )
     except RuntimeServicesConfigError as exc:
         _log.warning(
             "review_runtime.services_config_invalid",
