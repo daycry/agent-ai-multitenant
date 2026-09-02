@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-02** · #177, #178 y #179 mergeados; PR #182 (ola 4 + cierre del plan) abierto; el plan está en `pending_human_validation`.
+> **Última actualización: 2026-09-02** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace (PR #183) espera aprobación.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -22,12 +22,14 @@ Las 36 casillas están `[x]` con su test en verde.
 
 - **Mergeado en `master`**: PR #177 (auditoría git/dependencias + olas 0 y 1),
   #178 (ola 2 menos `task_cv_25`) y #179 (ola 3 menos `task_cv_33` y `36`).
-- **PR #182 (rama `plan/remediacion-ciclo-vida-2026-09-ola4`)**: `task_cv_25`,
-  `33`, `36` y la ola 4 entera (`task_cv_40…45`), más los criterios de cierre:
-  changelog
+- **Mergeado también (PR #182)**: `task_cv_25`, `33`, `36` y la ola 4 entera
+  (`task_cv_40…45`), más los criterios de cierre: changelog
   [`docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md)
-  y addenda en los ADR 0060, 0071, 0072, 0102, 0129, 0148 y 0163. Cuando CI
-  esté en verde: squash-merge (convención del repo) y borrar la rama.
+  y addenda en los ADR 0060, 0071, 0072, 0102, 0129, 0148 y 0163.
+- **Plan nuevo, pendiente de aprobación (PR #183)**:
+  [`remediacion-marketplace-mcp-2026-09-02.md`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md),
+  de la auditoría del 2026-09-02 al marketplace, skills/tools y MCP por proyecto.
+  No se empieza sin que el operador lo apruebe (`status: pending_approval`).
 - **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
   Hasta que el operador los valide, el plan NO pasa a `completed`.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
