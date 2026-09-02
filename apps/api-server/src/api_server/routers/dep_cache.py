@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.config import Settings, get_settings
 from api_server.db.domain import Project
+from api_server.db.models import Organization
 
 router = APIRouter(prefix="/projects/{project_id}/dep-cache", tags=["dep-cache"])
 _log = structlog.get_logger("api_server.dep_cache")
@@ -106,7 +107,13 @@ async def invalidate_dep_cache(
     template = get(payload.runtime)
 
     manager = _build_manager(settings)
-    removed = manager.invalidate(template.id, lock_hash=payload.lock_hash)
+    # `task_cv_24`: la caché vive por tenant; se invalida sólo la del que llama.
+    org = await session.get(Organization, principal.tenant_id)
+    if org is None or not org.slug:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="the tenant has no slug yet"
+        )
+    removed = manager.invalidate(template.id, lock_hash=payload.lock_hash, tenant_slug=org.slug)
 
     _log.info(
         "dep_cache.invalidate",

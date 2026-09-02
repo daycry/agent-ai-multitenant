@@ -189,9 +189,11 @@ def test_without_a_pipeline_the_hooks_are_a_noop() -> None:
     assert model.calls == 1
 
 
-def test_an_empty_prompt_does_not_run_the_hook(monkeypatch: Any) -> None:
-    # Sin contexto ni preámbulo no hay nada que escanear: gastar el hook (que es
-    # O(n) sobre el input) en una cadena vacía es coste por nada.
+def test_a_bare_task_is_still_screened_once(monkeypatch: Any) -> None:
+    # `task_cv_22` (D-03): antes, sin contexto ni preámbulo el hook no corría.
+    # Pero el título y la descripción de la tarea también son texto de terceros
+    # que viaja al modelo; lo que se escanea es lo que de verdad se manda, y
+    # eso nunca está vacío. Una vez por turno, no más.
     import agent_runtime.graph as graph_mod
 
     seen: list[str] = []
@@ -203,4 +205,53 @@ def test_an_empty_prompt_does_not_run_the_hook(monkeypatch: Any) -> None:
     monkeypatch.setattr(graph_mod, "run_hook", _spy)
     loop = _loop(_ScriptedModel(_finish()), guardrails=object())
     loop.plan(_state())
-    assert "pre_llm" not in seen
+    assert seen.count("pre_llm") == 1
+
+
+# ------------------------------------------------------------ task_cv_22
+# Auditoría 2026-09-01 (D-03): el hook leía `entry["content"]`, pero las
+# observaciones reales del bucle son `{"role": "observation", "tool": …,
+# "output": {…}}` — sin `content`. Resultado medido: cero eventos `pre_llm`
+# con la forma real, uno con la forma sintética de estos tests. Lo que se
+# escanea ahora es el mensaje que `_decide_messages` construye de verdad.
+
+
+def _real_observation(text: str) -> dict[str, Any]:
+    return {"role": "observation", "tool": "read_file", "output": {"content": text}}
+
+
+def test_a_real_observation_entry_trips_pre_llm() -> None:
+    loop = _loop(_ScriptedModel(_finish()), guardrails=build_pipeline(None))
+    out = loop.plan(_state(context=[_real_observation(_INJECTED)]))
+    hooks = {e["hook_point"] for e in out.get("guardrail_events", [])}
+    assert "pre_llm" in hooks, "la forma real de una observación no dispara pre_llm"
+
+
+def test_the_last_observation_is_screened_too() -> None:
+    loop = _loop(_ScriptedModel(_finish()), guardrails=build_pipeline(None))
+    state = _state()
+    state["last_observation"] = {"tool": "shell_exec", "output": {"stdout": _INJECTED}}
+    out = loop.plan(state)
+    hooks = {e["hook_point"] for e in out.get("guardrail_events", [])}
+    assert "pre_llm" in hooks
+
+
+def test_a_huge_prompt_is_screened_by_head_and_tail(monkeypatch: Any) -> None:
+    """Con el tope de 50k del motor, una inyección al FINAL de un contexto enorme
+    quedaba fuera del tramo escaneado: se manda cabeza y cola."""
+    import agent_runtime.graph as graph_mod
+
+    seen: list[str] = []
+
+    def _spy(pipeline: Any, **kw: Any) -> list[dict[str, Any]]:  # noqa: ARG001
+        if kw.get("hook") == "pre_llm":
+            seen.append(str(kw.get("prompt")))
+        return []
+
+    monkeypatch.setattr(graph_mod, "run_hook", _spy)
+    loop = _loop(_ScriptedModel(_finish()), guardrails=object())
+    filler = "x" * 120_000
+    loop.plan(_state(context=[_real_observation(filler), _real_observation(_INJECTED)]))
+    assert len(seen) == 1
+    assert len(seen[0]) <= 50_000 + 200
+    assert _INJECTED in seen[0]

@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-02** · rama `plan/remediacion-ciclo-vida-2026-09` (sin commitear; ver §0)
+> **Última actualización: 2026-09-02** · PR #177 (olas 0 y 1) y rama `plan/remediacion-ciclo-vida-2026-09-ola2` (ola 2; ver §0)
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -12,25 +12,31 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
-## 0. Ahora mismo (2026-09-02): remediación del ciclo de vida, olas 0 y 1 hechas
+## 0. Ahora mismo (2026-09-02): remediación del ciclo de vida, olas 0-1 en PR y ola 2 commiteada
 
-Rama `plan/remediacion-ciclo-vida-2026-09`, creada desde
-`fix/auditoria-git-dependencias-2026-09-01`; **las dos llevan trabajo sin
-commitear** (nadie pidió commit). El estado vive en el plan
-[`docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md)
-(`status: in_progress`): las olas 0 y 1 (`task_cv_00…08`, `task_cv_10…15`)
-están marcadas `[x]` con nota de cierre; quedan las olas 2 a 4, las
-actualizaciones de ADR de los criterios de cierre y el changelog. El informe
-del que sale es
-[`auditoria-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/auditoria-ciclo-vida-proyecto-2026-09-01.md).
+- **PR #177** (`plan/remediacion-ciclo-vida-2026-09` → `master`): auditoría
+  git/dependencias + olas 0 y 1 del plan
+  [`docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md)
+  (`task_cv_00…08`, `task_cv_10…15`). Dos correcciones vinieron de CI: el repo
+  formatea con `ruff format` (no black), y un id de revisión de Alembic no puede
+  pasar de 32 caracteres (`test_alembic_revision_ids_fit_in_32_chars.py` lo
+  vigila desde ahora).
+- **Rama `plan/remediacion-ciclo-vida-2026-09-ola2`** (encima de la del PR):
+  ola 2 completa salvo `task_cv_25` (bridge efímero por ejecución), anotada en
+  el plan con el patrón a seguir. Cuando #177 haga squash-merge hay que
+  rebasearla: `git rebase --onto origin/master plan/remediacion-ciclo-vida-2026-09 plan/remediacion-ciclo-vida-2026-09-ola2`.
+- Quedan las olas 3 y 4 (`task_cv_30…45`), las actualizaciones de ADR de los
+  criterios de cierre y el changelog. El informe de origen:
+  [`auditoria-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/auditoria-ciclo-vida-proyecto-2026-09-01.md).
 
-Comprobar antes de fiarse: `git status --short | wc -l` (debe dar decenas de
-ficheros), `./.venv/Scripts/python.exe -m pytest tests/unit -q` (en verde el
+Comprobar antes de fiarse: `gh pr view 177`, `git log --oneline -5` en cada
+rama, `./.venv/Scripts/python.exe -m pytest tests/unit -q` (5882 en verde el
 2026-09-02) y `grep -c "\[x\]" docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`.
-Los tests de integración nuevos (BD) sólo han corrido en CI: aquí no hay stack.
-Hay una migración nueva, `0148_task_claim_id` (columna nullable, reversible);
-la 0147 despinea `anthropic` en copias de built-ins con tabla de respaldo.
-**Orden de despliegue**: worker antes que orquestador (`claim_id`, `task_cv_13`).
+Los tests de integración nuevos (BD) sólo corren en CI. Migraciones nuevas:
+`0147_unpin_anthropic_forks` (tabla de respaldo, reversible) y
+`0148_task_claim_id` (columna nullable, reversible). **Orden de despliegue**:
+imagen del `agent-runtime` y worker antes que orquestador (`claim_id`,
+`task_cv_13`; spec y token por fichero, `task_cv_20`).
 
 Lo que sigue (§1 en adelante) describe el despliegue del 2026-08-13 y sigue
 siendo el inventario de riesgos para desplegar en otra máquina.

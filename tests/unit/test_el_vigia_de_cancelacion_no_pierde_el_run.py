@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -116,9 +119,12 @@ class _Staged:
 
     def __init__(self) -> None:
         self.cleaned = False
+        # `task_cv_20`: el spec y el token se escriben en el MISMO staging
+        self.staging_dir = Path(tempfile.mkdtemp(prefix="staged-test-"))
 
     def cleanup(self) -> None:
         self.cleaned = True
+        shutil.rmtree(self.staging_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio

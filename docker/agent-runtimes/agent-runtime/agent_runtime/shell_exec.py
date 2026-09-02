@@ -13,6 +13,7 @@ stderr and the exit code are captured and returned.
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -29,6 +30,43 @@ def _truncate(text: str) -> str:
     if len(text) <= _MAX_OUTPUT_CHARS:
         return text
     return text[:_MAX_OUTPUT_CHARS] + "\n…[truncated]"
+
+
+# `task_cv_20` (auditoría 2026-09-01, D-01): el hijo de `shell_exec` heredaba el
+# env COMPLETO del runtime — con `AGENT_TASK_SPEC` (cabeceras de MCP,
+# `approved_actions`, código de python_function) y `AGENTIC_INTERNAL_TOKEN`
+# dentro—, así que un `env` del modelo, o cualquier inyección, los leía. Lo que
+# hereda es una allowlist explícita: lo que un toolchain necesita para correr
+# (PATH, HOME, locale, el proxy de egress) y nada que identifique al run.
+_CHILD_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "TMPDIR",
+        "TZ",
+        "PYTHONDONTWRITEBYTECODE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+)
+
+
+def _child_env() -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in _CHILD_ENV_KEYS or key.startswith("AGENT_TOOLCHAIN_")
+    }
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("TERM", "dumb")
+    return env
 
 
 @dataclass
@@ -98,6 +136,7 @@ class ShellExecTool:
                 text=True,
                 timeout=self.timeout_s,
                 cwd=cwd,
+                env=_child_env(),
                 check=False,
             )
         except subprocess.TimeoutExpired:

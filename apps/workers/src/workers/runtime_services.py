@@ -190,6 +190,11 @@ class ProjectRuntimeServices:
     aux_services: tuple[AuxServiceSpec, ...] = ()
     main_env: dict[str, str] = field(default_factory=dict)
     runtime_image: str | None = None
+    # `task_cv_26` (auditoría 2026-09-01, B-06): el preview de review monta el
+    # worktree del plan en SÓLO LECTURA por defecto; lo que la app necesite
+    # escribir se declara y se monta como tmpfs; el RW completo es un opt-in.
+    preview_workspace_rw: bool = False
+    preview_writable_paths: tuple[str, ...] = ()
 
 
 def _validate_env(raw: Any, *, where: str) -> dict[str, str]:
@@ -326,9 +331,58 @@ def build_project_runtime_services(
         if runtime_image and not _IMAGE_RE.match(runtime_image):
             raise RuntimeServicesConfigError(f"invalid runtime_image reference {runtime_image!r}")
 
+    preview_rw, writable_paths = _parse_preview(repository_config.get("preview"))
     return ProjectRuntimeServices(
-        aux_services=tuple(aux), main_env=main_env, runtime_image=runtime_image
+        aux_services=tuple(aux),
+        main_env=main_env,
+        runtime_image=runtime_image,
+        preview_workspace_rw=preview_rw,
+        preview_writable_paths=writable_paths,
     )
+
+
+_MAX_WRITABLE_PATHS = 16
+
+
+def _parse_preview(raw: Any) -> tuple[bool, tuple[str, ...]]:
+    """``repository_config.preview`` → ``(workspace_rw, writable_paths)`` (`task_cv_26`).
+
+    ``writable_paths`` son rutas RELATIVAS al worktree, normalizadas, sin ``..``
+    ni componentes vacíos: cada una se monta como tmpfs sobre el bind de sólo
+    lectura, así que tiene que existir en el repositorio (Docker no crea el
+    punto de montaje dentro de un bind RO)."""
+    if raw is None:
+        return False, ()
+    if not isinstance(raw, Mapping):
+        raise RuntimeServicesConfigError("repository_config.preview must be a mapping")
+    workspace_rw = raw.get("workspace_rw", False)
+    if not isinstance(workspace_rw, bool):
+        raise RuntimeServicesConfigError("repository_config.preview.workspace_rw must be a bool")
+    paths_raw = raw.get("writable_paths") or []
+    if not isinstance(paths_raw, list):
+        raise RuntimeServicesConfigError("repository_config.preview.writable_paths must be a list")
+    if len(paths_raw) > _MAX_WRITABLE_PATHS:
+        raise RuntimeServicesConfigError(
+            f"too many preview.writable_paths ({len(paths_raw)} > {_MAX_WRITABLE_PATHS})"
+        )
+    cleaned: list[str] = []
+    for entry in paths_raw:
+        if not isinstance(entry, str) or not entry.strip() or "\x00" in entry:
+            raise RuntimeServicesConfigError(f"invalid preview.writable_paths entry {entry!r}")
+        text = entry.strip().replace("\\", "/")
+        if text.startswith("/"):
+            raise RuntimeServicesConfigError(
+                f"preview.writable_paths entry {entry!r} must be relative to the workspace"
+            )
+        parts = [part for part in text.split("/") if part not in ("", ".")]
+        if not parts or any(part == ".." for part in parts):
+            raise RuntimeServicesConfigError(
+                f"preview.writable_paths entry {entry!r} escapes the workspace"
+            )
+        normalized = "/".join(parts)
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    return workspace_rw, tuple(cleaned)
 
 
 __all__ = [

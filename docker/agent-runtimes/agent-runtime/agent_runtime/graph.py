@@ -22,6 +22,7 @@ so the loop is exercised offline and deterministically by the tests.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -34,7 +35,7 @@ from shared_llm import LLMError
 
 from agent_runtime.approval import ApprovalGate
 from agent_runtime.check_declarations import declaration_coverage
-from agent_runtime.guardrails import run_hook
+from agent_runtime.guardrails import _HOOK_INPUT_MAX, run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient, ModelDecision
 from agent_runtime.nudges import (
@@ -272,6 +273,56 @@ def _loop_trip_outcome(
 
 # P1-6: techo del scratchpad (sticky, entra al prompt cada turno).
 _AGENT_PLAN_MAX_CHARS = 1500
+# `task_cv_21` (auditoría 2026-09-01, D-02): tope de una observación. Una
+# lectura de 900 KB entraba dos veces al prompt (~450k tokens en un turno) y
+# entera al `steps_log`; el presupuesto de tokens se evaluaba al turno
+# siguiente, con el gasto hecho. Se recorta donde nace, con marcador explícito.
+_MAX_OBSERVATION_CHARS = 24_000
+
+
+def _cap_observation_value(
+    value: Any, *, limit: int = _MAX_OBSERVATION_CHARS
+) -> tuple[Any, int, bool]:
+    """``(valor acotado, tamaño total en chars, truncado)`` de la salida de una tool.
+
+    Para el caso de `read_file` (un dict con ``content``) se recorta el
+    contenido y se conserva el resto del dict; para cualquier otra forma se
+    recorta la serialización. El marcador imita al de `list_files` y dice cómo
+    seguir: ``read_file`` acepta ``offset``/``limit``."""
+    if value is None:
+        return None, 0, False
+    text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+    total = len(text)
+    if total <= limit:
+        return value, total, False
+    if isinstance(value, dict) and isinstance(value.get("content"), str):
+        content = value["content"]
+        keep = max(limit - (total - len(content)), 1_000)
+        capped = dict(value)
+        capped["content"] = content[:keep]
+        capped["truncated"] = True
+        capped["total_chars"] = len(content)
+        capped["note"] = (
+            f"showing the first {keep} of {len(content)} chars; call read_file with "
+            "offset/limit to read the rest"
+        )
+        return capped, total, True
+    head = text[:limit]
+    return (
+        f"{head}\n[... showing the first {limit} of {total} chars; narrow the request or, "
+        "for files, call read_file with offset/limit ...]",
+        total,
+        True,
+    )
+
+
+def _head_and_tail(text: str, cap: int) -> str:
+    """Cabeza y cola de ``text`` dentro de ``cap`` caracteres (`task_cv_22`)."""
+    if len(text) <= cap:
+        return text
+    marker = "\n[... middle omitted for screening ...]\n"
+    half = max((cap - len(marker)) // 2, 1)
+    return text[:half] + marker + text[-half:]
 
 
 def _no_recall(_task: AgentTask) -> list[dict[str, Any]]:
@@ -526,33 +577,34 @@ class _AgentLoop:
         task = state["task"]
         hits = list(self.deps.recall(task))
         is_stub = self.deps.recall is _no_recall
-        context = [{"role": "memory", **hit} for hit in hits]
-        # P0-2: pasajes de KB pre-fetcheados (auto-RAG) — mismo raíl que las
-        # memorias, tagueados como "knowledge" para que el modelo distinga la
-        # fuente. Bare run (stub) → sin knowledge, y el summary no lo menciona.
         knowledge_is_stub = self.deps.knowledge is _no_knowledge
         knowledge_hits = [] if knowledge_is_stub else list(self.deps.knowledge(task))
-        context += [{"role": "knowledge", **hit} for hit in knowledge_hits]
-        # g1 (ADR 0102): recalled memory is an attacker-influenceable input path —
-        # a prior run may have distilled a malicious tool output into team/global
-        # memory ("ignore previous instructions…"). Screen it for prompt injection
-        # before it reaches the model, exactly like a tool output. LOG mode: records,
-        # never blocks. Scans every string field of the hit (content/title/…).
-        # KB passages (tenant-uploaded documents) are screened the same way.
+        # `task_cv_27` (E-03): el guardrail del recall era sólo LOG — un hit con
+        # `action == "block"` entraba igual al contexto. Ahora se escanea cada
+        # hit ANTES de aceptarlo y el bloqueado se queda fuera (y contado).
+        context: list[dict[str, Any]] = []
         guardrail_events: list[dict[str, Any]] = []
-        for tool_name, tool_hits in (
-            ("memory_recall", hits),
-            ("rag_search", knowledge_hits),
+        blocked = 0
+        for role, tool_name, tool_hits in (
+            ("memory", "memory_recall", hits),
+            ("knowledge", "rag_search", knowledge_hits),
         ):
             for hit in tool_hits:
                 text = " ".join(str(v) for v in hit.values() if isinstance(v, str))
-                guardrail_events += run_hook(
+                events = run_hook(
                     self.deps.guardrails,
                     hook="post_tool",
                     tool_name=tool_name,
                     tool_result=text,
                 )
+                guardrail_events += events
+                if any(str(e.get("action")) == "block" for e in events):
+                    blocked += 1
+                    continue
+                context.append({"role": role, **hit})
         summary = f"Recalled {len(hits)} memory item(s)"
+        if blocked:
+            summary += f" ({blocked} blocked by guardrails and dropped)"
         if not knowledge_is_stub:
             summary += f" + {len(knowledge_hits)} knowledge passage(s)"
         if is_stub:
@@ -1014,23 +1066,27 @@ class _AgentLoop:
         plataforma.
 
         Best-effort como el resto del seam: sin pipeline o con un fallo, `[]`.
+
+        `task_cv_22` (auditoría 2026-09-01, D-03): la primera versión leía
+        `entry["content"]` del contexto, y las observaciones reales del bucle
+        son `{"role": "observation", "tool": …, "output": {…}}` — sin
+        `content`. Medido: cero eventos `pre_llm` con la forma real. Ahora se
+        escanea EXACTAMENTE lo que `_decide_messages` va a mandar (sistema +
+        usuario), y ante el tope del motor se manda cabeza y cola, para que
+        una inyección al final de un contexto enorme no quede fuera del tramo.
         """
-        parts: list[str] = []
-        preamble = state.get("system_preamble")
-        if isinstance(preamble, str) and preamble:
-            parts.append(preamble)
-        for entry in state.get("context") or []:
-            if isinstance(entry, dict):
-                content = entry.get("content")
-                if isinstance(content, str) and content:
-                    parts.append(content)
-        if not parts:
+        from agent_runtime.providers import _decide_messages
+
+        messages = _decide_messages(dict(state))
+        text = "\n".join(m.content for m in messages if m.content)
+        if not text.strip():
             return []
+        text = _head_and_tail(text, _HOOK_INPUT_MAX)
         return run_hook(
             self.deps.guardrails,
             hook="pre_llm",
-            prompt="\n".join(parts),
-            metadata={"parts": len(parts)},
+            prompt=text,
+            metadata={"messages": len(messages), "chars": len(text)},
         )
 
     def _screen_response(self, decision: ModelDecision) -> list[dict[str, Any]]:
@@ -1266,13 +1322,26 @@ class _AgentLoop:
                 "guardrail_events": plan_events,
             }
         result, guardrail_events = self._screened_tool_call(tool, args)
+        # `task_cv_21`: la salida se acota AQUÍ, donde nace, y el mismo valor
+        # acotado va al step y a la observación — el modelo y el `steps_log`
+        # ven lo mismo, y ninguno ve 900 KB.
+        capped_output, total_chars, output_truncated = _cap_observation_value(result.output)
+        capped_error, _error_total, error_truncated = _cap_observation_value(result.error)
+        step_result: dict[str, Any] = {
+            "ok": result.ok,
+            "output": capped_output,
+            "error": capped_error,
+        }
+        if output_truncated or error_truncated:
+            step_result["truncated"] = True
+            step_result["bytes_total"] = total_chars
         steps = [
             tool_call_step(
                 len(state["steps"]),
                 "act",
                 tool=tool,
                 args=args,
-                result=result.as_dict(),
+                result=step_result,
                 status="ok" if result.ok else "error",
                 summary=f"Tool '{tool}' → {'ok' if result.ok else 'error'}",
             )
@@ -1280,8 +1349,8 @@ class _AgentLoop:
         observation = {
             "tool": tool,
             "ok": result.ok,
-            "output": result.output,
-            "error": result.error,
+            "output": capped_output,
+            "error": capped_error,
         }
         # AUD16-20: la racha de transporte de stack_exec — cualquier stack_exec
         # con transporte sano (incluso rc!=0 del toolchain) la resetea.

@@ -71,16 +71,32 @@ def test_mcp_tool_is_parked_under_customer_external(capsys: pytest.CaptureFixtur
     assert "external_http_post" in steps[0]["summary"]
 
 
-def test_the_regression_this_closes(capsys: pytest.CaptureFixture[str]) -> None:
-    """Un spec SIN `approval_category` es el estado anterior a T2: no se para.
-
-    Es el control negativo del test de arriba — si ambos pasaran igual, el
-    primero no estaría demostrando nada.
-    """
+def test_a_listed_spec_without_category_is_the_operators_opt_out(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`task_cv_23` (D-04): un spec LISTADO sin `approval_category` es el
+    opt-out explícito del operador (`security_level` sin gate en el
+    api-server) y sigue sin pararse. Lo que cambia es lo que NUNCA se listó
+    (abajo): eso ya no pasa en auto."""
     blind = {k: v for k, v in _MCP_SPEC.items() if k != "approval_category"}
     assert not _approval_steps(
         _events(_spec(policy=_CUSTOMER_EXTERNAL, tool_specs=[blind]), capsys)
     )
+
+
+def test_an_mcp_tool_no_spec_ever_listed_is_parked_under_customer_external(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`register_mcp_server` registra TODO lo que lista el servidor, también lo
+    que el api-server no serializó en `tool_specs`: sin fallback, el gate
+    devolvía `None` para ese nombre y la tool corría en auto."""
+    steps = _approval_steps(_events(_spec(policy=_CUSTOMER_EXTERNAL, tool_specs=[]), capsys))
+    assert steps, "una tool MCP sin spec pasó el gate en auto bajo «Cliente Externo»"
+    assert "docling.convert" in steps[0]["summary"]
+
+
+def test_sandbox_lets_an_unlisted_mcp_tool_run(capsys: pytest.CaptureFixture[str]) -> None:
+    assert not _approval_steps(_events(_spec(policy=_SANDBOX, tool_specs=[]), capsys))
 
 
 def test_sandbox_preset_does_not_park_it(capsys: pytest.CaptureFixture[str]) -> None:

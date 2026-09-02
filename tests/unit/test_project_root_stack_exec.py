@@ -92,9 +92,15 @@ def _capture_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, A
     from workers.tasks import stack_exec_task as tasks
 
     def _dep_cache(
-        template: Any, worktree_host_path: str, data_root: str, project_root: str | None = None
+        template: Any,
+        worktree_host_path: str,
+        data_root: str,
+        project_root: str | None = None,
+        *,
+        tenant_slug: str | None = None,
     ) -> str | None:
         seen["dep_cache_root"] = project_root
+        seen["dep_cache_tenant"] = tenant_slug
         return None
 
     monkeypatch.setattr(tasks, "_resolve_stack_dep_cache", _dep_cache)
@@ -212,7 +218,11 @@ def test_resolve_stack_dep_cache_finds_a_nested_lockfile(tmp_path: Path) -> None
     data_root = tmp_path / "data"
 
     warm = _resolve_stack_dep_cache(
-        get("php-phpunit"), str(worktree), str(data_root), project_root="ci4build"
+        get("php-phpunit"),
+        str(worktree),
+        str(data_root),
+        project_root="ci4build",
+        tenant_slug="acme",
     )
     assert warm is not None
     assert Path(warm).is_dir()
@@ -220,4 +230,9 @@ def test_resolve_stack_dep_cache_finds_a_nested_lockfile(tmp_path: Path) -> None
 
     # Sin la raíz, el lockfile no aparece y la caché se queda apagada (el
     # comportamiento de hoy, que es justo el que el ADR 0162 mide).
-    assert _resolve_stack_dep_cache(get("php-phpunit"), str(worktree), str(data_root)) is None
+    assert (
+        _resolve_stack_dep_cache(
+            get("php-phpunit"), str(worktree), str(data_root), tenant_slug="acme"
+        )
+        is None
+    )

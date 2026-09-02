@@ -25,7 +25,7 @@ def test_mount_for_returns_entry_when_lock_hash_present(tmp_path: Path) -> None:
     from shared_test_runtimes.dep_cache import DepCacheManager
 
     mgr = DepCacheManager(tmp_path)
-    entry = mgr.mount_for(_template("python-pytest"), "abc123")
+    entry = mgr.mount_for(_template("python-pytest"), "abc123", tenant_slug="acme")
     assert entry is not None
     assert entry.container_mount == "/home/agent/.cache/pip"
     assert entry.host_path.is_dir()
@@ -37,7 +37,7 @@ def test_mount_for_returns_none_when_lock_hash_missing(tmp_path: Path) -> None:
     from shared_test_runtimes.dep_cache import DepCacheManager
 
     mgr = DepCacheManager(tmp_path)
-    entry = mgr.mount_for(_template("python-pytest"), None)
+    entry = mgr.mount_for(_template("python-pytest"), None, tenant_slug="acme")
     assert entry is None
     # No directory created on disk either.
     assert not any(tmp_path.iterdir())
@@ -50,7 +50,7 @@ def test_mount_for_returns_none_when_template_has_no_dep_cache(
 
     mgr = DepCacheManager(tmp_path)
     # generic-shell has dep_cache_mount=None.
-    entry = mgr.mount_for(_template("generic-shell"), "abc123")
+    entry = mgr.mount_for(_template("generic-shell"), "abc123", tenant_slug="acme")
     assert entry is None
 
 
@@ -71,7 +71,7 @@ def test_mount_path_matches_template_per_runtime(tmp_path: Path) -> None:
         ("dotnet-test", "/home/agent/.nuget/packages"),
     ]
     for template_id, expected_mount in cases:
-        entry = mgr.mount_for(_template(template_id), "h")
+        entry = mgr.mount_for(_template(template_id), "h", tenant_slug="acme")
         assert entry is not None
         assert entry.container_mount == expected_mount, (
             f"{template_id}: expected {expected_mount}, got {entry.container_mount}"
@@ -86,10 +86,10 @@ def test_warm_cache_skips_pre_install_intent(tmp_path: Path) -> None:
     from shared_test_runtimes.dep_cache import DepCacheManager
 
     mgr = DepCacheManager(tmp_path)
-    e1 = mgr.mount_for(_template("python-pytest"), "abc")
+    e1 = mgr.mount_for(_template("python-pytest"), "abc", tenant_slug="acme")
     assert e1 is not None
     (e1.host_path / "pytest-8.2-py3-none-any.whl").write_text("(fake wheel)")
 
-    e2 = mgr.mount_for(_template("python-pytest"), "abc")
+    e2 = mgr.mount_for(_template("python-pytest"), "abc", tenant_slug="acme")
     assert e2 is not None
     assert (e2.host_path / "pytest-8.2-py3-none-any.whl").exists()

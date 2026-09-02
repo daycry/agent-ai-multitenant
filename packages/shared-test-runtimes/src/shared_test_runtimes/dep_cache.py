@@ -34,6 +34,7 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
 import shutil
 import time
 from collections.abc import Mapping
@@ -193,6 +194,31 @@ class CacheEntry:
         return self.host_path.name
 
 
+_TENANT_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_LEGACY_ENTRY_RE = re.compile(
+    "^(?:"
+    + "|".join(re.escape(p) for p in sorted({v[1] for v in RUNTIME_LOCK_FILES.values()}))
+    + r")-[0-9a-f]{8,}$"
+)
+_RUNTIME_UID = 1000
+
+
+def _looks_like_legacy_entry(name: str) -> bool:
+    """¿Es un `{prefix}-{hash}` del layout plano anterior a `task_cv_24`?"""
+    return bool(_LEGACY_ENTRY_RE.match(name))
+
+
+def _own_for_runtime(path: Path) -> None:
+    """Deja ``path`` en 0755 y, si el proceso es root, en manos del uid 1000."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o755)
+    geteuid = getattr(os, "geteuid", None)
+    chown = getattr(os, "chown", None)  # no existe en Windows
+    if geteuid is not None and chown is not None and geteuid() == 0:
+        with contextlib.suppress(OSError):
+            chown(path, _RUNTIME_UID, _RUNTIME_UID)
+
+
 class DepCacheManager:
     """Owner of the on-host dep-cache directory tree.
 
@@ -211,20 +237,33 @@ class DepCacheManager:
 
     # --- path helpers ---------------------------------------------------
 
+    def tenant_dir(self, tenant_slug: str) -> Path:
+        """El subárbol de UN tenant (`task_cv_24`, auditoría 2026-09-01 B-04).
+
+        La caché se monta RW en un contenedor no confiable donde maven, bundler
+        o composer no verifican contenido: compartirla entre tenants con el
+        mismo lockfile era dejar que uno envenenara la del otro. El slug se
+        valida aquí porque forma parte de una ruta del host."""
+        if not isinstance(tenant_slug, str) or not _TENANT_SLUG_RE.match(tenant_slug):
+            raise ValueError(f"invalid tenant slug for the dep-cache: {tenant_slug!r}")
+        return self._root / tenant_slug
+
     def cache_path_for(
         self,
         template: RuntimeTemplate,
         lock_hash: str,
+        *,
+        tenant_slug: str,
     ) -> Path:
-        """Return the on-host directory for a (template, lock_hash) pair.
+        """Return the on-host directory for a (tenant, template, lock_hash) triple.
 
         Naming uses the runtime's prefix (``pip``, ``npm``, …) rather
         than the template id, so two templates that share a stack
         (e.g. ``node-jest`` and ``node-vitest``) reuse the same cache
-        when their lock file is identical.
+        when their lock file is identical — within the SAME tenant.
         """
         prefix = RUNTIME_LOCK_FILES.get(template.id, (None, template.id))[1]
-        return self._root / f"{prefix}-{lock_hash}"
+        return self.tenant_dir(tenant_slug) / f"{prefix}-{lock_hash}"
 
     # --- task_06_09 — persistence --------------------------------------
 
@@ -232,6 +271,8 @@ class DepCacheManager:
         self,
         template: RuntimeTemplate,
         lock_hash: str,
+        *,
+        tenant_slug: str,
     ) -> CacheEntry:
         """Create the cache dir if missing, touch its mtime, return entry.
 
@@ -240,17 +281,15 @@ class DepCacheManager:
         ``pre_install`` populates it on first use. The mtime touch is
         what the TTL purge uses to decide "still in use".
         """
-        host_path = self.cache_path_for(template, lock_hash)
+        host_path = self.cache_path_for(template, lock_hash, tenant_slug=tenant_slug)
         host_path.mkdir(parents=True, exist_ok=True)
-        # The worker creates this dir as root, but the runtime container that
-        # writes into the bind-mounted cache runs as a NON-root user
-        # (workers.isolation.AGENT_UID_GID = 1000:1000). Without a world-writable
-        # mode the tool (composer/npm/pip) can't populate the cache and warns
-        # "cache directory ... not writable" on EVERY command — noise that can
-        # send the agent into a retry loop (repetitive_loop_detected). Re-chmod
-        # on every ensure so a dir created cold (0755) before this fix is healed.
-        with contextlib.suppress(OSError):
-            os.chmod(host_path, 0o777)
+        # The runtime container that writes into the bind-mounted cache runs as
+        # a NON-root user (workers.isolation.AGENT_UID_GID = 1000:1000). The old
+        # answer was `chmod 0777` — world-writable for every uid on the host.
+        # `task_cv_24`: the dir is OWNED by uid 1000 instead (best-effort chown
+        # when the worker runs as root) and stays 0755. Re-applied on every
+        # ensure so a dir created before this fix is healed.
+        _own_for_runtime(host_path)
         # Touch BOTH atime and mtime — different filesystems honor
         # one or the other.
         now = time.time()
@@ -265,17 +304,18 @@ class DepCacheManager:
             container_mount=template.dep_cache_mount or "",
         )
 
-    # --- task_06_10 — mount decision -----------------------------------
-
     def mount_for(
         self,
         template: RuntimeTemplate,
         lock_hash: str | None,
+        *,
+        tenant_slug: str,
     ) -> CacheEntry | None:
         """Resolve to a :class:`CacheEntry` ready to bind into the
         test-runtime, or ``None`` when caching should be skipped.
 
         Skip conditions:
+
           * The template declares no ``dep_cache_mount``
             (generic-shell, generic-http).
           * ``lock_hash`` is None — the worktree has no lock file
@@ -287,9 +327,7 @@ class DepCacheManager:
         """
         if template.dep_cache_mount is None or lock_hash is None:
             return None
-        return self.ensure_entry(template, lock_hash)
-
-    # --- task_06_11 — TTL purge ----------------------------------------
+        return self.ensure_entry(template, lock_hash, tenant_slug=tenant_slug)
 
     def purge_expired(
         self,
@@ -307,16 +345,26 @@ class DepCacheManager:
         removed: list[Path] = []
         if not self._root.exists():
             return removed
-        for entry in self._root.iterdir():
-            if not entry.is_dir():
+        for top in self._root.iterdir():
+            if not top.is_dir():
                 continue
-            try:
-                mtime = entry.stat().st_mtime
-            except FileNotFoundError:
+            if _looks_like_legacy_entry(top.name):
+                # `task_cv_24`: layout plano anterior (`{prefix}-{hash}` en la
+                # raíz, compartido entre tenants). Se purga: no se puede saber
+                # de quién era ni quién lo escribió.
+                shutil.rmtree(top, ignore_errors=True)
+                removed.append(top)
                 continue
-            if mtime < threshold:
-                shutil.rmtree(entry, ignore_errors=True)
-                removed.append(entry)
+            for entry in top.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    mtime = entry.stat().st_mtime
+                except FileNotFoundError:
+                    continue
+                if mtime < threshold:
+                    shutil.rmtree(entry, ignore_errors=True)
+                    removed.append(entry)
         return removed
 
     # --- task_06_12 — invalidate ---------------------------------------
@@ -325,8 +373,10 @@ class DepCacheManager:
         self,
         template_id: str,
         lock_hash: str | None = None,
+        *,
+        tenant_slug: str,
     ) -> list[Path]:
-        """Delete one (or all) cache entries for a runtime.
+        """Delete one (or all) cache entries for a runtime, within ONE tenant.
 
         Called by the "Invalidar caché" UI button (task_06_12). When
         ``lock_hash`` is given, only that single entry is removed;
@@ -334,18 +384,17 @@ class DepCacheManager:
         wiped. Returns the list of removed paths.
         """
         prefix = RUNTIME_LOCK_FILES.get(template_id, (None, template_id))[1]
-        if not prefix or not self._root.exists():
+        tenant_root = self.tenant_dir(tenant_slug)
+        if not prefix or not tenant_root.exists():
             return []
-
         removed: list[Path] = []
         if lock_hash is not None:
-            target = self._root / f"{prefix}-{lock_hash}"
+            target = tenant_root / f"{prefix}-{lock_hash}"
             if target.exists():
                 shutil.rmtree(target, ignore_errors=True)
                 removed.append(target)
             return removed
-
-        for entry in self._root.iterdir():
+        for entry in tenant_root.iterdir():
             if not entry.is_dir() or not entry.name.startswith(f"{prefix}-"):
                 continue
             shutil.rmtree(entry, ignore_errors=True)
@@ -353,14 +402,21 @@ class DepCacheManager:
         return removed
 
     def invalidate_all(self) -> list[Path]:
-        """Nuke every cache entry. Useful for ops scripts ("free disk now")."""
+        """Nuke every cache entry of every tenant. Useful for ops scripts."""
         if not self._root.exists():
             return []
         removed: list[Path] = []
-        for entry in self._root.iterdir():
-            if entry.is_dir():
-                shutil.rmtree(entry, ignore_errors=True)
-                removed.append(entry)
+        for top in self._root.iterdir():
+            if not top.is_dir():
+                continue
+            if _looks_like_legacy_entry(top.name):
+                shutil.rmtree(top, ignore_errors=True)
+                removed.append(top)
+                continue
+            for entry in top.iterdir():
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                    removed.append(entry)
         return removed
 
 

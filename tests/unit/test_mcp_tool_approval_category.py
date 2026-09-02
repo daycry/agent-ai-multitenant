@@ -162,8 +162,15 @@ def test_a_spec_cannot_downgrade_a_builtin() -> None:
     assert merged["write_file"] == DEFAULT_TOOL_CATEGORIES["write_file"]
 
 
-def test_specs_without_category_change_nothing() -> None:
-    assert tool_categories_from_specs([{"name": "x.y"}]) == dict(DEFAULT_TOOL_CATEGORIES)
+def test_specs_without_category_are_recorded_as_the_operators_opt_out() -> None:
+    """`task_cv_23`: un spec listado SIN categoría ya no «no cambia nada»: se
+    anota como opt-out explícito (`UNGATED_TOOL`) para distinguirlo de una tool
+    que nadie catalogó, que es la que cae al fallback del gate."""
+    from agent_runtime.approval import UNGATED_TOOL
+
+    merged = tool_categories_from_specs([{"name": "x.y"}])
+    assert merged["x.y"] == UNGATED_TOOL
+    assert {k: v for k, v in merged.items() if k != "x.y"} == dict(DEFAULT_TOOL_CATEGORIES)
     assert tool_categories_from_specs(None) == dict(DEFAULT_TOOL_CATEGORIES)
     assert tool_categories_from_specs([]) == dict(DEFAULT_TOOL_CATEGORIES)
 
@@ -250,6 +257,10 @@ def test_the_regression_this_closes() -> None:
     """Sin categorías de spec, «Cliente Externo» no detenía la tool MCP.
 
     Es el estado exacto anterior a T2: el gate con SOLO el mapa de builtins.
+    `task_cv_23` (auditoría 2026-09-01, D-04) cierra también ESTE agujero por
+    el otro lado: una tool con namespace que ningún spec catalogó cae al
+    criterio de `spec_approval_category` para `mcp_tool` y se para. El opt-out
+    del operador sigue siendo el spec listado sin categoría (test de arriba).
     """
     blind = ApprovalGate({"categories": preset_decisions("customer-external")})
-    assert blind.review("docling.convert") is None
+    assert blind.review("docling.convert") == "external_http_post"

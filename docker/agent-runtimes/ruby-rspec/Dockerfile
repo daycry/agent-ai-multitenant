@@ -63,6 +63,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN gem install bundler rspec
+# 2026-09-02: CVE-2026-80212 (HIGH, DoS en `resolv`) afecta a la gema POR DEFECTO
+# `resolv` 0.3.1 que trae el propio intérprete Ruby 3.3, con fix publicado en
+# 0.3.2 / 0.7.2. Refrescar el digest de la base no lo cierra (la imagen oficial
+# sigue empaquetando 0.3.1) y `apt-get upgrade` no toca las gemas. Se instala la
+# versión corregida —RubyGems prefiere la instalada a la por defecto cuando es más
+# nueva— y se retira el gemspec 0.3.1 de `specifications/default/`, que es lo que
+# Trivy escanea: sin quitarlo, el gate seguiría rojo con la gema buena ya cargada.
+# El gemspec no basta: el código de un default gem vive en `lib/ruby/3.3.0/` y
+# `require "resolv"` lo encuentra en $LOAD_PATH antes de activar ninguna gema
+# (comprobado en CI: con el gemspec fuera seguía cargando 0.3.1). Se retira
+# también ese fichero para que RubyGems resuelva a la 0.7.2 instalada.
+RUN gem install resolv -v '~> 0.7.2' --no-document  && rm -f /usr/local/lib/ruby/gems/3.3.0/specifications/default/resolv-0.3.1.gemspec  && rm -rf /usr/local/lib/ruby/3.3.0/resolv.rb /usr/local/lib/ruby/3.3.0/resolv  && ruby -e 'require "resolv"; abort("resolv sin parchear") unless Gem::Version.new(Resolv::VERSION) >= Gem::Version.new("0.7.2")'
 
 WORKDIR /workspace
 

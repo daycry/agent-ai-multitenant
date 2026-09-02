@@ -129,6 +129,8 @@ def _resolve_stack_dep_cache(
     worktree_host_path: str,
     data_root: str,
     project_root: str | None = None,
+    *,
+    tenant_slug: str | None = None,
 ) -> str | None:
     """Resolve the warm dep-cache host path for a stack command, or None.
 
@@ -145,9 +147,12 @@ def _resolve_stack_dep_cache(
 
     try:
         lock = compute_lock_hash(Path(worktree_host_path), template.id, project_root=project_root)
-        if not lock.hash:
+        if not lock.hash or not tenant_slug:
+            # `task_cv_24`: sin tenant no hay caché — nunca una compartida.
             return None
-        entry = DepCacheManager(Path(data_root) / "dep-cache").mount_for(template, lock.hash)
+        entry = DepCacheManager(Path(data_root) / "dep-cache").mount_for(
+            template, lock.hash, tenant_slug=tenant_slug
+        )
         return str(entry.host_path) if entry is not None else None
     except Exception:  # pragma: no cover - dep-cache is a best-effort optimisation
         return None
@@ -287,7 +292,11 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
     # La precedencia del ADR 0162 gobierna DÓNDE SE EJECUTA (`exec_cwd`, abajo);
     # la caché es otra pregunta y tiene otra respuesta.
     dep_cache_host_path = _resolve_stack_dep_cache(
-        template, worktree_host_path, settings.data_root, project_root=project_root
+        template,
+        worktree_host_path,
+        settings.data_root,
+        project_root=project_root,
+        tenant_slug=org_slug,
     )
 
     spec = TestRuntimeSpec(
