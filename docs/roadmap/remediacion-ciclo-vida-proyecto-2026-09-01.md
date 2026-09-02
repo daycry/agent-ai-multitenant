@@ -417,17 +417,20 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_43` — Timeouts de git remoto, DLQ con lector y quiesce que no deja facturando (G-07, A-09, G-08)
 
-- [ ] **Título**: `_run_git` fija 120 s también para push/fetch de remoto (un repo grande nunca
+- [x] **Título**: `_run_git` fija 120 s también para push/fetch de remoto (un repo grande nunca
       cierra); `dlq:executions` no tiene lector; el quiesce nocturno mata el worker y deja al
       agent-runtime facturando hasta 6-7 h. `timeout` parametrizable (`WORKERS_GIT_REMOTE_TIMEOUT_S`);
       métrica `agentic_dlq_depth` + endpoint System Admin; señal `worker_shutting_down` que mata
       los contenedores del worker y sella las filas (`failed:quiesced`).
       **Coste**: 1,5 d.
-      _Parcial el 2026-09-02_: `WORKERS_GIT_REMOTE_TIMEOUT_S` (300 s por defecto) acota
+      _Cerrada el 2026-09-02_: `WORKERS_GIT_REMOTE_TIMEOUT_S` (300 s por defecto) acota
       fetch/push/pull/ls-remote/clone en `_run_git`, lo local sigue a 120 s y el vencimiento es un
       `GitCommandError` (`test_el_git_remoto_tiene_timeout.py`); `dlq:executions` entra en
-      `agentic_dlq_depth` (`test_the_executions_dead_letter_stream_is_sampled`). Pendientes: el
-      endpoint System Admin de la DLQ y la señal `worker_shutting_down`.
+      `agentic_dlq_depth` y `GET /admin/dead-letters` (System Admin) enseña profundidad y últimas
+      entradas de cada DLQ; cada contenedor lleva la etiqueta `com.agentic-platform.worker` y al
+      recibir `worker_shutting_down` el worker mata SUS agent-runtimes y sella sus filas
+      (`failed`, `abort_code=quiesced`, `workers.quiesce`). Tests:
+      `test_el_quiesce_no_deja_facturando.py`, `test_el_mantenimiento_respeta_las_ejecuciones_vivas.py`.
 
 ### `task_cv_44` — Imágenes del tenant por digest y con allowlist (B-05, B-09)
 

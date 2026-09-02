@@ -13,7 +13,9 @@ inside the image in Fase C — here we only orchestrate the sandbox.
 from __future__ import annotations
 
 import contextlib
+import os
 import secrets
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -43,6 +45,16 @@ _POLL_INTERVAL_S = 0.25
 # easy to find and reap.
 #: `task_cv_25`: etiqueta de los bridges de run, para poder podarlos.
 _RUN_BRIDGE_LABEL = "com.agentic-platform.run-bridge"
+
+#: `task_cv_43`: qué worker lanzó el contenedor. Al apagarse (`worker_shutting_down`)
+#: el worker mata SUS contenedores y sella sus runs (`workers.quiesce`).
+WORKER_LABEL = "com.agentic-platform.worker"
+
+
+def worker_identity() -> str:
+    """Identidad estable del worker dentro del compose: su hostname."""
+    return os.environ.get("HOSTNAME") or socket.gethostname()
+
 
 _BASE_LABELS = {
     "com.agentic-platform.component": "agent-runtime",
@@ -327,7 +339,7 @@ class AgentContainerRunner:
                 command=spec.command,
                 environment=environment,
                 name=spec.name,
-                labels={**_BASE_LABELS, **spec.labels},
+                labels={**_BASE_LABELS, WORKER_LABEL: worker_identity(), **spec.labels},
                 detach=True,
                 **kwargs,
             )
