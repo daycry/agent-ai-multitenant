@@ -46,7 +46,7 @@ el modelo ve. La ola 4 es operación.
 1. Todos los checkboxes marcados `[x]` con su test automático en verde.
 2. Suites `unit` + `integration` + runtime sin regresiones respecto al baseline.
 3. Tests humanos `human_cv_01..04` (§Tests humanos) validados por el operador.
-4. Entrada en `docs/07-changelog/remediacion-ciclo-vida-proyecto.md`.
+4. Entrada en `docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`.
 5. Los ADR 0060, 0071, 0072, 0102, 0129, 0149 y 0163 actualizados en el mismo commit que
    los cambios que los contradicen (regla de precedencia de `CLAUDE.md`).
 
