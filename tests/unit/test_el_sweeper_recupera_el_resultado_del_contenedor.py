@@ -73,7 +73,7 @@ def test_an_execution_error_line_is_a_failed_result_with_its_reason() -> None:
     assert "529" in (result.output or "") + (result.abort_code or "")
 
 
-@pytest.mark.parametrize("logs", ["", "sin nada terminal\n{\"event\": \"execution.step\"}"])
+@pytest.mark.parametrize("logs", ["", 'sin nada terminal\n{"event": "execution.step"}'])
 def test_without_a_terminal_line_there_is_nothing_to_recover(logs: str) -> None:
     assert _recover_result_from_exited_logs(logs, exit_code=0) is None
 

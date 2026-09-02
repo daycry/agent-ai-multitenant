@@ -86,9 +86,9 @@ def worktree(tmp_path: Path) -> Path:
 def test_mientras_corre_el_agente_no_hay_git(worktree: Path) -> None:
     with git_link_hidden(worktree) as oculto:
         assert oculto is True
-        assert not (
-            worktree / ".git"
-        ).exists(), "el agente sigue viendo `.git`: los andamiadores estrictos seguirán fallando"
+        assert not (worktree / ".git").exists(), (
+            "el agente sigue viendo `.git`: los andamiadores estrictos seguirán fallando"
+        )
 
 
 def test_el_directorio_queda_vacio_para_un_andamiador(worktree: Path) -> None:
@@ -112,9 +112,9 @@ def test_se_repone_identico_al_salir(worktree: Path) -> None:
     antes = (worktree / ".git").read_bytes()
     with git_link_hidden(worktree):
         pass
-    assert (
-        worktree / ".git"
-    ).read_bytes() == antes, "el puntero repuesto no es el que había: se reconstruyó por convención"
+    assert (worktree / ".git").read_bytes() == antes, (
+        "el puntero repuesto no es el que había: se reconstruyó por convención"
+    )
 
 
 def test_se_repone_aunque_el_run_reviente(worktree: Path) -> None:
@@ -195,9 +195,9 @@ def test_el_push_al_remoto_sigue_funcionando(worktree: Path) -> None:
     bare = worktree.parent.parent / "repos" / "app.git"
     remoto = worktree.parent.parent.parent / "remoto.git"
     assert "plan/abc" in _git("--git-dir", str(bare), "branch", "--list", "plan/abc")
-    assert "plan/abc" in _git(
-        "--git-dir", str(remoto), "branch", "--list", "plan/abc"
-    ), "la rama del plan no llegó al remoto"
+    assert "plan/abc" in _git("--git-dir", str(remoto), "branch", "--list", "plan/abc"), (
+        "la rama del plan no llegó al remoto"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +265,9 @@ def test_un_prune_concurrente_no_puede_podar_el_worktree_oculto(worktree: Path) 
     with git_link_hidden(worktree):
         # Una tarea hermana del mismo proyecto arranca y poda.
         _git("--git-dir", str(bare), "worktree", "prune")
-        assert (
-            bare / "worktrees" / worktree.name
-        ).is_dir(), "el prune se llevó los metadatos: reponer el puntero ya no sirve"
+        assert (bare / "worktrees" / worktree.name).is_dir(), (
+            "el prune se llevó los metadatos: reponer el puntero ya no sirve"
+        )
 
     # Y el ciclo sigue funcionando después.
     (worktree / "tras_el_prune.txt").write_text("ok\n", encoding="utf-8")
@@ -285,9 +285,9 @@ def test_el_lock_se_suelta_al_terminar(worktree: Path) -> None:
     with git_link_hidden(worktree):
         assert (bare / "worktrees" / worktree.name / "locked").exists()
 
-    assert not (
-        bare / "worktrees" / worktree.name / "locked"
-    ).exists(), "el worktree quedó bloqueado: el reaper no podrá podarlo nunca"
+    assert not (bare / "worktrees" / worktree.name / "locked").exists(), (
+        "el worktree quedó bloqueado: el reaper no podrá podarlo nunca"
+    )
 
 
 def test_el_lock_se_suelta_aunque_el_run_reviente(worktree: Path) -> None:
@@ -317,9 +317,9 @@ def test_reparar_suelta_el_lock_que_dejo_un_worker_muerto(worktree: Path) -> Non
     (worktree / ".git").unlink()
 
     assert repair_worktree_link(worktree) is True
-    assert not (
-        bare / "worktrees" / worktree.name / "locked"
-    ).exists(), "la reparación no soltó el lock: el worktree es inmortal para el reaper"
+    assert not (bare / "worktrees" / worktree.name / "locked").exists(), (
+        "la reparación no soltó el lock: el worktree es inmortal para el reaper"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -371,14 +371,12 @@ def test_una_ejecucion_solapada_toma_el_relevo_y_la_anterior_no_le_pisa(
 
             # A termina mientras B sigue corriendo: NO repone ni suelta lo de B.
             a.close()
-            assert not (
-                worktree / ".git"
-            ).exists(), (
+            assert not (worktree / ".git").exists(), (
                 "A repuso el puntero en mitad del run de B: el andamiador de B vuelve a fallar"
             )
-            assert "exec-B" in (
-                _motivo_del_lock(worktree) or ""
-            ), "A soltó el lock de B: el prune de una hermana puede podar a B"
+            assert "exec-B" in (_motivo_del_lock(worktree) or ""), (
+                "A soltó el lock de B: el prune de una hermana puede podar a B"
+            )
 
     assert (worktree / ".git").is_file(), "B no repuso el puntero al terminar"
     assert _motivo_del_lock(worktree) is None, "B no soltó su lock"
@@ -401,9 +399,9 @@ def test_la_provision_suelta_un_lock_huerfano_aunque_el_puntero_este(worktree: P
     assert (worktree / ".git").is_file()
 
     assert repair_worktree_link(worktree) is False  # no había puntero que reparar
-    assert (
-        _motivo_del_lock(worktree) is None
-    ), "el lock huérfano sigue ahí: el worktree es inmortal para el reaper"
+    assert _motivo_del_lock(worktree) is None, (
+        "el lock huérfano sigue ahí: el worktree es inmortal para el reaper"
+    )
 
 
 def test_sin_poder_bloquear_no_se_oculta(tmp_path: Path) -> None:

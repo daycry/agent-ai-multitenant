@@ -170,11 +170,11 @@ async def test_si_las_dos_mitades_discrepan_se_falla_cerrado_y_la_tarea_sigue(
         assert execution is not None
         assert str(execution.status) == "failed"
         assert execution.abort_code == "approval_policy_mismatch"
-        assert (
-            execution.completed_at is not None
-        ), "una ejecución sin solicitud no puede quedar viva"
-        assert (
-            task is not None and str(task.status) != "in_progress"
-        ), "la tarea quedó reclamada para siempre"
+        assert execution.completed_at is not None, (
+            "una ejecución sin solicitud no puede quedar viva"
+        )
+        assert task is not None and str(task.status) != "in_progress", (
+            "la tarea quedó reclamada para siempre"
+        )
     finally:
         await engine.dispose()

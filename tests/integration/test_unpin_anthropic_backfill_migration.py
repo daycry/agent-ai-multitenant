@@ -170,18 +170,18 @@ def test_only_factory_pins_on_builtin_copies_are_removed(
 
     after = asyncio.run(_configs(migrations_pg_dsn, ids))
     unpinned = {key for key in ids if "provider" in before[key] and "provider" not in after[key]}
-    assert (
-        unpinned == _EXPECTED_UNPINNED
-    ), f"la migración despineó {sorted(unpinned)}; se esperaba {sorted(_EXPECTED_UNPINNED)}"
-    assert after["fabrica-atrapada"] == {
-        "system_prompts": _PROMPTS
-    }, "se retiran SÓLO provider/model/temperature; los prompts se quedan"
+    assert unpinned == _EXPECTED_UNPINNED, (
+        f"la migración despineó {sorted(unpinned)}; se esperaba {sorted(_EXPECTED_UNPINNED)}"
+    )
+    assert after["fabrica-atrapada"] == {"system_prompts": _PROMPTS}, (
+        "se retiran SÓLO provider/model/temperature; los prompts se quedan"
+    )
     for key in set(ids) - _EXPECTED_UNPINNED:
         assert after[key] == before[key], f"{key}: la migración tocó una copia que no era suya"
     respaldo = set(asyncio.run(_backup_rows(migrations_pg_dsn)))
-    assert respaldo == {
-        ids[key] for key in _EXPECTED_UNPINNED
-    }, "el respaldo tiene que contener EXACTAMENTE las copias despineadas"
+    assert respaldo == {ids[key] for key in _EXPECTED_UNPINNED}, (
+        "el respaldo tiene que contener EXACTAMENTE las copias despineadas"
+    )
 
 
 def test_downgrade_restores_every_model_config_verbatim(

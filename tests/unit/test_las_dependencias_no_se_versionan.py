@@ -234,9 +234,9 @@ def test_lo_que_solo_se_parece_a_una_dependencia_si_entra(worktree: Path) -> Non
         "bin/vendor",
         "docs/node_modules-explicado.md",
     ):
-        assert (
-            esperado in ficheros
-        ), f"la exclusión se llevó por delante {esperado!r}, que es deliverable"
+        assert esperado in ficheros, (
+            f"la exclusión se llevó por delante {esperado!r}, que es deliverable"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -259,12 +259,12 @@ def test_un_vendor_ya_versionado_sale_del_indice(worktree: Path) -> None:
 
     ficheros = _ficheros_del_commit(worktree, _commit(worktree))
 
-    assert not [
-        f for f in ficheros if f.startswith("vendor/")
-    ], "vendor/ sigue versionado en la rama: la tarea siguiente seguirá atascada"
-    assert (
-        "app/Controllers/Home.php" in ficheros
-    ), "el des-versionado se llevó por delante el entregable de la tarea anterior"
+    assert not [f for f in ficheros if f.startswith("vendor/")], (
+        "vendor/ sigue versionado en la rama: la tarea siguiente seguirá atascada"
+    )
+    assert "app/Controllers/Home.php" in ficheros, (
+        "el des-versionado se llevó por delante el entregable de la tarea anterior"
+    )
     assert "app/Controllers/Nuevo.php" in ficheros
 
 
@@ -283,9 +283,9 @@ def test_el_desversionado_jamas_borra_del_disco(worktree: Path) -> None:
 
     _commit(worktree)
 
-    assert (
-        worktree / "vendor" / "autoload.php"
-    ).is_file(), "se ha borrado vendor/ del disco: el toolchain de la tarea siguiente no arranca"
+    assert (worktree / "vendor" / "autoload.php").is_file(), (
+        "se ha borrado vendor/ del disco: el toolchain de la tarea siguiente no arranca"
+    )
     assert (worktree / "vendor" / "autoload.php").read_text(encoding="utf-8") == (
         "<?php // el autoload de composer\n"
     ), "el contenido de la dependencia no puede cambiar al des-versionarla"
@@ -303,9 +303,9 @@ def test_desversionar_es_un_cambio_y_produce_commit(worktree: Path) -> None:
     sha = _commit(worktree)
 
     assert not [f for f in _ficheros_del_commit(worktree, sha) if f.startswith("vendor/")]
-    assert "vendor/autoload.php" in _ficheros_del_commit(
-        worktree, f"{sha}^"
-    ), "el arnés no reprodujo el estado de partida: vendor/ tenía que estar versionado"
+    assert "vendor/autoload.php" in _ficheros_del_commit(worktree, f"{sha}^"), (
+        "el arnés no reprodujo el estado de partida: vendor/ tenía que estar versionado"
+    )
 
 
 def test_sin_dependencias_versionadas_el_arbol_limpio_sigue_estando_limpio(
@@ -379,9 +379,9 @@ def test_cada_directorio_del_catalogo_queda_cubierto(worktree: Path) -> None:
     ficheros = _ficheros_del_commit(worktree, _commit(worktree))
 
     supervivientes = [f for f in ficheros if f.split("/")[0] in nombres]
-    assert (
-        not supervivientes
-    ), f"estos directorios del catálogo siguen versionados: {supervivientes}"
+    assert not supervivientes, (
+        f"estos directorios del catálogo siguen versionados: {supervivientes}"
+    )
 
 
 def test_una_tarea_que_solo_deja_dependencias_se_lee_como_sin_cambio(worktree: Path) -> None:
@@ -403,9 +403,9 @@ def test_una_tarea_que_solo_deja_dependencias_se_lee_como_sin_cambio(worktree: P
     with pytest.raises(GitCommandError, match="clean"):
         _commit(worktree)
 
-    assert (
-        worktree / "vendor" / "autoload.php"
-    ).is_file(), "y el toolchain de la tarea siguiente sigue teniendo sus dependencias"
+    assert (worktree / "vendor" / "autoload.php").is_file(), (
+        "y el toolchain de la tarea siguiente sigue teniendo sus dependencias"
+    )
 
 
 #: Un fichero PHP mínimo. Constante para no pelearse con el escape
@@ -515,9 +515,9 @@ def test_los_cambios_del_agente_dentro_de_un_vendor_respetado_si_entran(worktree
     sha = _commit(worktree)
 
     contenido = _git("show", f"{sha}:vendor/modules.txt", cwd=worktree)
-    assert (
-        "v1.1.0" in contenido
-    ), "el cambio del agente dentro del vendor/ respetado no llegó al commit"
+    assert "v1.1.0" in contenido, (
+        "el cambio del agente dentro del vendor/ respetado no llegó al commit"
+    )
 
 
 def test_el_gitignore_base_no_ignora_un_directorio_respetado(worktree: Path) -> None:
@@ -533,9 +533,9 @@ def test_el_gitignore_base_no_ignora_un_directorio_respetado(worktree: Path) -> 
     gitignore = worktree / ".gitignore"
     assert gitignore.is_file(), "el proyecto no traía .gitignore: la plataforma deja el base"
     lineas = [ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()]
-    assert (
-        "vendor/" not in lineas
-    ), "el .gitignore base ignora un directorio que el proyecto versiona"
+    assert "vendor/" not in lineas, (
+        "el .gitignore base ignora un directorio que el proyecto versiona"
+    )
     assert "node_modules/" in lineas, "y los demás nombres del catálogo siguen en la lista"
 
 
@@ -554,12 +554,12 @@ def test_se_deshace_el_accidente_y_se_respeta_a_la_persona_en_el_mismo_arbol(
 
     ficheros = _ficheros_del_commit(worktree, _commit(worktree))
 
-    assert not [
-        f for f in ficheros if f.startswith("vendor/")
-    ], "el accidente de la plataforma (vendor/) sigue versionado"
-    assert (
-        "frontend/node_modules/leftpad/index.js" in ficheros
-    ), "el node_modules que una persona versionó a propósito se ha des-versionado"
+    assert not [f for f in ficheros if f.startswith("vendor/")], (
+        "el accidente de la plataforma (vendor/) sigue versionado"
+    )
+    assert "frontend/node_modules/leftpad/index.js" in ficheros, (
+        "el node_modules que una persona versionó a propósito se ha des-versionado"
+    )
 
 
 def test_un_accidente_que_una_persona_luego_toco_se_respeta(worktree: Path) -> None:
@@ -574,9 +574,9 @@ def test_un_accidente_que_una_persona_luego_toco_se_respeta(worktree: Path) -> N
 
     ficheros = _ficheros_del_commit(worktree, _commit(worktree))
 
-    assert (
-        "vendor/autoload.php" in ficheros
-    ), "se des-versionó un vendor/ con un parche commiteado por una persona"
+    assert "vendor/autoload.php" in ficheros, (
+        "se des-versionó un vendor/ con un parche commiteado por una persona"
+    )
 
 
 def test_un_nombre_de_dependencia_invalido_se_rechaza(

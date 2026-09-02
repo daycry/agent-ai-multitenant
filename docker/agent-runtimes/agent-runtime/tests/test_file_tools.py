@@ -579,9 +579,9 @@ def test_recursive_delete_removes_a_read_only_file_without_residue(tmp_path: Pat
     residuos = [
         hijo.name for hijo in tmp_path.iterdir() if hijo.name.startswith(".agent-runtime-tmp.")
     ]
-    assert (
-        residuos == []
-    ), f"quedó un residuo que la provisión siguiente no podrá barrer: {residuos}"
+    assert residuos == [], (
+        f"quedó un residuo que la provisión siguiente no podrá barrer: {residuos}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1346,9 +1346,9 @@ def test_moving_a_tree_onto_its_own_parent_destroys_nothing(tmp_path: Path) -> N
 
     assert res.ok is False
     assert (tmp_path / "ci4tmp" / "spark").is_file(), "el destino se evaporó"
-    assert (
-        tmp_path / "ci4tmp" / "app" / "Controllers" / "Home.php"
-    ).is_file(), "el origen se fue con el destino y la tool dijo que no pasó nada"
+    assert (tmp_path / "ci4tmp" / "app" / "Controllers" / "Home.php").is_file(), (
+        "el origen se fue con el destino y la tool dijo que no pasó nada"
+    )
 
 
 def test_moving_onto_an_ancestor_inside_a_tracked_tree_destroys_nothing(tmp_path: Path) -> None:
@@ -1732,9 +1732,9 @@ def test_a_failed_move_reports_in_relative_paths_and_a_stable_code(
 
     assert res.ok is False
     error = res.error or ""
-    assert (
-        str(tmp_path) not in error and tmp_path.as_posix() not in error
-    ), f"filtra la ruta absoluta del host: {error}"
+    assert str(tmp_path) not in error and tmp_path.as_posix() not in error, (
+        f"filtra la ruta absoluta del host: {error}"
+    )
     assert "No se puede crear" not in error, f"filtra el idioma del host: {error}"
     assert "ci4tmp" in error and "framework" in error, f"no dice qué falló: {error}"
     assert "EEXIST" in error, f"no deja un código estable para diagnosticar: {error}"
@@ -2000,12 +2000,12 @@ def test_a_failed_write_does_not_truncate_the_previous_content(
     res = _files(tmp_path).file_write({"path": "app/Config/App.php", "content": "<?php // NUEVO"})
 
     assert res.ok is False
-    assert (
-        objetivo.read_text(encoding="utf-8") == "<?php // CONTENIDO ORIGINAL QUE IMPORTA"
-    ), "escribió a medias sobre el fichero real y luego dijo que no había hecho nada"
-    assert sorted(hijo.name for hijo in objetivo.parent.iterdir()) == [
-        "App.php"
-    ], "el transitorio se quedó huérfano al lado del fichero"
+    assert objetivo.read_text(encoding="utf-8") == "<?php // CONTENIDO ORIGINAL QUE IMPORTA", (
+        "escribió a medias sobre el fichero real y luego dijo que no había hecho nada"
+    )
+    assert sorted(hijo.name for hijo in objetivo.parent.iterdir()) == ["App.php"], (
+        "el transitorio se quedó huérfano al lado del fichero"
+    )
     error = res.error or ""
     assert "app/Config/App.php" in error and "ENOSPC" in error, error
 
@@ -2054,9 +2054,9 @@ def test_writing_a_new_file_still_creates_its_missing_directories(tmp_path: Path
     destino = tmp_path / "app" / "Controllers" / "Home.php"
     assert destino.read_text(encoding="utf-8") == contenido
     assert res.output == {"path": "app/Controllers/Home.php", "bytes_written": len(contenido)}
-    assert sorted(hijo.name for hijo in destino.parent.iterdir()) == [
-        "Home.php"
-    ], "quedó el transitorio al lado del fichero recién creado"
+    assert sorted(hijo.name for hijo in destino.parent.iterdir()) == ["Home.php"], (
+        "quedó el transitorio al lado del fichero recién creado"
+    )
 
 
 def test_rewriting_a_file_leaves_no_tail_of_the_previous_content(tmp_path: Path) -> None:
@@ -2092,9 +2092,9 @@ def test_rewriting_a_file_keeps_the_permissions_it_already_had(tmp_path: Path) -
     res = _files(tmp_path).file_write({"path": "spark", "content": "#!/usr/bin/env php\n// v2\n"})
 
     assert res.ok is True, res.error
-    assert (
-        stat.S_IMODE(objetivo.stat().st_mode) == modo_previo
-    ), "la reescritura se llevó por delante los permisos del fichero"
+    assert stat.S_IMODE(objetivo.stat().st_mode) == modo_previo, (
+        "la reescritura se llevó por delante los permisos del fichero"
+    )
 
 
 def test_one_ignore_line_covers_what_both_tools_can_leave_behind(
@@ -2393,9 +2393,9 @@ def test_a_blank_pattern_is_the_same_as_omitting_it(tmp_path: Path) -> None:
     esperado = _nombres(files.file_list({"path": "."}))
 
     for patron in ("", "   ", None):
-        assert (
-            _nombres(files.file_list({"path": ".", "pattern": patron})) == esperado
-        ), f"pattern={patron!r} no se trató como ausente"
+        assert _nombres(files.file_list({"path": ".", "pattern": patron})) == esperado, (
+            f"pattern={patron!r} no se trató como ausente"
+        )
 
 
 def test_the_catalog_default_is_the_one_the_tool_applies(tmp_path: Path) -> None:
@@ -2418,9 +2418,9 @@ def test_the_catalog_default_is_the_one_the_tool_applies(tmp_path: Path) -> None
     )
     omitido = files.file_list({})
 
-    assert _nombres(anunciado) == _nombres(
-        omitido
-    ), "el esquema anuncia un default que la implementación no aplica"
+    assert _nombres(anunciado) == _nombres(omitido), (
+        "el esquema anuncia un default que la implementación no aplica"
+    )
 
 
 def test_the_catalog_announces_the_keys_the_tool_returns(tmp_path: Path) -> None:
@@ -2449,12 +2449,12 @@ def test_the_catalog_announces_the_keys_the_tool_returns(tmp_path: Path) -> None
     assert "note" in con_nota, "el caso que ejercita la clave opcional no se dio"
 
     for salida in (normal, con_nota):
-        assert (
-            set(salida) <= declaradas
-        ), f"la tool devuelve claves que el esquema no declara: {set(salida) - declaradas}"
-        assert obligatorias <= set(
-            salida
-        ), f"el esquema exige claves que la tool no devuelve: {obligatorias - set(salida)}"
+        assert set(salida) <= declaradas, (
+            f"la tool devuelve claves que el esquema no declara: {set(salida) - declaradas}"
+        )
+        assert obligatorias <= set(salida), (
+            f"el esquema exige claves que la tool no devuelve: {obligatorias - set(salida)}"
+        )
     assert "entries" in obligatorias, "la clave que el agente lee de verdad no es obligatoria"
 
 
@@ -2522,9 +2522,9 @@ def test_zero_matches_explains_how_to_widen_the_search(tmp_path: Path) -> None:
     assert res.ok is True, res.error
     assert res.output is not None
     assert res.output["entries"] == []
-    assert (
-        "**/*Test.php" in res.output["note"]
-    ), "la nota no propone la forma recursiva del patrón que el modelo mandó"
+    assert "**/*Test.php" in res.output["note"], (
+        "la nota no propone la forma recursiva del patrón que el modelo mandó"
+    )
 
 
 def test_zero_matches_says_how_many_entries_it_visited(tmp_path: Path) -> None:
@@ -2575,9 +2575,9 @@ def test_a_literal_prefix_keeps_the_search_out_of_the_rest_of_the_tree(
         "app/Controllers/Home.php",
         "app/Views/welcome.php",
     ]
-    assert not [
-        ruta for ruta in abiertos if "vendor" in ruta
-    ], f"se bajó a donde el prefijo literal del patrón no llega: {abiertos}"
+    assert not [ruta for ruta in abiertos if "vendor" in ruta], (
+        f"se bajó a donde el prefijo literal del patrón no llega: {abiertos}"
+    )
 
 
 def test_a_non_recursive_pattern_never_descends(
@@ -2616,9 +2616,9 @@ def test_a_non_recursive_pattern_never_descends(
         "un patrón sin `**` recorrió más de un directorio: la guarda de "
         f"profundidad no está frenando el descenso. Abiertos: {abiertos}"
     )
-    assert not [
-        ruta for ruta in abiertos if "vendor" in ruta
-    ], f"se bajó a `vendor/` con el patrón por defecto: {abiertos}"
+    assert not [ruta for ruta in abiertos if "vendor" in ruta], (
+        f"se bajó a `vendor/` con el patrón por defecto: {abiertos}"
+    )
 
 
 def test_an_empty_directory_says_it_is_empty(tmp_path: Path) -> None:
@@ -2654,9 +2654,9 @@ def test_an_unparsable_pattern_is_rejected(tmp_path: Path) -> None:
 
     llaves = files.file_list({"path": ".", "pattern": "composer.{json,lock"})
     assert llaves.ok is False
-    assert "composer.{json,lock}" in (
-        llaves.error or ""
-    ), "el error no enseña la forma equilibrada del patrón que el modelo mandó"
+    assert "composer.{json,lock}" in (llaves.error or ""), (
+        "el error no enseña la forma equilibrada del patrón que el modelo mandó"
+    )
 
     corchete = files.file_list({"path": ".", "pattern": "[abc*.php"})
     assert corchete.ok is False
@@ -2688,9 +2688,9 @@ def test_cli_artifacts_stay_hidden_at_any_depth(tmp_path: Path) -> None:
 
     nombres = _nombres(_files(tmp_path).file_list({"path": ".", "pattern": "**/*"}))
 
-    assert not [
-        n for n in nombres if ".claude" in n
-    ], f"los artefactos del CLI reaparecen con el patrón recursivo: {nombres}"
+    assert not [n for n in nombres if ".claude" in n], (
+        f"los artefactos del CLI reaparecen con el patrón recursivo: {nombres}"
+    )
 
 
 def test_the_path_jail_still_holds_with_a_pattern(tmp_path: Path) -> None:

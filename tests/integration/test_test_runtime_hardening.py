@@ -243,6 +243,6 @@ def test_cleanup_removes_the_anonymous_volumes_of_the_sidecars() -> None:
     runner._cleanup(principal, [sidecar], _Red())
 
     for c in (principal, sidecar):
-        assert (
-            c.remove_kwargs is not None and c.remove_kwargs.get("v") is True
-        ), f"remove() sin v=True deja el volumen anónimo del sidecar: {c.remove_kwargs}"
+        assert c.remove_kwargs is not None and c.remove_kwargs.get("v") is True, (
+            f"remove() sin v=True deja el volumen anónimo del sidecar: {c.remove_kwargs}"
+        )

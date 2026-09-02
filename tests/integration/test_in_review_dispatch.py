@@ -601,12 +601,12 @@ async def test_the_reviewers_own_runs_do_not_crowd_out_the_implementers_commands
 
         block = _run_request(await _drain(redis, "default"))["review_context"]["commands_run"]
         assert "8.3.33" in block, "la evidencia del implementador no puede quedar fuera"
-        assert (
-            "git log --oneline -5" not in block
-        ), "lo que ejecutó el reviewer no es evidencia del implementador"
-        assert (
-            "[latest attempt" in block
-        ), "el run bajo revisión es el ÚLTIMO del implementador, no un intento anterior"
+        assert "git log --oneline -5" not in block, (
+            "lo que ejecutó el reviewer no es evidencia del implementador"
+        )
+        assert "[latest attempt" in block, (
+            "el run bajo revisión es el ÚLTIMO del implementador, no un intento anterior"
+        )
         assert "earlier attempt" not in block
     finally:
         await redis.delete("default")
@@ -659,9 +659,9 @@ async def test_the_reviewers_own_verdict_is_never_the_implementer_output(
         await _dispatcher(sm).handle(_in_review_event(ids))
 
         request = _run_request(await _drain(redis, "default"))
-        assert (
-            request["review_context"]["implementer_output"] == "implemented the parser"
-        ), "el reviewer recibe su propio veredicto anterior como salida del implementador"
+        assert request["review_context"]["implementer_output"] == "implemented the parser", (
+            "el reviewer recibe su propio veredicto anterior como salida del implementador"
+        )
     finally:
         await engine.dispose()
         await redis.aclose()

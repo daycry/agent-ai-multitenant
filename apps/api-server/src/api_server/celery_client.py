@@ -293,9 +293,7 @@ def auto_pr_request(plan_id: UUID | str, plan_title: str | None) -> tuple[str, s
     lo usan el cierre por veredicto (``routers/review.py``) y el reencolado del
     reconciler (`task_cv_14`), que tienen que pedir el MISMO PR."""
     title = f"Plan: {plan_title}" if plan_title else f"Plan {str(plan_id)[:8]}"
-    body = (
-        "PR automático tras la validación humana del plan.\n\n" f"Plan: {plan_title}\nID: {plan_id}"
-    )
+    body = f"PR automático tras la validación humana del plan.\n\nPlan: {plan_title}\nID: {plan_id}"
     return title, body
 
 

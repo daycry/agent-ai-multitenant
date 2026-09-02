@@ -155,9 +155,9 @@ async def test_un_blip_de_bd_en_el_vigia_no_pierde_el_run_ni_la_limpieza(
         cancel_poll_interval_s=0.05,
     )
 
-    assert (
-        result.status == "completed"
-    ), "el fallo del vigía se llevó por delante un run que el contenedor terminó bien"
+    assert result.status == "completed", (
+        "el fallo del vigía se llevó por delante un run que el contenedor terminó bien"
+    )
     assert llamadas["n"] >= 2, "el vigía no llegó a sondear: el test no ejercita el fallo"
     assert staged.cleaned, "la credencial staged quedó en disco"
 

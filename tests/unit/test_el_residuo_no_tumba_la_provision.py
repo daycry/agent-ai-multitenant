@@ -117,9 +117,9 @@ def test_sync_to_head_barre_antes_de_limpiar() -> None:
                 llamadas.append(nodo.func.attr)
     assert "barrer_residuos_del_runtime" in llamadas, "sync_to_head no barre los residuos"
     assert "clean_args" in llamadas, "¿cambió de forma el clean?"
-    assert llamadas.index("barrer_residuos_del_runtime") < llamadas.index(
-        "clean_args"
-    ), "el barrido va DESPUÉS del clean, que es lo que revienta con el residuo"
+    assert llamadas.index("barrer_residuos_del_runtime") < llamadas.index("clean_args"), (
+        "el barrido va DESPUÉS del clean, que es lo que revienta con el residuo"
+    )
 
 
 def test_el_barrido_no_toca_nada_que_no_sea_residuo(tmp_path: Path) -> None:

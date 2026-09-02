@@ -694,9 +694,9 @@ def test_every_enum_keeps_its_values() -> None:
         if actual != expected:
             problems.append(f"{name}: {expected} -> {actual}")
     assert not problems, "los enums cambiaron: " + "; ".join(problems)
-    assert seen == len(
-        ENUM_VALUES_BEFORE_THE_SPLIT
-    ), f"la guarda sólo comprobó {seen} enums de {len(ENUM_VALUES_BEFORE_THE_SPLIT)}"
+    assert seen == len(ENUM_VALUES_BEFORE_THE_SPLIT), (
+        f"la guarda sólo comprobó {seen} enums de {len(ENUM_VALUES_BEFORE_THE_SPLIT)}"
+    )
 
 
 #: Nombres AÑADIDOS a `__all__` después del troceo, con la tarea que los trajo.
@@ -776,9 +776,9 @@ def test_no_table_changed_its_ddl() -> None:
                 f"({expected_digest} -> {actual_digest}). El DDL actual es:\n{_table_ddl(table)}"
             )
     assert not problems, "el esquema se movió con el troceo:\n" + "\n".join(problems)
-    assert len(DDL_BEFORE_THE_SPLIT) == len(
-        MODELS_BEFORE_THE_SPLIT
-    ), "el inventario de DDL dejó de cubrir todos los modelos"
+    assert len(DDL_BEFORE_THE_SPLIT) == len(MODELS_BEFORE_THE_SPLIT), (
+        "el inventario de DDL dejó de cubrir todos los modelos"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -791,9 +791,9 @@ def test_domain_is_a_package_with_one_module_per_aggregate() -> None:
     existe»), exactamente igual que en los dos troceos anteriores.
     """
     domain = _load_domain()
-    assert hasattr(
-        domain, "__path__"
-    ), "api_server.db.domain sigue siendo un módulo suelto: task_prod16_11 sin hacer"
+    assert hasattr(domain, "__path__"), (
+        "api_server.db.domain sigue siendo un módulo suelto: task_prod16_11 sin hacer"
+    )
     submodules = sorted(
         path.stem
         for path in (_DB_DIR / "domain").glob("*.py")
@@ -822,9 +822,9 @@ def test_the_facade_imports_every_submodule() -> None:
         if path.stem != "__init__" and not path.stem.startswith("_")
     )
     not_imported = [name for name in expected if f"api_server.db.domain.{name}" not in sys.modules]
-    assert (
-        not not_imported
-    ), f"la fachada no importa {not_imported}: sus tablas no llegan a Base.metadata"
+    assert not not_imported, (
+        f"la fachada no importa {not_imported}: sus tablas no llegan a Base.metadata"
+    )
     assert len(expected) >= 5, "la guarda dejó de encontrar submódulos"
 
 
@@ -845,6 +845,6 @@ def test_the_facade_defines_no_model_itself() -> None:
         for name, _ in MODELS_BEFORE_THE_SPLIT
         if getattr(domain, name).__module__ == "api_server.db.domain"
     ]
-    assert (
-        not defined_in_facade
-    ), f"estos modelos siguen definidos en el __init__: {defined_in_facade}"
+    assert not defined_in_facade, (
+        f"estos modelos siguen definidos en el __init__: {defined_in_facade}"
+    )

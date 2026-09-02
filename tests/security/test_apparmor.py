@@ -374,9 +374,9 @@ def test_each_profile_confines_writes_to_a_bounded_set_of_dirs() -> None:
     for path in _all_profiles():
         writable = _writable_path_rules(_read(path))
         assert writable, f"{path.name}: no writable path rule at all — unusable"
-        assert any(
-            r.startswith("/tmp") for r in writable
-        ), f"{path.name}: /tmp must be writable (scratch space) — got {writable}"
+        assert any(r.startswith("/tmp") for r in writable), (
+            f"{path.name}: /tmp must be writable (scratch space) — got {writable}"
+        )
 
 
 def test_the_container_home_is_writable_under_the_agent_profile() -> None:
@@ -468,15 +468,15 @@ def test_agent_runtime_profile_is_stricter_than_the_default() -> None:
     )
     # And it explicitly denies the broad write dirs the shared default allows.
     for denied in (r"deny\s+/var/lib/\*\*", r"deny\s+/data/\*\*", r"deny\s+/root/\*\*"):
-        assert re.search(
-            denied, agent_text
-        ), f"agent-runtime.profile must deny writes matching {denied!r}"
+        assert re.search(denied, agent_text), (
+            f"agent-runtime.profile must deny writes matching {denied!r}"
+        )
     # The shared default DOES grant /var/lib + /data (trusted services need them)
     # — proving the agent profile is the strictly tighter one.
     default_writable = _writable_path_rules(_read(DEFAULT_PROFILE))
-    assert any(
-        r.startswith("/var/lib") for r in default_writable
-    ), "the shared default should grant /var/lib writes (it runs trusted code)"
+    assert any(r.startswith("/var/lib") for r in default_writable), (
+        "the shared default should grant /var/lib writes (it runs trusted code)"
+    )
 
 
 # ---------------------------------------------------------------------------

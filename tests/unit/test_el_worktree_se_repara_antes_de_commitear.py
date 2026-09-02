@@ -190,9 +190,9 @@ def test_tras_descartar_el_repo_intruso_el_commit_llega_al_bare(proyecto: Path) 
         trailers=CommitTrailers(plan_id="p", task_id="t", execution_id="e"),
     )
 
-    assert (
-        _git("--git-dir", str(bare), "cat-file", "-t", sha).strip() == "commit"
-    ), "el commit fue a parar al repo del andamiador, no al bare del plan"
+    assert _git("--git-dir", str(bare), "cat-file", "-t", sha).strip() == "commit", (
+        "el commit fue a parar al repo del andamiador, no al bare del plan"
+    )
 
 
 def test_un_puntero_con_contenido_invalido_se_reconstruye(proyecto: Path) -> None:

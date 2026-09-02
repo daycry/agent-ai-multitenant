@@ -208,7 +208,7 @@ def test_a_sibling_commit_between_two_attempts_is_not_part_of_the_task_diff(repo
 
     assert diff is not None
     assert "otro.py" not in diff, "el diff de la tarea lleva el commit de la hermana"
-    assert (
-        "+    return 2" in diff and "+    return 3" in diff
-    ), "los dos intentos de la tarea tienen que estar, en orden"
+    assert "+    return 2" in diff and "+    return 3" in diff, (
+        "los dos intentos de la tarea tienen que estar, en orden"
+    )
     assert diff.index("return 2") < diff.index("return 3")
