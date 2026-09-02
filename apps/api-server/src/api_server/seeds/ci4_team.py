@@ -129,7 +129,8 @@ _PM_TOOLS = ("read-file", "list-files", "semantic-search")
 # `vendor/bin/phpunit` diera 127 desde la raíz y el agente girara sin converger.
 _CI4_STACK_HYGIENE_ES = (
     "\n\nESTRUCTURA Y TOOLCHAIN (obligatorio): mantén el proyecto CodeIgniter 4 en la RAÍZ del "
-    "workspace (donde ya está el repo); NO lo anides en un subdirectorio. Ejecuta la toolchain "
+    "workspace (`/workspace`, tu directorio de trabajo; la plataforma versiona tus cambios por "
+    "ti, no verás ningún `.git`); NO lo anides en un subdirectorio. Ejecuta la toolchain "
     "(composer, vendor/bin/phpunit, php spark) con `stack_exec` desde esa raíz. Si el proyecto "
     'YA está en un subdirectorio, pásalo como `cwd` a `stack_exec` (p.ej. cwd="ci4build") — '
     "NUNCA uses `cd` ni encadenes comandos con `&&`/`;`/`|` (stack_exec corre un solo programa "
@@ -138,7 +139,8 @@ _CI4_STACK_HYGIENE_ES = (
 )
 _CI4_STACK_HYGIENE_EN = (
     "\n\nLAYOUT & TOOLCHAIN (required): keep the CodeIgniter 4 project at the ROOT of the "
-    "workspace (where the repo already is); do NOT nest it in a subdirectory. Run the toolchain "
+    "workspace (`/workspace`, your working directory; the platform versions your changes for "
+    "you, you will see no `.git`); do NOT nest it in a subdirectory. Run the toolchain "
     "(composer, vendor/bin/phpunit, php spark) via `stack_exec` from that root. If the project "
     'IS already in a subdirectory, pass it as `cwd` to `stack_exec` (e.g. cwd="ci4build") — '
     "NEVER use `cd` or chain commands with `&&`/`;`/`|` (stack_exec runs one program per call). "

@@ -182,7 +182,11 @@ def test_agent_spec_forwards_allowed_commands_when_set() -> None:
         allowed_commands=["php", "composer"],
     )
     spec = _agent_spec(req, None)
-    assert spec["allowed_commands"] == ["php", "composer"]
+    # task_cv_34: los proveedores finos reciben además la base de SÓLO LECTURA.
+    from workers.run_spec import _READ_ONLY_SHELL_COMMANDS
+
+    assert {"php", "composer"} <= set(spec["allowed_commands"])
+    assert set(spec["allowed_commands"]) - {"php", "composer"} == _READ_ONLY_SHELL_COMMANDS
     # Round-trips through the Celery payload.
     assert ExecutionRequest.from_dict(req.as_dict()).allowed_commands == ["php", "composer"]
 
@@ -199,8 +203,10 @@ def test_agent_spec_forwards_empty_allowed_commands() -> None:
         allowed_commands=[],
     )
     spec = _agent_spec(req, None)
-    assert "allowed_commands" in spec
-    assert spec["allowed_commands"] == []
+    # task_cv_34: una allowlist vacía del proyecto deja sólo la base de lectura.
+    from workers.run_spec import _READ_ONLY_SHELL_COMMANDS
+
+    assert set(spec["allowed_commands"]) == _READ_ONLY_SHELL_COMMANDS
 
 
 def test_agent_spec_omits_allowed_commands_when_none() -> None:
@@ -214,7 +220,11 @@ def test_agent_spec_omits_allowed_commands_when_none() -> None:
         model={"kind": "scripted", "decisions": []},
         allowed_commands=None,
     )
-    assert "allowed_commands" not in _agent_spec(req, None)
+    # task_cv_34: sin allowlist, el proveedor fino recibe la base de sólo lectura
+    # (antes la clave se omitía y `ls` era «command not allowed»).
+    from workers.run_spec import _READ_ONLY_SHELL_COMMANDS
+
+    assert set(_agent_spec(req, None)["allowed_commands"]) == _READ_ONLY_SHELL_COMMANDS
 
 
 # ===========================================================================

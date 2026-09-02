@@ -125,9 +125,10 @@ SHELL_ONLY_ES = (
     "fallará con un «not found» del sistema operativo que parece un problema "
     "de PATH. No lo es, y no se arregla buscando el binario ni probando rutas: "
     "esos comandos no los puedes correr tú. Usa `shell_exec` sólo para "
-    "inspeccionar el workspace (grep, ls, cat, git log/diff) y, cuando "
-    "necesites el resultado de la toolchain, apóyate en lo que la plataforma ya "
-    "ejecutó y te entrega en el contexto."
+    "inspeccionar el workspace (grep, ls, cat, find, head, tail). Git tampoco: "
+    "el `.git` no está en tu sandbox y la plataforma versiona tus cambios por "
+    "ti al terminar. Cuando necesites el resultado de la toolchain, apóyate en "
+    "lo que la plataforma ya ejecutó y te entrega en el contexto."
 )
 SHELL_ONLY_EN = (
     "\n\nYOUR SANDBOX DOES NOT CARRY THE PROJECT'S TOOLCHAIN. `shell_exec` runs "
@@ -138,8 +139,10 @@ SHELL_ONLY_EN = (
     "with a raw OS «not found» that looks like a PATH problem. It is not, and it "
     "is not fixed by hunting for the binary or trying paths: those commands are "
     "not yours to run. Use `shell_exec` only to inspect the workspace (grep, ls, "
-    "cat, git log/diff) and, when you need a toolchain result, rely on what the "
-    "platform already ran and hands you in the context."
+    "cat, find, head, tail). Not git either: `.git` is not in your sandbox and the "
+    "platform versions your changes for you when you finish. When you need a "
+    "toolchain result, rely on what the platform already ran and hands you in "
+    "the context."
 )
 
 

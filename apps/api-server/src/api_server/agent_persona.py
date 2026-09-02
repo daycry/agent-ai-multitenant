@@ -25,27 +25,29 @@ PERSONA_MAX_CHARS = 8000
 _TRUNCATION_MARKER = "\n[... persona truncated ...]"
 
 
-def _bilingual_prompt(model_config: Any) -> str:
+def _bilingual_prompt(model_config: Any, *, language: str | None = None) -> str:
     if not isinstance(model_config, dict):
         return ""
     prompts = model_config.get("system_prompts")
     if not isinstance(prompts, dict):
         return ""
-    for lang in ("es", "en"):
+    # `task_cv_35` (F-06): el idioma del proyecto manda; sin preferencia, ES.
+    order = ("en", "es") if str(language or "").lower().startswith("en") else ("es", "en")
+    for lang in order:
         value = prompts.get(lang)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
 
 
-def resolve_agent_persona(agent: Any) -> dict[str, str] | None:
+def resolve_agent_persona(agent: Any, *, language: str | None = None) -> dict[str, str] | None:
     """La persona efectiva de ``agent`` como payload del run, o ``None``.
 
     Claves emitidas: ``prompt`` (siempre), ``role``/``name`` (si existen).
     ``None`` = el agente no tiene persona con contenido → clave ausente en el
     payload (backward-compat, mismo contrato que skill_prompt_fragments).
     """
-    prompt = _bilingual_prompt(getattr(agent, "model_config", None))
+    prompt = _bilingual_prompt(getattr(agent, "model_config", None), language=language)
     if not prompt:
         flat = getattr(agent, "system_prompt", None)
         prompt = flat.strip() if isinstance(flat, str) and flat.strip() else ""

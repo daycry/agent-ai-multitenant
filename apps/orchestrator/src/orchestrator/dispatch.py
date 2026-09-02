@@ -1192,6 +1192,21 @@ class _HumanDispatch:
     assigned_to_user_id: str | None
 
 
+def _project_language(project: Any) -> str | None:
+    """El idioma que el proyecto declara para sus textos (`task_cv_35`, F-06).
+
+    No hay columna `docs_language` en `projects` (principio 12: la plataforma es
+    ES+EN y la persona caía a ES de forma fija, así que el prompt EN de un
+    agente no llegaba nunca al modelo). Se lee, si el proyecto lo declara, de
+    `repository_config.docs_language`; sin él, ``None`` y la persona sigue en ES."""
+    config = getattr(project, "repository_config", None) if project is not None else None
+    if isinstance(config, dict):
+        value = config.get("docs_language")
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None
+
+
 def _not_the_reviewers_run(reviewer_agent_id: Any) -> Any:
     """Predicado «esta ejecución NO es del reviewer de la tarea».
 
@@ -1740,7 +1755,7 @@ class TaskDispatcher:
         # P0-1 (investigación 2026-07-11): la persona del agente (system_prompt /
         # model_config.system_prompts) viaja al run — el runtime la prepende como
         # PRIMER bloque del system preamble. Sin persona → clave ausente.
-        agent_persona = resolve_agent_persona(agent)
+        agent_persona = resolve_agent_persona(agent, language=_project_language(project))
         if agent_persona is not None:
             request["agent_persona"] = agent_persona
             # `task_gov_03`: el sello del prompt del agente, para que

@@ -306,7 +306,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_30` — La escalera de lectura sigue al ADR 0071 (E-01)
 
-- [ ] **Título**: `_default_readable_scopes` usa el orden viejo (`team_shared` más estrecho que
+- [x] _(hecho 2026-09-02, tests en verde; un agente de IA lee `team_shared` + `project_shared` + `global` sea cual sea su scope de escritura (los punteros los pone el endpoint); `private` conserva sus filas delante y un scope no canónico sigue leyendo sólo `global`)_ **Título**: `_default_readable_scopes` usa el orden viejo (`team_shared` más estrecho que
       `project_shared`) sobre el scope crudo del agente: un agente `project_shared` nunca lee
       `team_shared` y uno `global` sólo lee `global`. Leer «todo scope compartido con puntero»
       (`global` + `project_shared` del proyecto + `team_shared` del equipo).
@@ -315,14 +315,14 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_31` — `memory_store` aplica la política de equipo y el enrutado (E-02)
 
-- [ ] **Título**: la tool interna persiste con `agent.memory_scope` crudo; el memorizer usa
+- [x] _(hecho 2026-09-02, tests en verde; `memory_store` calcula el scope con `_store_scope_for` (política del equipo > agente > default de plataforma, y enrutado por tipo), y un `scope` explícito distinto del enrutado sigue dando 403)_ **Título**: la tool interna persiste con `agent.memory_scope` crudo; el memorizer usa
       `resolve_effective_memory_scope` + `route_scope_for_type`. Unificar.
       **Test**: agente `global` + `episodic` → `project_shared`.
       **Coste**: 0,5 d.
 
 ### `task_cv_32` — El destilador lee los steps reales y las memorias son sticky (E-04, E-05)
 
-- [ ] **Título**: `distillation.py` lee `note/output/content` que los steps no tienen (el fixture
+- [x] _(hecho 2026-09-02, tests en verde; el destilador lee `summary` + `result.error` + `result.output[:200]` (y el fixture del test usa ya la forma real de un step); las memorias van fuera de la ventana de pasos, valladas y acotadas a 3 x 500 chars)_ **Título**: `distillation.py` lee `note/output/content` que los steps no tienen (el fixture
       del test miente) y las memorias salen de la ventana de 8 items a los pocos turnos. Leer
       `summary` + `result.error` + `result.output[:200]`; renderizar `role=memory` como bloque
       sticky acotado (3 × 500).
@@ -341,7 +341,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_34` — Comandos base de sólo lectura para todos los proveedores (F-02)
 
-- [ ] **Título**: la guía promete `grep/ls/cat` por `shell_exec` y sólo `claude_sdk` recibe la
+- [x] _(hecho 2026-09-02, tests en verde; los proveedores finos reciben el subconjunto de sólo lectura de la base del SDK (`ls cat grep find head tail wc`), nunca la mitad que escribe)_ **Título**: la guía promete `grep/ls/cat` por `shell_exec` y sólo `claude_sdk` recibe la
       base: en Ollama/Copilot/Azure cada `ls` es «command not allowed». Unir un subconjunto de
       sólo lectura (`ls cat grep find head tail wc`) para todos los kinds, o hacer la guía
       consciente del kind.
@@ -350,7 +350,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_35` — Textos contradictorios y `docs_language` (F-04, F-05, F-06)
 
-- [ ] **Título**: `_CI4_STACK_HYGIENE` («donde ya está el repo»), `SHELL_ONLY_*` («git log/diff»),
+- [x] _(hecho 2026-09-02, tests en verde; las cuatro cadenas reescritas y vigiladas por `test_the_prompts_no_longer_promise_git_or_mv_inside_the_sandbox`; `resolve_agent_persona(agent, language=)` elige el prompt EN y el dispatch lo pide desde `repository_config.docs_language` porque no existe columna `docs_language` en `projects`; derivar `shell-exec` del rol (`ci4-tech-writer`) queda para `task_cv_33`)_ **Título**: `_CI4_STACK_HYGIENE` («donde ya está el repo»), `SHELL_ONLY_*` («git log/diff»),
       la descripción de `shell-exec` («mv») y `_DECIDE_SYSTEM` («a git worktree») contradicen el
       ADR 0163 y la retirada de `mv`; el prompt EN no llega nunca al modelo. Reescribir las cuatro
       cadenas, aserción en `test_builtin_prompt_tool_coherence`, y pasar `project.docs_language`

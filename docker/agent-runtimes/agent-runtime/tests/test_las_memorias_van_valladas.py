@@ -81,3 +81,30 @@ def test_a_blocked_recall_hit_never_reaches_the_context(monkeypatch: Any) -> Non
     assert "memoria limpia" in texts
     assert not any("veneno" in t for t in texts), "un hit bloqueado entró al contexto"
     assert any(e.get("action") == "block" for e in out["guardrail_events"])
+
+
+# ------------------------------------------------------------------ task_cv_32
+# Auditoría 2026-09-01 (E-05): las memorias salían de la ventana de 8 items a los
+# pocos turnos. Van fuera de la ventana (sticky) y acotadas: 3 x 500 caracteres.
+
+
+def _observation(i: int) -> dict[str, Any]:
+    return {"role": "observation", "tool": "read_file", "output": {"content": f"paso {i}"}}
+
+
+def test_memories_survive_nine_observations() -> None:
+    context = [{"role": "memory", "content": "usa asyncpg, no psycopg"}] + [
+        _observation(i) for i in range(9)
+    ]
+    user = _decide_messages(_state(context))[-1].content
+    assert "usa asyncpg, no psycopg" in user
+
+
+def test_sticky_memories_are_capped_to_three_of_five_hundred_chars() -> None:
+    context = [{"role": "memory", "content": f"memoria {i} " + ("x" * 2000)} for i in range(5)]
+    user = _decide_messages(_state(context))[-1].content
+    fenced = user.split("<<<UNTRUSTED_DATA", 1)[1].split("UNTRUSTED_DATA>>>", 1)[0]
+    rendered = [line for line in fenced.splitlines() if line.startswith("- ")]
+    assert len(rendered) == 3, "más de 3 memorias en el bloque sticky"
+    assert all(len(line) <= 560 for line in rendered), "una memoria supera los 500 chars"
+    assert "memoria 3" not in fenced and "memoria 4" not in fenced

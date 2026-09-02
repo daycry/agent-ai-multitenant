@@ -268,10 +268,16 @@ async def test_memory_recall_filters_by_default_scope_ladder(
 async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Revisión memorias 2026-07-03 (D2): unos ``scopes`` explícitos NO pueden
-    ensanchar la lectura por encima de la escalera del ``agent.memory_scope``.
-    Un agente ``project_shared`` que pide ``team_shared`` no lo recibe (la
-    petición se recorta a su escalera: project_shared + global)."""
+    """Revisión memorias 2026-07-03 (D2), releída con `task_cv_30` (ADR 0071):
+    unos ``scopes`` explícitos NO pueden ensanchar la lectura por encima de lo
+    que el agente puede leer. Lo que puede leer un agente de IA es TODO scope
+    compartido con puntero (`team_shared` de su equipo, `project_shared` de su
+    proyecto, `global`); lo que no puede leer nunca es `private` (memoria de una
+    persona) ni lo de otro equipo. Un agente ``project_shared`` que pide
+    ``private`` no lo recibe: la
+    intersección vacía cae al conjunto completo del agente (no a vacío, para que
+    una petición mal formada no esterilice el run), y en ese conjunto SÍ está la
+    memoria de su equipo — antes se le recortaba, y era el hallazgo E-01."""
     from api_server.auth.internal_agent import mint_agent_token
 
     seeded = await _seed(migrations_pg_dsn, memory_scope="project_shared")
@@ -296,6 +302,22 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
             "asyncpg nota del PROYECTO",
             seeded["project_id"],
         )
+        other_team_id = uuid4()
+        await conn.execute(
+            "INSERT INTO teams (id, tenant_id, name) VALUES ($1, $2, $3)",
+            other_team_id,
+            seeded["tenant_id"],
+            "Team Other",
+        )
+        await conn.execute(
+            "INSERT INTO memory_entries"
+            " (id, tenant_id, scope, type, content, team_id, metadata)"
+            " VALUES ($1, $2, 'team_shared', 'semantic', $3, $4, '{}'::jsonb)",
+            uuid4(),
+            seeded["tenant_id"],
+            "asyncpg secreto de OTRO equipo",
+            other_team_id,
+        )
     finally:
         await conn.close()
 
@@ -305,16 +327,18 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
     ) as client:
         resp = await client.post(
             "/internal/agent/memory-recall",
-            json={"query": "asyncpg", "scopes": ["team_shared"], "limit": 5},
+            json={"query": "asyncpg", "scopes": ["private"], "limit": 5},
             headers={"Authorization": f"Bearer {token}"},
         )
 
     assert resp.status_code == 200, resp.text
     contents = [h["content"] for h in resp.json()["hits"]]
-    # team_shared queda fuera de la escalera de un agente project_shared…
-    assert not any("EQUIPO" in c for c in contents), contents
-    # …y la intersección vacía cae a la escalera completa del agente (no a vacío),
-    # así una petición mal formada no esteriliza el run.
+    # `private` no está en lo que un agente de IA puede leer, y el `team_shared`
+    # de OTRO equipo tampoco: los punteros los pone el endpoint, no la petición…
+    assert not any("OTRO" in c for c in contents), contents
+    # …y la intersección vacía cae al conjunto completo del agente (no a vacío),
+    # que desde `task_cv_30` incluye la memoria de su propio equipo.
+    assert any("EQUIPO" in c for c in contents), contents
     assert any("PROYECTO" in c for c in contents), contents
 
 
