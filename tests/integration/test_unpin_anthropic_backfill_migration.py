@@ -207,24 +207,31 @@ def test_the_migration_is_idempotent(alembic_config: object, migrations_pg_dsn: 
     assert once == twice
 
 
-@pytest.mark.asyncio
-async def test_the_backfill_table_is_unreachable_from_the_app(
-    _migrated: None, migrations_pg_dsn: str
+def test_the_backfill_table_is_unreachable_from_the_app(
+    alembic_config: object, migrations_pg_dsn: str
 ) -> None:
     """La tabla de respaldo de la 0147 no la puede leer la aplicación: nace sin
     `tenant_id` ni RLS, así que la única defensa es que `app_user` y
-    `service_user` no tengan NINGÚN privilegio sobre ella (lección de la 0138)."""
-    import asyncpg
+    `service_user` no tengan NINGÚN privilegio sobre ella (lección de la 0138).
+    Test síncrono como los demás del fichero: Alembic usa `asyncio.run()` y no
+    puede llamarse desde un loop ya en marcha."""
+    command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
 
-    conn = await asyncpg.connect(migrations_pg_dsn)
-    try:
-        for role in ("app_user", "service_user"):
-            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
-                allowed = await conn.fetchval(
-                    "SELECT has_table_privilege($1, 'agents_model_config_backfill_0147', $2)",
-                    role,
-                    privilege,
-                )
-                assert allowed is False, f"{role} tiene {privilege} sobre la tabla de respaldo"
-    finally:
-        await conn.close()
+    async def _privileges() -> list[tuple[str, str, bool]]:
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            found: list[tuple[str, str, bool]] = []
+            for role in ("app_user", "service_user"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    allowed = await conn.fetchval(
+                        "SELECT has_table_privilege($1, 'agents_model_config_backfill_0147', $2)",
+                        role,
+                        privilege,
+                    )
+                    found.append((role, privilege, bool(allowed)))
+            return found
+        finally:
+            await conn.close()
+
+    for role, privilege, allowed in asyncio.run(_privileges()):
+        assert allowed is False, f"{role} tiene {privilege} sobre la tabla de respaldo"
