@@ -1046,6 +1046,13 @@ def assemble_system_preamble(
     return preamble
 
 
+def _optional_int(raw: Any) -> int | None:
+    try:
+        return None if raw is None else int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
     from agent_runtime.approval import ApprovalGate, tool_categories_from_specs
@@ -1183,6 +1190,8 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             guardrails=guardrail_pipeline,
             # ADR 0095: make the loop's convergence safeguards reviewer-aware.
             is_review=bool(spec.get("review")),
+            # `task_cv_45` (D-09): techo de preguntas que le quedan a la task.
+            ask_human_remaining=_optional_int(spec.get("ask_human_remaining")),
             # AUD16-15: el kind resuelto viaja a cada step model_call para que
             # el price-snapshot del api-server resuelva el catálogo de precios.
             provider_kind=str((spec.get("model") or {}).get("kind") or "") or None,

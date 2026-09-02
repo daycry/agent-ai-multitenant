@@ -27,6 +27,7 @@ from workers.beat_schedule import GIT_FETCH_BEAT_ENTRY
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_sessionmaker
+from workers.git_alerts import looks_like_git_credential_failure, notify_git_credential_failed
 
 _log = structlog.get_logger("workers.git_remote_sweep")
 
@@ -66,12 +67,17 @@ async def _sweep_project_git_remotes_async(
         async with sessions() as db:
             rows = await db.execute(
                 sa_text(
-                    "SELECT id FROM projects"
+                    "SELECT id, tenant_id FROM projects"
                     " WHERE deleted_at IS NULL"
                     " AND git_config->>'remote_url' IS NOT NULL"
                 )
             )
-            project_ids = [row[0] for row in rows.all()]
+            rows_all = rows.all()
+            project_ids = [row[0] for row in rows_all]
+            # `task_cv_45` (G-10): el aviso de credencial es del tenant del proyecto.
+            tenants = {
+                str(row[0]): (str(row[1]) if len(row) > 1 and row[1] else "") for row in rows_all
+            }
 
     if clone is None:
         from workers.repo_clone import _clone_project_repo_async
@@ -86,6 +92,15 @@ async def _sweep_project_git_remotes_async(
             if status_txt.startswith("error"):
                 failed += 1
                 _log.warning("git_remote_sweep.project_failed", project_id=str(pid))
+                # `task_cv_45` (G-10): la sonda periódica es quien ve caducar un PAT.
+                tenant = tenants.get(str(pid), "")
+                if tenant and looks_like_git_credential_failure(status_txt):
+                    await notify_git_credential_failed(
+                        tenant_id=tenant,
+                        subject=f"project {pid}",
+                        key=f"project:{pid}",
+                        reason=status_txt,
+                    )
             else:
                 fetched += 1
         except Exception as exc:  # un proyecto roto no aborta el resto

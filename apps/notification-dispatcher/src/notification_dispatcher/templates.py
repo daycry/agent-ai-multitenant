@@ -323,6 +323,26 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
         ),
     ),
     # --- plan_pr_failed ----------------------------------------------------
+    ("git_credential_failed", "es"): TemplateSource(
+        subject="Credencial git rechazada: {{ subject | default('(sin nombre)') }}",
+        body=(
+            "El remoto git rechazó la credencial de "
+            "{{ subject | default('(sin nombre)') }}. "
+            "Motivo: {{ reason | default('no indicado') }}. "
+            "Renueva el token o la clave SSH en la configuración git del proyecto; "
+            "hasta entonces ni el fetch periódico ni el auto-PR funcionarán."
+        ),
+    ),
+    ("git_credential_failed", "en"): TemplateSource(
+        subject="Git credential rejected: {{ subject | default('(unnamed)') }}",
+        body=(
+            "The git remote rejected the credential for "
+            "{{ subject | default('(unnamed)') }}. "
+            "Reason: {{ reason | default('not given') }}. "
+            "Renew the token or SSH key in the project git settings; until then "
+            "neither the periodic fetch nor the auto-PR will work."
+        ),
+    ),
     ("plan_pr_failed", "es"): TemplateSource(
         subject="Auto-PR fallido: {{ plan_name | default('(sin nombre)') }}",
         body=(

@@ -457,7 +457,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_45` — Restos de menor riesgo
 
-- [ ] **Título**: `timeout -k` en el wrapper de `exec_run` (B-08); validar `worktree_host_path`
+- [x] **Título**: `timeout -k` en el wrapper de `exec_run` (B-08); validar `worktree_host_path`
       bajo `data_root` en los consumidores (B-10); `args` capados en la observación (D-08); techo
       de `ask_human` por task (D-09); lote read-only que anuncia el elemento expulsado (D-10);
       `plan_retro` por la persistencia común e idempotente por tag (E-06, G-12); memorizer humano
@@ -466,6 +466,20 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
       `git_credential_failed` (G-10); watchdog que re-resuelve contenedores (G-11); retirar
       `direct_to_default_allowed`/`plan_validation_mode` o cablearlos (G-03).
       **Coste**: 2 d (sumados).
+      _Cerrada el 2026-09-02_ en dos tandas. Operación: `timeout -k 10` (B-08);
+      `workers.host_paths.ensure_under_data_root` en review/test-runtime/run_cycle (B-10);
+      `agentic_recall_embedding_failures_total` (E-10); `approved` sin rama es WARNING (G-09); el
+      watchdog re-resuelve por etiqueta tras un recreate (G-11); `plan_retro` por
+      `persist_memory_candidates` e idempotente por tag en BD, 30 días de ventana (E-06, G-12).
+      Modelo y memoria: `args` capados en la observación y en la línea condensada (D-08);
+      `ASK_HUMAN_MAX_PER_TASK=5` → `ask_human_remaining` en el spec y noop visible al agotarse
+      (D-09); `review(tool, args)` por elemento del lote y `batch_dropped` en la observación
+      (D-10); memorizer humano por `_select_distiller` con causa y racha (E-07);
+      `sanitize_memory_content` antes de embeber/persistir (E-11); evento `git_credential_failed`
+      throttled desde el auto-PR y la sonda de fetch (G-10); `direct_to_default_allowed` retirada
+      —`plan_validation_mode=auto_approve` sí estaba cableado— (G-03; ADR 0072 addendum). Tests:
+      `test_los_restos_operativos_de_menor_riesgo.py`, `test_los_restos_de_memoria_y_git.py`,
+      runtime `test_restos_del_modelo.py`.
 
 ---
 

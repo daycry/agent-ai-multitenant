@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.db import worker_engine
+from workers.git_alerts import looks_like_git_credential_failure, notify_git_credential_failed
 from workers.git_auth import build_git_auth_env, host_de_remote
 from workers.git_repos import BareRepoLayout, BareRepoManager
 from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, plan_git_identity
@@ -135,6 +136,12 @@ async def _notify_plan_pr_failed(plan_id: str, tenant_id: str, plan_name: str, r
         )
     except Exception as exc:  # pragma: no cover - best-effort
         _log.warning("plan_pr.notify_failed", plan_id=plan_id, error=str(exc))
+    # `task_cv_45` (G-10): si el motivo huele a credencial caducada, que se sepa
+    # como tal y no sólo como «auto-PR fallido».
+    if looks_like_git_credential_failure(reason):
+        await notify_git_credential_failed(
+            tenant_id=tenant_id, subject=f"plan {plan_name}", key=f"plan:{plan_id}", reason=reason
+        )
 
 
 async def _persist_task_failure(settings: Settings, plan_id: str, error: str) -> None:

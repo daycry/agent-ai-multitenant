@@ -47,7 +47,6 @@ from api_server.db.models import User
 from api_server.db.platform_settings import get_default_memory_scope, get_memorizable_statuses
 from api_server.memorizer import (
     count_memories_for_source,
-    distil_human_work_session,
     persist_memory_candidates,
     should_memorize,
     should_memorize_human_session,
@@ -714,6 +713,14 @@ def memorize_human_work_session(work_session_id: str) -> dict[str, Any]:
     )
 
 
+def _human_skip_reason(cause: str | None) -> str:
+    """`task_cv_45` (E-07): la causa del destilado humano vacío, visible en el
+    resultado del job (antes todo era `ok:no_candidates`)."""
+    if cause in ("llm_error", "llm_unparseable"):
+        return f"skipped:{cause}"
+    return "ok:no_candidates"
+
+
 async def _memorize_human_work_session_async(
     work_session_id: UUID,
     *,
@@ -769,19 +776,31 @@ async def _memorize_human_work_session_async(
         if not owners:
             return _human_result(work_session_id, 0, "skipped:no_owner_for_scope")
 
-        llm = llm_factory(settings)
+        # `task_cv_45` (E-07): el mismo escalón de proveedor que el memorizer de
+        # ejecuciones (agente → catálogo → env, llm-10), con causa y racha.
+        from api_server.memorizer.distillation import distil_human_work_session_result
+
+        llm, model = await _select_distiller(
+            sessionmaker,
+            ctx["agent"] or {},
+            settings=settings,
+            llm_factory=llm_factory,
+            project=ctx["project"],
+        )
         try:
-            candidates = await distil_human_work_session(
+            distillation = await distil_human_work_session_result(
                 session=ctx["session"],
                 agent=ctx["agent"],
                 user=ctx["user"],
                 llm=llm,
+                model=model,
             )
         finally:
             await llm.aclose()
-
+        await _record_distill_streak(settings, cause=distillation.cause)
+        candidates = distillation.candidates
         if not candidates:
-            return _human_result(work_session_id, 0, "ok:no_candidates")
+            return _human_result(work_session_id, 0, _human_skip_reason(distillation.cause))
 
         embedder = embedder_factory(settings) if embedder_factory is not None else None
         try:

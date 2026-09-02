@@ -70,7 +70,11 @@ _log = structlog.get_logger("workers.plan_git")
 # Policy axes (Plan 06 section 12.6 of the .docx).
 BranchPushMode = Literal["incremental", "final_only"]
 PlanValidationMode = Literal["human_required", "auto_approve"]
-PushPolicy = Literal["forbidden", "branch_only_pr_required", "direct_to_default_allowed"]
+# `task_cv_45` (G-03): `direct_to_default_allowed` se retira. Era una política
+# fantasma —sin llamantes— cuyo `update-ref` sin guard fast-forward habría
+# retrocedido `main`. El plan siempre acaba en PR (principio rector 5).
+PushPolicy = Literal["forbidden", "branch_only_pr_required"]
+_RETIRED_PUSH_POLICIES = ("direct_to_default_allowed",)
 
 
 # ---------------------------------------------------------------------------
@@ -971,6 +975,13 @@ class PlanGitPolicies:
     plan_validation_mode: PlanValidationMode = "human_required"
     push_policy: PushPolicy = "branch_only_pr_required"
 
+    def __post_init__(self) -> None:
+        if self.push_policy in _RETIRED_PUSH_POLICIES:
+            raise ValueError(
+                f"push_policy {self.push_policy!r} was retired (task_cv_45, ADR 0072): "
+                "a plan always ends in a pull request; use 'branch_only_pr_required'"
+            )
+
 
 # Type alias for the PR-opener seam. The worker injects a real
 # ``gh pr create`` runner or a GitHub/AzureDevOps API client; tests
@@ -1281,23 +1292,12 @@ class PlanGitWorkflow:
           ``"merged_to_default"``. The remote push of the new default
           tip is a separate concern (whoever owns CI handles it).
         """
+        del default_branch  # conservado en la firma por compatibilidad; ya no se toca
         if self._policies.push_policy == "forbidden":
             return "forbidden"
-        if self._policies.push_policy == "branch_only_pr_required":
-            return "pr_required"
-        # direct_to_default_allowed → fast-forward the bare's default.
-        _run_git(
-            "update-ref",
-            f"refs/heads/{default_branch}",
-            f"refs/heads/{self._plan_branch}",
-            cwd=self._bare_path,
-        )
-        _log.info(
-            "plan_git.merged_to_default",
-            default=default_branch,
-            plan_branch=self._plan_branch,
-        )
-        return "merged_to_default"
+        # `task_cv_45` (G-03): `direct_to_default_allowed` ya no existe; la única
+        # política que deja PR es ésta y NUNCA se toca `default_branch` aquí.
+        return "pr_required"
 
 
 __all__ = [

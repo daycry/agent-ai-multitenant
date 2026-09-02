@@ -2465,6 +2465,11 @@ class TaskDispatcher:
         human_answers = await self._read_prior_human_answers(session, task)
         if human_answers:
             request["human_answers"] = human_answers
+        # `task_cv_45` (D-09): techo de preguntas por task. Cada respuesta
+        # re-despachaba con presupuesto fresco; el runtime deja de preguntar
+        # cuando `ask_human_remaining` llega a 0.
+        asked = await self._count_human_questions(session, task)
+        request["ask_human_remaining"] = max(0, self.ASK_HUMAN_MAX_PER_TASK - asked)
         # Feature C: human comments on this task/plan → the runtime folds them into a
         # contextual preamble so the agent takes them into account.
         comments = await self._read_relevant_comments(session, task)
@@ -2715,6 +2720,28 @@ class TaskDispatcher:
     # ADR 0114: cuántas Q&A respondidas viajan al siguiente run (las más
     # recientes primero) y tope defensivo del texto de cada lado.
     _HUMAN_ANSWERS_MAX = 3
+    #: `task_cv_45` (D-09): preguntas `ask_human` que una task puede hacer en total.
+    ASK_HUMAN_MAX_PER_TASK = 5
+
+    async def _count_human_questions(self, session: AsyncSession, task: Task) -> int:
+        """Cuántas preguntas `ask_human` lleva hechas ESTA task (cualquier estado)."""
+        from api_server.db.domain import ApprovalRequest
+
+        return int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(ApprovalRequest)
+                    .where(
+                        ApprovalRequest.task_id == task.id,
+                        ApprovalRequest.tenant_id == task.tenant_id,
+                        ApprovalRequest.category == "human_question",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
     _HUMAN_ANSWER_TEXT_MAX = 2000
 
     async def _read_prior_human_answers(

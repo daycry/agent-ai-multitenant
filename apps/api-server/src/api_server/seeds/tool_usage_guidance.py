@@ -202,8 +202,6 @@ def execution_guidance(tool_slugs: Iterable[str]) -> tuple[str, str]:
 
 
 __all__ = [
-    "strip_execution_guidance",
-    "with_execution_guidance",
     "BOTH_DOORS_EN",
     "BOTH_DOORS_ES",
     "SHELL_EXEC_SLUG",
@@ -213,4 +211,6 @@ __all__ = [
     "STACK_ONLY_EN",
     "STACK_ONLY_ES",
     "execution_guidance",
+    "strip_execution_guidance",
+    "with_execution_guidance",
 ]

@@ -115,6 +115,23 @@ def _owner_kwargs(
     raise ValueError(f"unknown memory scope {scope!r}")
 
 
+def _sanitized_candidates(
+    candidates: Sequence[MemoryCandidate],
+) -> tuple[list[MemoryCandidate], int]:
+    """Copias de los candidatos con el contenido redactado (`task_cv_45`, E-11)."""
+    from dataclasses import replace
+
+    from api_server.memorizer.sanitize import sanitize_memory_content
+
+    out: list[MemoryCandidate] = []
+    total = 0
+    for cand in candidates:
+        clean, redactions = sanitize_memory_content(cand.content)
+        total += redactions
+        out.append(replace(cand, content=clean) if redactions else cand)
+    return out, total
+
+
 async def persist_memory_candidates(
     session: AsyncSession,
     candidates: Sequence[MemoryCandidate],
@@ -188,6 +205,10 @@ async def persist_memory_candidates(
     if not candidates:
         return []
 
+    # `task_cv_45` (E-11): ni secretos ni rutas de host llegan a la fila.
+    candidates, redactions = _sanitized_candidates(candidates)
+    if redactions:
+        logger.warning("memorizer.content_redacted", tenant_id=str(tenant_id), count=redactions)
     embeddings = await _embed_contents(embedder, [c.content for c in candidates])
 
     rows: list[MemoryEntry] = []
