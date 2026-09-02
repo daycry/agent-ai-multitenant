@@ -205,3 +205,28 @@ def test_the_migration_is_idempotent(alembic_config: object, migrations_pg_dsn: 
     command.upgrade(alembic_config, _REVISION)  # type: ignore[arg-type]
     twice = asyncio.run(_configs(migrations_pg_dsn, ids))
     assert once == twice
+
+
+@pytest.mark.asyncio
+async def test_the_backfill_table_is_unreachable_from_the_app(
+    alembic_config: object, migrations_pg_dsn: str
+) -> None:
+    """La tabla de respaldo de la 0147 no la puede leer la aplicación: nace sin
+    `tenant_id` ni RLS, así que la única defensa es que `app_user` y
+    `service_user` no tengan NINGÚN privilegio sobre ella (lección de la 0138)."""
+    import asyncpg
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        for role in ("app_user", "service_user"):
+            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                allowed = await conn.fetchval(
+                    "SELECT has_table_privilege($1, 'agents_model_config_backfill_0147', $2)",
+                    role,
+                    privilege,
+                )
+                assert allowed is False, f"{role} tiene {privilege} sobre la tabla de respaldo"
+    finally:
+        await conn.close()

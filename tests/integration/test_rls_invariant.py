@@ -111,6 +111,18 @@ GLOBAL_TABLES_ALLOWLIST: dict[str, str] = {
         " y `test_the_backfill_table_is_unreachable_from_the_app` (en"
         " `test_move_file_backfill_migration.py`) lo comprueba."
     ),
+    "agents_model_config_backfill_0147": (
+        "Respaldo interno de la migración 0147 (`task_cv_03`, auditoría 2026-09-01"
+        " F-01): el `model_config` ENTERO de cada copia de agente built-in que"
+        " pineaba `provider = 'anthropic'` —un kind que no existe— antes de"
+        " despinearla, para que el `downgrade` lo restaure tal cual. La escribe el"
+        " `upgrade` y la lee el `downgrade`, ambos como `migrations_user`; la"
+        " APLICACIÓN no la toca. No lleva `tenant_id` porque no se le da acceso: la"
+        " propia 0147 revoca todo permiso a `app_user` y `service_user` en el mismo"
+        " `upgrade` que la crea, `conftest._APP_REVOKED_TABLES` reaplica ese revoke"
+        " tras cada reset, y `test_the_backfill_table_is_unreachable_from_the_app`"
+        " (en `test_unpin_anthropic_backfill_migration.py`) lo comprueba."
+    ),
     "organizations": (
         "ES el tenant. Su aislamiento no es `tenant_id = app.tenant_id` sino"
         " `id = app.tenant_id` (policy `org_self_only`, migración 0001)."
