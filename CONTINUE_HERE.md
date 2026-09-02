@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-02** · #177 mergeado; PR #178 (ola 2) abierto; rama `plan/remediacion-ciclo-vida-2026-09-ola3` (ver §0)
+> **Última actualización: 2026-09-02** · #177, #178 y #179 mergeados; PR #182 (ola 4 + cierre del plan) abierto; el plan está en `pending_human_validation`.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -12,34 +12,37 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
-## 0. Ahora mismo (2026-09-02): remediación del ciclo de vida, por olas
+## 0. Ahora mismo (2026-09-02): remediación del ciclo de vida, a falta de validación humana
 
 Plan
 [`docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md)
-(`status: in_progress`), nacido del informe
+(`status: pending_human_validation`), nacido del informe
 [`auditoria-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/auditoria-ciclo-vida-proyecto-2026-09-01.md).
+Las 36 casillas están `[x]` con su test en verde.
 
-- **Mergeado en `master` (PR #177)**: auditoría git/dependencias + olas 0 y 1
-  (`task_cv_00…08`, `task_cv_10…15`). Ocho pasadas de CI hicieron falta; lo que
-  destaparon está en el historial del PR y en los tests (ruff-format y no
-  black; ids de revisión ≤ 32 chars; fixtures locales; `workers-aux` en las
-  listas de quiesce/restore).
-- **PR #178 (ola 2, rama `…-ola2`)**: siete de ocho tareas; queda `task_cv_25`
-  (bridge efímero por ejecución), anotada en el plan con el patrón a seguir.
-- **Rama `…-ola3`** (encima de `…-ola2`): `task_cv_30`, `31`, `32`, `34`, `35`
-  hechas; quedan `task_cv_33` (guía de ejecución en el dispatch + `merge` con
-  capacidades) y `task_cv_36` (refresco de arranque de plantillas/políticas/
-  corpus + cruce `allowed_commands` vs binarios del runtime). Cuando #178 haga
-  squash-merge: `git rebase --onto origin/master <sha-cabeza-de-ola2> plan/remediacion-ciclo-vida-2026-09-ola3`.
-- **Ola 4 entera** (`task_cv_40…45`), las actualizaciones de ADR de los
-  criterios de cierre y el changelog: sin empezar.
+- **Mergeado en `master`**: PR #177 (auditoría git/dependencias + olas 0 y 1),
+  #178 (ola 2 menos `task_cv_25`) y #179 (ola 3 menos `task_cv_33` y `36`).
+- **PR #182 (rama `plan/remediacion-ciclo-vida-2026-09-ola4`)**: `task_cv_25`,
+  `33`, `36` y la ola 4 entera (`task_cv_40…45`), más los criterios de cierre:
+  changelog
+  [`docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md)
+  y addenda en los ADR 0060, 0071, 0072, 0102, 0129, 0148 y 0163. Cuando CI
+  esté en verde: squash-merge (convención del repo) y borrar la rama.
+- **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
+  Hasta que el operador los valide, el plan NO pasa a `completed`.
+- **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
+  así que un push que toque `.github/workflows/` por HTTPS se rechaza. Se
+  empuja por SSH: `git push git@github.com:daycry/agent-ai-multitenant.git HEAD:refs/heads/<rama>`
+  (o `gh auth refresh -h github.com -s workflow` una vez).
 
-Comprobar antes de fiarse: `gh pr list`, `git log --oneline -5` en cada rama,
-`./.venv/Scripts/python.exe -m pytest tests/unit -q` y
+Comprobar antes de fiarse: `gh pr list`, `git log --oneline -5`,
+`./.venv/Scripts/python.exe -m pytest tests/unit -q` (5.980 en verde el
+2026-09-02, 3 min) y
 `grep -c "\[x\]" docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`.
 Los tests de integración (BD) sólo corren en CI. **Orden de despliegue**: imagen
 del `agent-runtime` y worker antes que orquestador (`claim_id`, spec y token por
-fichero).
+fichero, `ask_human_remaining`); los proyectos con
+`push_policy=direct_to_default_allowed` deben pasar a `branch_only_pr_required`.
 
 Lo que sigue (§1 en adelante) describe el despliegue del 2026-08-13 y sigue
 siendo el inventario de riesgos para desplegar en otra máquina.
