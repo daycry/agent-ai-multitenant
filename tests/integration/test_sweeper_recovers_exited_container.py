@@ -5,7 +5,8 @@ Dos filas `running` de hace 10 minutos (más que la gracia de huérfanos, mucho
 menos que las 7 horas del umbral de edad), las dos con contenedor `exited`:
 
   * la primera dejó `execution.finished` (done) en los logs → la fila acaba `done`
-    con ese output y la tarea pasa a `in_review`; nada de «worker loss»;
+    con ese output y la tarea sale de `in_progress` (a `done`: no tiene reviewer);
+    nada de «worker loss»;
   * la segunda murió sin línea terminal → se sella YA como `failed`
     (`stale_after_worker_loss`) y la tarea a `blocked`, sin esperar 7 horas.
 
@@ -181,7 +182,9 @@ async def test_the_first_sweep_finalizes_with_the_containers_real_result(
     assert exec_finished.output == "login implementado"
     assert exec_finished.iterations == 3 and exec_finished.total_tokens == 900
     assert exec_finished.completed_at is not None
-    assert task_finished is not None and task_finished.status == TaskStatus.IN_REVIEW.value
+    # dag_01: sin reviewer configurado, un run `done` cierra la tarea (con reviewer
+    # iría a `in_review`); lo que importa es que salió de `in_progress` con su resultado.
+    assert task_finished is not None and task_finished.status == TaskStatus.DONE.value
 
     assert exec_silent is not None and exec_silent.status == "failed"
     assert exec_silent.abort_code == "stale_after_worker_loss"

@@ -60,6 +60,7 @@ async def _seed(sm: async_sessionmaker, *, task_status: str) -> dict[str, UUID]:
                 priority="medium",
             )
         )
+        await s.flush()  # la FK executions.task_id exige la tarea ya insertada
         s.add(
             Execution(
                 id=ids["execution"],

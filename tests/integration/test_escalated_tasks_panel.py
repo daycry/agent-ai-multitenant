@@ -254,7 +254,10 @@ async def test_escalated_panel_includes_blocked_with_review_abort_code(
             title="approval",
         )
 
-        # 4. blocked + non-review abort code (commit_failed) → OUT.
+        # 4. blocked + commit_failed → IN desde `task_cv_11` (auditoría 2026-09-01,
+        #    A-06/C-04): un fallo real de commit/push deja el entregable fuera de
+        #    la rama del plan y bloquea la tarea; el panel lo enseña como el
+        #    conflicto de rebase.
         t_plain = await _insert_task(
             migrations_pg_dsn,
             tenant_id=tenant_id,
@@ -342,7 +345,7 @@ async def test_escalated_panel_includes_blocked_with_review_abort_code(
         tasks = resp.json()["tasks"]
         by_id = {t["id"]: t for t in tasks}
 
-        expected = {str(t_review), str(t_failed), str(t_approval)} | {
+        expected = {str(t_review), str(t_failed), str(t_approval), str(t_plain)} | {
             str(tid) for tid in t_runtime_esc.values()
         }
         assert set(by_id) == expected

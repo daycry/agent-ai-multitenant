@@ -22,12 +22,28 @@ from alembic import command
 from api_server.celery_client import auto_pr_request
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
 def _migrated(alembic_config: object) -> None:
     command.upgrade(alembic_config, "head")
+
+
+@pytest.fixture()
+def workers_settings(monkeypatch: pytest.MonkeyPatch, migrations_pg_dsn: str):  # type: ignore[no-untyped-def]
+    async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+    monkeypatch.setenv("WORKERS_DATABASE_URL", async_dsn)
+    # Celery también (broker Y result backend), como en `test_reconciler.py`.
+    monkeypatch.setenv("WORKERS_BROKER_URL", TEST_REDIS_URL)
+    monkeypatch.setenv("WORKERS_RESULT_BACKEND", TEST_REDIS_URL)
+    from workers.config import get_settings, reset_settings_cache
+
+    reset_settings_cache()
+    yield get_settings()
+    reset_settings_cache()
 
 
 async def _seed(dsn: str) -> dict[str, UUID]:
