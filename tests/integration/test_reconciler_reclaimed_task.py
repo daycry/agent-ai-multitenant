@@ -180,10 +180,12 @@ async def test_a_reclaimed_task_is_not_decided_by_the_run_of_its_previous_claim(
     assert old.started_at is None and old.assigned_agent_id is None
     assert result["stuck_tasks"] == 1
 
+    # El publicador escribe el mismo evento en el stream global y en el del
+    # proyecto (un pipeline): se cuenta sólo el global, como en test_reconciler.py.
     new_statuses = [
         json.loads(e["payload"]).get("new_status")
         for e in redis.events
-        if e.get("type") == "task.status_changed"
+        if e.get("type") == "task.status_changed" and e.get("stream") == "events:tasks"
     ]
     assert TaskStatus.IN_REVIEW.value not in new_statuses
     assert new_statuses.count(TaskStatus.READY.value) == 1

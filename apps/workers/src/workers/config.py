@@ -729,6 +729,9 @@ class Settings(BaseSettings):
             "api-server",
             "orchestrator",
             "workers",
+            # task_cv_00 (2026-09-02): drena `test`/`review` y escribe en PostgreSQL
+            # (fases de test, veredictos) igual que el pool genérico.
+            "workers-aux",
             "workers-marketplace",
             "cortex-beat",
             "notification-dispatcher",
@@ -1029,6 +1032,9 @@ class Settings(BaseSettings):
             "api-server",
             "orchestrator",
             "workers",
+            # task_cv_00 (2026-09-02): drena `test`/`review` y escribe en PostgreSQL
+            # (fases de test, veredictos) igual que el pool genérico.
+            "workers-aux",
             "workers-privileged",
             "workers-marketplace",
             "cortex-beat",

@@ -193,7 +193,7 @@ def test_aux_services_cleaned_up_on_main_failure() -> None:
         runner.launch(_spec_with_aux(DEFAULT_POSTGRES))
 
     for c in started:
-        c.remove.assert_called_once_with(force=True)
+        c.remove.assert_called_once_with(force=True, v=True)  # task_cv_04: volúmenes anónimos fuera
 
 
 def test_no_aux_services_means_no_extra_containers() -> None:
