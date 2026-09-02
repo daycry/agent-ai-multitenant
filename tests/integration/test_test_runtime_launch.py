@@ -190,7 +190,7 @@ def test_cleanup_always_runs_on_success() -> None:
 
     # Every started container removed, network removed.
     for c in started:
-        c.remove.assert_called_once_with(force=True)
+        c.remove.assert_called_once_with(force=True, v=True)
     network.remove.assert_called_once()
 
 
@@ -214,7 +214,7 @@ def test_cleanup_runs_even_if_main_run_raises() -> None:
 
     # Cleanup ran in finally even though main_run raised.
     for c in started:
-        c.remove.assert_called_once_with(force=True)
+        c.remove.assert_called_once_with(force=True, v=True)
     network.remove.assert_called_once()
 
 
@@ -248,7 +248,7 @@ def test_run_command_always_cleans_up() -> None:
     runner.run_command(_spec_for_python_pytest(), "php spark migrate", timeout_s=60)
 
     for c in started:
-        c.remove.assert_called_once_with(force=True)
+        c.remove.assert_called_once_with(force=True, v=True)
     network.remove.assert_called_once()
 
 
