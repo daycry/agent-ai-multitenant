@@ -48,6 +48,7 @@ def _image(slug: str) -> str:
 
 PYTHON_PYTEST = RuntimeTemplate(
     id="python-pytest",
+    toolchains=frozenset({"python"}),
     docker_image=_image("python-pytest"),
     dep_cache_mount="/home/agent/.cache/pip",
     default_pre_install=(
@@ -63,6 +64,7 @@ PYTHON_PYTEST = RuntimeTemplate(
 
 NODE_JEST = RuntimeTemplate(
     id="node-jest",
+    toolchains=frozenset({"node"}),
     docker_image=_image("node-jest"),
     dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
@@ -73,6 +75,7 @@ NODE_JEST = RuntimeTemplate(
 
 NODE_VITEST = RuntimeTemplate(
     id="node-vitest",
+    toolchains=frozenset({"node"}),
     docker_image=_image("node-vitest"),
     dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
@@ -83,6 +86,7 @@ NODE_VITEST = RuntimeTemplate(
 
 NODE_PLAYWRIGHT = RuntimeTemplate(
     id="node-playwright",
+    toolchains=frozenset({"node"}),
     docker_image=_image("node-playwright"),
     dep_cache_mount="/home/agent/.npm",
     default_pre_install=("npm ci",),
@@ -97,6 +101,7 @@ NODE_PLAYWRIGHT = RuntimeTemplate(
 
 PHP_PHPUNIT = RuntimeTemplate(
     id="php-phpunit",
+    toolchains=frozenset({"php"}),
     docker_image=_image("php-phpunit"),
     dep_cache_mount="/home/agent/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
@@ -107,6 +112,7 @@ PHP_PHPUNIT = RuntimeTemplate(
 
 PHP_PEST = RuntimeTemplate(
     id="php-pest",
+    toolchains=frozenset({"php"}),
     docker_image=_image("php-pest"),
     dep_cache_mount="/home/agent/.composer/cache",
     default_pre_install=("composer install --no-interaction --no-progress",),
@@ -119,6 +125,7 @@ PHP_PEST = RuntimeTemplate(
 
 GO_TEST = RuntimeTemplate(
     id="go-test",
+    toolchains=frozenset({"go"}),
     docker_image=_image("go-test"),
     dep_cache_mount="/home/agent/go/pkg/mod",
     default_pre_install=("go mod download",),
@@ -135,6 +142,7 @@ GO_TEST = RuntimeTemplate(
 
 JAVA_MAVEN = RuntimeTemplate(
     id="java-maven",
+    toolchains=frozenset({"jvm"}),
     docker_image=_image("java-maven"),
     dep_cache_mount="/home/agent/.m2/repository",
     default_pre_install=("mvn -B dependency:go-offline",),
@@ -145,6 +153,7 @@ JAVA_MAVEN = RuntimeTemplate(
 
 JAVA_GRADLE = RuntimeTemplate(
     id="java-gradle",
+    toolchains=frozenset({"jvm"}),
     docker_image=_image("java-gradle"),
     dep_cache_mount="/home/agent/.gradle/caches",
     default_pre_install=("gradle --no-daemon dependencies",),
@@ -158,6 +167,7 @@ JAVA_GRADLE = RuntimeTemplate(
 
 RUBY_RSPEC = RuntimeTemplate(
     id="ruby-rspec",
+    toolchains=frozenset({"ruby"}),
     docker_image=_image("ruby-rspec"),
     dep_cache_mount="/home/agent/.bundle",
     default_pre_install=("bundle install --jobs=4",),
@@ -170,6 +180,7 @@ RUBY_RSPEC = RuntimeTemplate(
 
 RUST_CARGO = RuntimeTemplate(
     id="rust-cargo",
+    toolchains=frozenset({"rust"}),
     docker_image=_image("rust-cargo"),
     dep_cache_mount="/home/agent/.cargo/registry",
     default_pre_install=("cargo fetch",),
@@ -183,6 +194,7 @@ RUST_CARGO = RuntimeTemplate(
 
 DOTNET_TEST = RuntimeTemplate(
     id="dotnet-test",
+    toolchains=frozenset({"dotnet"}),
     docker_image=_image("dotnet-test"),
     dep_cache_mount="/home/agent/.nuget/packages",
     default_pre_install=("dotnet restore",),

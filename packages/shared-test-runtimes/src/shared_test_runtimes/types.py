@@ -157,6 +157,12 @@ class RuntimeTemplate:
     # produced files) to build the TestReport. The first one that
     # produces a non-empty parse wins; the rest are skipped.
     output_parsers: tuple[OutputParser, ...] = ("raw_text",)
+    #: `task_cv_36` (auditoría 2026-09-01, F-08): las toolchains que la IMAGEN
+    #: trae (claves de :data:`TOOLCHAIN_COMMANDS`). Una plantilla de proyecto no
+    #: puede prometer en `allowed_commands` el toolchain de otro stack sobre este
+    #: runtime: el agente lo invocaría y recibiría «not found». Los `generic-*`
+    #: no declaran ninguna a propósito.
+    toolchains: frozenset[str] = frozenset()
 
     # Default network policy. Most templates default to ``none`` so
     # the test container has no internet access.
@@ -230,9 +236,36 @@ class RuntimeTemplate:
         return self.digest is not None
 
 
+#: Comandos que identifican cada toolchain (`task_cv_36`). No es una lista de
+#: binarios de la imagen — es lo que delata que una allowlist promete OTRO
+#: stack: `docker` sobre `python-pytest`, `php` sobre `node-jest`. Las
+#: utilidades genéricas (`ls`, `make`, `git`) no pertenecen a ninguna.
+TOOLCHAIN_COMMANDS: dict[str, frozenset[str]] = {
+    "python": frozenset({"python", "python3", "pip", "pip3", "pytest", "uv", "poetry"}),
+    "node": frozenset({"node", "npm", "npx", "yarn", "pnpm", "jest", "vitest", "playwright"}),
+    "php": frozenset({"php", "composer", "phpunit", "pest", "spark"}),
+    "go": frozenset({"go", "gofmt"}),
+    "jvm": frozenset({"java", "javac", "mvn", "gradle"}),
+    "ruby": frozenset({"ruby", "gem", "bundle", "bundler", "rspec", "rake"}),
+    "rust": frozenset({"cargo", "rustc"}),
+    "dotnet": frozenset({"dotnet"}),
+    "devops": frozenset({"docker", "terraform", "ansible", "ansible-playbook", "kubectl", "helm"}),
+}
+
+
+def foreign_commands(allowed: tuple[str, ...] | list[str], toolchains: frozenset[str]) -> list[str]:
+    """Los comandos de ``allowed`` que pertenecen a una toolchain que el runtime
+    NO trae (`task_cv_36`). Puro; el orden es el de ``allowed``."""
+    owned = {cmd for name, cmds in TOOLCHAIN_COMMANDS.items() if name in toolchains for cmd in cmds}
+    known = {cmd for cmds in TOOLCHAIN_COMMANDS.values() for cmd in cmds}
+    return [cmd for cmd in allowed if cmd in known and cmd not in owned]
+
+
 __all__ = [
+    "TOOLCHAIN_COMMANDS",
     "NetworkPolicy",
     "OutputParser",
     "Resources",
     "RuntimeTemplate",
+    "foreign_commands",
 ]

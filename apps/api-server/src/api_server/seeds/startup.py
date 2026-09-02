@@ -138,15 +138,20 @@ async def refresh_builtin_agent_capabilities(
         seed_builtin_agent_tools,
         seed_builtin_agents,
     )
+    from api_server.seeds.builtin_approval_policies import seed_builtin_approval_policies
+    from api_server.seeds.builtin_project_templates import seed_builtin_project_templates
     from api_server.seeds.builtin_skills import seed_builtin_skills
     from api_server.seeds.builtin_teams import seed_builtin_teams
     from api_server.seeds.builtin_tools import seed_builtin_tools
+    from api_server.seeds.catalog_ingestion import warn_stale_catalog_corpus
     from api_server.seeds.ci4_team import (
         seed_ci4_agent_skills,
         seed_ci4_agent_tools,
         seed_ci4_agents,
+        seed_ci4_project_template,
         seed_ci4_team,
     )
+    from api_server.seeds.human_agent_templates import seed_human_agent_templates
     from api_server.seeds.qa_e2e_automator import (
         seed_qa_e2e_automator,
         seed_qa_e2e_automator_skills,
@@ -180,6 +185,16 @@ async def refresh_builtin_agent_capabilities(
         ("qa_e2e_automator_skills", seed_qa_e2e_automator_skills),
         ("teams", seed_builtin_teams),
         ("ci4_team", seed_ci4_team),
+        # `task_cv_36` (auditoría 2026-09-01, F-07/F-08): lo que el arranque NO
+        # refrescaba y también es de la plataforma — políticas, plantillas de
+        # proyecto (van después de los equipos: referencian `team_slug`),
+        # plantillas de agente humano— y un aviso, no una ingesta, del corpus
+        # de conocimiento rancio (ingerir exige Ollama y no cabe en el boot).
+        ("approval_policies", seed_builtin_approval_policies),
+        ("project_templates", seed_builtin_project_templates),
+        ("ci4_project_template", seed_ci4_project_template),
+        ("human_agent_templates", seed_human_agent_templates),
+        ("catalog_corpus_check", warn_stale_catalog_corpus),
     )
 
     aplicados: dict[str, int] = {}

@@ -360,7 +360,7 @@ Cuatro roturas deterministas y cinco defectos de atribución. Ninguna exige dise
 
 ### `task_cv_36` — El refresco de arranque cubre plantillas y avisa del corpus rancio (F-07, F-08)
 
-- [ ] **Título**: `startup.py` no refresca `project_templates`, `human_agent_templates`,
+- [x] _(hecho 2026-09-02, tests en verde; el refresco de arranque aplica también políticas, plantillas de proyecto (built-in y CI4) y plantillas de agente humano, y avisa con WARNING del corpus de KB rancio (`warn_stale_catalog_corpus`); `RuntimeTemplate.toolchains` + `foreign_commands` cruzan las allowlists, y `webapp`, `legacy-migration` y `devops-bootstrap` dejan de prometer comandos que su runtime no trae)_ **Título**: `startup.py` no refresca `project_templates`, `human_agent_templates`,
       `approval_policies` ni el corpus de skills (la skill CI4 reescrita el 2026-09-01 no llega a
       ninguna instalación sin CLI). Añadir los upserts; WARNING con `corpus_hash` desactualizado;
       test que cruce `allowed_commands` de cada plantilla con los binarios de su runtime

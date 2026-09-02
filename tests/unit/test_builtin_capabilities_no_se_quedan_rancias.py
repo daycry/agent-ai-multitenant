@@ -362,3 +362,27 @@ def test_el_catalogo_se_siembra_antes_de_repartirlo() -> None:
             f"({pasos[primero_cableado]!r}): repartir una tool que el catálogo "
             "todavía no tiene revienta contra la FK `agent_tools.tool_id`"
         )
+
+
+# ------------------------------------------------------------------ task_cv_36
+# Auditoría 2026-09-01 (F-07): el refresco cubría agentes, tools, skills y
+# equipos, pero no las políticas de aprobación, las plantillas de proyecto ni
+# las de agente humano — también de la plataforma — y nadie avisaba de que el
+# corpus de conocimiento del repo ya no era el ingerido.
+_SEEDS_DE_PLATAFORMA_QUE_FALTABAN: dict[str, str] = {
+    "approval_policies": "seed_builtin_approval_policies",
+    "project_templates": "seed_builtin_project_templates",
+    "ci4_project_template": "seed_ci4_project_template",
+    "human_agent_templates": "seed_human_agent_templates",
+    "catalog_corpus_check": "warn_stale_catalog_corpus",
+}
+
+
+def test_el_refresco_cubre_plantillas_politicas_y_corpus() -> None:
+    referenciados = _nombres_referenciados(_funcion(_STARTUP, "refresh_builtin_agent_capabilities"))
+    faltan = {
+        paso: fn
+        for paso, fn in _SEEDS_DE_PLATAFORMA_QUE_FALTABAN.items()
+        if fn not in referenciados
+    }
+    assert not faltan, f"el refresco de arranque no aplica: {faltan}"

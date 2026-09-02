@@ -32,10 +32,15 @@ def test_api_rest_template_carries_python_toolchain() -> None:
     assert tpl.default_runtime_template == "python-pytest"
 
 
-def test_webapp_template_carries_both_stacks() -> None:
+def test_webapp_template_promises_only_what_its_runtime_ships() -> None:
+    """`task_cv_36` (auditoría 2026-09-01, F-08): esta plantilla prometía las DOS
+    toolchains, pero su runtime es `python-pytest`, que no trae node; un `npm`
+    en la allowlist mandaba al agente a buscarlo y a quemar iteraciones. El
+    front se prueba por tarea con `node-playwright` (`e2e-test-suite`)."""
     tpl = _BY_SLUG["webapp"]
     assert "pytest" in tpl.allowed_commands
-    assert "npm" in tpl.allowed_commands
+    assert "npm" not in tpl.allowed_commands
+    assert tpl.default_runtime_template == "python-pytest"
 
 
 def test_e2e_template_carries_node_toolchain() -> None:
