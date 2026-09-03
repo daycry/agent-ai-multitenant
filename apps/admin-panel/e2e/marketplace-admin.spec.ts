@@ -176,7 +176,7 @@ async function setup(page: Page): Promise<void> {
 // ---------------------------------------------------------------------------
 // Catalog — browse, y NADA de configuración (task_mkt2_13 / ADR 0142)
 // ---------------------------------------------------------------------------
-test("catalog tab lists global + private listings and offers no install-time config", async ({
+test("catalog tab lists global + private listings, offers install and no install-time config", async ({
   page,
 }) => {
   await setup(page);
@@ -194,6 +194,72 @@ test("catalog tab lists global + private listings and offers no install-time con
   // aserción es en negativo a propósito — es la que se pondría roja si alguien
   // reintrodujera el formulario en el flujo de instalación.
   await expect(page.getByTestId(`catalog-playwright-config-${PLAYWRIGHT_ID}`)).toHaveCount(0);
+  // `task_mk_00`: lo que SÍ ofrece ahora es instalar. Hasta 2026-09-03 el panel
+  // no emitía un solo POST de instalación: se instalaba llamando a la API.
+  await expect(page.getByTestId(`catalog-install-${PRIVATE_ID}`)).toBeVisible();
+  // …salvo en lo que ya está instalado (el fixture INSTALLATION apunta al
+  // listing global), que se dice en vez de ofrecerse dos veces.
+  await expect(page.getByTestId(`catalog-installed-${GLOBAL_ID}`)).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Catalog — instalar (`task_mk_00`)
+// ---------------------------------------------------------------------------
+test("installing from the catalog posts the listing and lands where the flow continues", async ({
+  page,
+}) => {
+  await setup(page);
+
+  // Ruta MÁS específica que la del setup y registrada después: Playwright las
+  // resuelve LIFO, así que ésta atiende el POST y el GET sigue cayendo al
+  // handler de arriba por `fallback()`.
+  const enviados: unknown[] = [];
+  await page.route("http://localhost:8001/marketplace/installations", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    enviados.push(route.request().postDataJSON());
+    return route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...INSTALLATION,
+        id: "inst-nueva",
+        listing_id: PRIVATE_ID,
+        status: "disabled",
+      }),
+    });
+  });
+  await page.route(
+    "http://localhost:8001/marketplace/installations/inst-nueva/permissions",
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          installation_id: "inst-nueva",
+          listing_id: PRIVATE_ID,
+          status: "disabled",
+          requested_permissions: [],
+          granted_permissions: [],
+          denied_permissions: [],
+        }),
+      }),
+  );
+
+  await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await page.getByTestId(`catalog-install-${PRIVATE_ID}`).click();
+
+  // Manda el listing correcto y NO pide el camino asíncrono, que sin worker en
+  // la lane `marketplace` dejaría la instalación en `analyzing` para siempre.
+  await expect.poll(() => enviados.length).toBe(1);
+  const cuerpo = enviados[0] as { listing_id: string; async_gates?: boolean };
+  expect(cuerpo.listing_id).toBe(PRIVATE_ID);
+  expect(cuerpo.async_gates ?? false).toBe(false);
+
+  // Nace `disabled` porque su nivel de confianza exige consentimiento: el paso
+  // que falta es otorgarlo, y ahí es donde se aterriza.
+  await expect
+    .poll(() => new URL(page.url()).pathname)
+    .toBe("/admin/marketplace/installations/inst-nueva/permissions");
 });
 
 // ---------------------------------------------------------------------------

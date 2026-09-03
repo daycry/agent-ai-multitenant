@@ -209,7 +209,7 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_00` — Instalar desde el catálogo (UI-01, MK-16)
 
-- [ ] **Título**: la tarjeta del catálogo (`app/admin/marketplace/page.tsx:282-333`) gana un botón
+- [x] **Título**: la tarjeta del catálogo (`app/admin/marketplace/page.tsx:282-333`) gana un botón
       **Instalar** que llama al `POST /marketplace/installations` ya existente
       (`routers/marketplace/installations.py:85`). Tres cosas que el mapeo obliga a decidir y dejar
       escritas en el commit: (1) el botón y su mutación viven en un módulo aparte —`page.tsx` está en 728
@@ -225,6 +225,16 @@ UI (`apps/admin-panel`):
       de la navegación. El e2e existente (`marketplace-admin.spec.ts:179`) cambia de nombre, y su
       negativo de la línea 196 —el enlace de configuración de Playwright, ADR 0142— **no se toca**.
       **Coste**: 1 d.
+      _Cerrada el 2026-09-03_: `catalog-install.tsx` (módulo aparte por el techo de 800 líneas de
+      `page.tsx`) con `CatalogInstallButton` y `destinoTrasInstalar`; la petición va **síncrona**
+      (sin `async_gates`) porque un `analyzing` sin worker en la lane `marketplace` sería un verde
+      que miente; el destino sale de la respuesta —`disabled` recién creada ⇒ faltan permisos que
+      otorgar; cualquier otro estado ⇒ la ficha, que es donde se despliega—; `STATUS_BADGE` gana
+      `analyzing` y `blocked`; el catálogo consulta las instalaciones vivas con la clave y la ruta
+      que ya cachea el aviso de actualizaciones, así que no cuesta una petición extra. Tests: 7 en
+      `page.test.tsx` (incluida la pareja de RBAC) y el e2e nuevo
+      `installing from the catalog posts the listing and lands where the flow continues`; el mock de
+      `next/navigation` se amplió también en `i18n.test.tsx`, que lo tenía sin `useRouter`.
 
 ## Ola 1 — El contrato es honesto (P1 · ~4,5 d)
 
