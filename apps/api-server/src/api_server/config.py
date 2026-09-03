@@ -13,7 +13,7 @@ from functools import lru_cache
 from math import log2
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Import-safe by construction: `auth.crypto_keys` depends only on `cryptography`
@@ -599,21 +599,51 @@ class Settings(BaseSettings):
     egress_proxy_host: str = Field(default="localhost", description="egress-proxy TCP host.")
     egress_proxy_port: int = Field(default=8888, description="egress-proxy TCP port (tinyproxy).")
 
-    # ----- Web del córtex (ADR 0067 — web-search / web-fetch provider-agnósticas) -----
-    # TODA salida a Internet de las host tools del córtex (``web_search`` / ``web_fetch``)
-    # va por el egress-proxy (tinyproxy, allowlist en docker/egress-proxy/filter.txt).
-    # NUNCA se conecta directo desde el api-server. En prod la api-server vive en
-    # `agentic-net` y resuelve `agentic-egress-proxy:8888`; en dev (api-server fuera de
-    # docker) el override expone el puerto al host (docker-compose.dev.yml), de ahí que
-    # el default apunte a localhost. Si se deja vacío, las web tools fallan con un error
-    # claro (nunca salen sin proxy).
-    cortex_egress_proxy_url: str = Field(
+    # ----- Salida a Internet del api-server, TODA por el egress-proxy -----
+    # Nació como ajuste del córtex (ADR 0067: `web_search` / `web_fetch` salen por
+    # el tinyproxy con allowlist de docker/egress-proxy/filter.txt, nunca directo).
+    # El ADR 0165 (D9) le añadió un segundo consumidor que no es del córtex —la
+    # prueba de conexión de un MCP remoto—, así que la URL pasó a ser
+    # infraestructura del PROCESO y el campo se llama por lo que es.
+    #
+    # El nombre viejo sobrevive como alias de ENTORNO, no como segundo campo: hay
+    # instalaciones con `API_SERVER_CORTEX_EGRESS_PROXY_URL` en su `.env` (y el
+    # propio docker-compose.manuals.yml lo lleva desde el ADR 0067), y dos campos
+    # independientes con el mismo valor esperado acabarían divergiendo — el córtex
+    # saliendo por un proxy y el MCP por otro es exactamente la asimetría que el
+    # ADR 0165 viene a cerrar. El orden del `AliasChoices` importa: manda el nombre
+    # nuevo cuando conviven los dos, que es lo que espera quien lee el compose.
+    #
+    # El default sigue apuntando a localhost porque en dev el api-server corre
+    # FUERA de docker y el puerto se publica al host (docker-compose.dev.yml).
+    # Dentro del contenedor ese default no es nada: quien tiene que decir la
+    # verdad ahí es el compose (`API_SERVER_EGRESS_PROXY_URL: http://egress-proxy:8888`,
+    # emitido por el generador del instalador). Si se deja vacío, los caminos de
+    # salida fallan con un error claro — nunca salen sin proxy.
+    egress_proxy_url: str = Field(
         default="http://localhost:8888",
+        validation_alias=AliasChoices(
+            "API_SERVER_EGRESS_PROXY_URL",
+            "API_SERVER_CORTEX_EGRESS_PROXY_URL",
+        ),
         description=(
-            "URL del egress-proxy (tinyproxy) por el que las host tools del córtex "
-            "salen a Internet. En el stack docker: http://agentic-egress-proxy:8888."
+            "URL del egress-proxy (tinyproxy) por el que el api-server sale a Internet: "
+            "web tools del córtex (ADR 0067) y prueba de conexión de MCP remotos "
+            "(ADR 0165). En el stack docker: http://egress-proxy:8888."
         ),
     )
+
+    @property
+    def cortex_egress_proxy_url(self) -> str:
+        """El nombre anterior del campo, para no tocar a sus tres llamantes vivos.
+
+        Lo leen `cortex/tools.py` (web_search y web_fetch) y
+        `workers/cortex_curiosity.py`, que importa el `Settings` del api-server a
+        propósito para reusar EXACTAMENTE la misma pila de salida. Es una
+        propiedad y no una copia por eso mismo: no puede quedarse atrás.
+        """
+        return self.egress_proxy_url
+
     # Proveedor de búsqueda por defecto del córtex (catálogo cerrado, ADR 0067):
     # 'searxng' (self-host, sin key — el camino por defecto) o 'brave' (API key en
     # Vault/env). Un System Admin puede sobreescribirlo en vivo con el platform

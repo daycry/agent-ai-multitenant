@@ -50,6 +50,11 @@ Es seguro: `ollama` es un nombre de servicio interno, no un dominio de
 exfiltración. Aplica igual en prod si el operador despliega un Ollama in-stack
 con ese nombre.
 
+> **Si el host que falta es el de un MCP remoto** (`mcp.atlassian.com` y
+> compañía), no se edita este fichero a mano: hay un ajuste de plataforma y un
+> procedimiento con su paso de aplicación y su comprobación contra el proxy —
+> [egress-mcp-allowlist.md](../../06-runbooks/egress-mcp-allowlist.md) (ADR 0165).
+
 > Alternativa más limpia (no aplicada aún): que el agent-runtime lleve
 > `NO_PROXY=ollama` para alcanzar el LLM in-stack directo y no gastar allowlist
 > del egress. Si se hace, documentarlo aquí.

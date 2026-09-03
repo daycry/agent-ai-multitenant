@@ -42,6 +42,7 @@ __all__ = [
     "BLOCK_BEGIN",
     "BLOCK_END",
     "MAX_HOSTS",
+    "SETTING_KEY",
     "InvalidMcpHostError",
     "normalise_host",
     "render_filter_line",
@@ -52,6 +53,10 @@ __all__ = [
 #: sino legibilidad: una allowlist que nadie puede leer de un vistazo ha dejado de
 #: ser una allowlist.
 MAX_HOSTS = 100
+
+#: La clave del ajuste de plataforma. Vive aquí, con su validador, para que el
+#: router y el registro no la tecleen cada uno por su cuenta.
+SETTING_KEY = "egress.mcp_allowed_hosts"
 
 #: Centinelas del bloque que reescribe el renderizador. Se conservan aunque el
 #: bloque quede vacío: sin ellos, el script no sabría dónde volver a escribir y
@@ -164,7 +169,7 @@ def render_generated_block(hosts: Iterable[str]) -> str:
         )
     lineas = [
         BLOCK_BEGIN,
-        "# Lo reescribe `scripts/egress/render-mcp-allowlist.py` desde el ajuste de",
+        "# Lo reescribe `scripts/egress/render_mcp_allowlist.py` desde el ajuste de",
         "# plataforma `egress.mcp_allowed_hosts` (ADR 0165). Editarlo a mano hace que",
         "# el fichero y el ajuste digan cosas distintas, que es justo lo que el ADR evita.",
     ]

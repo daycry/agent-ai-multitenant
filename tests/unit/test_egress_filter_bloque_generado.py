@@ -167,3 +167,16 @@ def test_el_renderizador_no_importa_nada_del_repo() -> None:
         m for m in modulos if m.startswith(("api_server", "shared_", "workers", "installer"))
     }
     assert not del_repo, f"el renderizador dejó de ser stdlib puro: importa {sorted(del_repo)}"
+
+
+def test_los_dos_renderizadores_escriben_exactamente_lo_mismo() -> None:
+    """Hay dos escritores del bloque —el módulo del api-server y el script stdlib—
+    y tienen que producir texto IDÉNTICO. Si difiriesen en una coma, cada pasada
+    de uno reescribiría lo del otro y el `diff` del filtro dejaría de decir qué
+    cambió de verdad. Lo cazó la revisión: uno nombraba el script con guion y el
+    otro con guion bajo.
+    """
+    mod = _script()
+
+    for hosts in ([], ["mcp.atlassian.com"], ["b.example.com", "a.example.com"]):
+        assert render_generated_block(hosts) == mod.render_generated_block(hosts), hosts

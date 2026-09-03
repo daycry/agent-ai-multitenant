@@ -27,8 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_admin_session, require_system_admin
 from api_server.db.llm_providers import LLM_PROVIDER_KINDS, list_active_llm_providers_by_kind
-from api_server.db.models import PlatformSetting, User
-from api_server.db.platform_settings import set_platform_setting
+from api_server.db.models import AuditLog, PlatformSetting, User
+from api_server.db.platform_settings import get_platform_setting, set_platform_setting
+from api_server.egress.audit import ALLOWLIST_AUDIT_ACTION, allowlist_delta
+from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
 from api_server.platform_settings_registry import (
     PLATFORM_KNOWN_SETTINGS,
     UnknownPlatformSettingError,
@@ -150,5 +152,27 @@ async def update_platform_setting(
     if actor is None:  # pragma: no cover - a valid session always has a user
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="actor not found")
 
+    # `task_mk_02` (ADR 0165 D5): la allowlist de egress necesita DOS registros
+    # porque son dos preguntas distintas. `platform_settings` responde «cómo está
+    # ahora»; esta fila responde «quién lo abrió y cuándo», que es la que se hace
+    # en una revisión de seguridad y que la propia tabla borra en cada escritura.
+    delta = None
+    if key == MCP_ALLOWLIST_KEY:
+        anterior = await get_platform_setting(session, key)
+        delta = allowlist_delta(anterior or [], coerced)
+
     await set_platform_setting(session, key, coerced, actor=actor)
+
+    if delta is not None:
+        session.add(
+            AuditLog(
+                tenant_id=None,  # es un ajuste de PLATAFORMA, pedido por tenants
+                user_id=principal.user_id,
+                action=ALLOWLIST_AUDIT_ACTION,
+                resource_type="platform_setting",
+                changes={"key": key, **delta},
+            )
+        )
+        await session.flush()
+
     return PlatformSettingValue(key=key, value=coerced, is_default=False)

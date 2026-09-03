@@ -43,6 +43,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [triage-vulnerabilidades.md](./triage-vulnerabilidades.md)           | Leer un fallo de `security-scan` (pip-audit/npm audit/Trivy), decidir actualizar vs suprimir y revisar los PRs de Dependabot |
 | [recuperacion-lockout-admin.md](./recuperacion-lockout-admin.md)     | Recuperar el acceso a `/admin/*` cuando la allowlist de IP, la MFA obligatoria o la sesión de 15 min dejan fuera al operador |
 | [particiones-append-only.md](./particiones-append-only.md)           | Ver, crear y reparar las particiones mensuales de las cinco tablas append-only; qué hacer ante `PartitionCoverageMissing`    |
+| [egress-mcp-allowlist.md](./egress-mcp-allowlist.md)                 | Abrir, revocar y **comprobar** un host MCP remoto en la allowlist del `egress-proxy` (ADR 0165)                              |
 
 ## Convención
 

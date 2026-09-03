@@ -19,6 +19,7 @@ read with :func:`api_server.db.platform_settings.get_platform_setting` (its own
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
@@ -39,11 +40,16 @@ from api_server.db.platform_settings import (
     InvalidModelConfigError,
     validate_chat_model_config,
 )
+from api_server.egress.mcp_allowlist import MAX_HOSTS as MAX_MCP_HOSTS
+from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
+from api_server.egress.mcp_allowlist import normalise_host as normalise_mcp_host
 from api_server.settings_registry import require_language_pair
 
 # ``model_config`` is the structured agent-default spec (provider/model/temperature);
 # the rest are scalars. The UI renders a control per type.
-PlatformSettingType = Literal["bool", "int", "decimal", "model_config", "guardrails_config"]
+PlatformSettingType = Literal[
+    "bool", "int", "decimal", "string_list", "model_config", "guardrails_config"
+]
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,13 @@ class PlatformSettingDef:
     description_en: str
     min_value: float | int | None = None
     max_value: float | int | None = None
+    #: Sólo para `string_list`: tope de entradas y validador POR ELEMENTO.
+    #: El validador se inyecta aquí, y no vive dentro del tipo, para que el tipo
+    #: sea genérico: la siguiente lista de la plataforma no debería volver a
+    #: pagar esto. Devuelve la forma canónica de la entrada o levanta `ValueError`
+    #: con el motivo, que es lo que acaba en el 422 que ve el operador.
+    max_items: int | None = None
+    item_validator: Callable[[str], str] | None = None
 
     def __post_init__(self) -> None:
         require_language_pair(
@@ -97,6 +110,43 @@ class PlatformCategoryDef:
 # Registry — the source of truth (only settings WITHOUT a dedicated page)
 # ---------------------------------------------------------------------------
 PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
+    "egress": PlatformCategoryDef(
+        label_es="Egress / Red",
+        label_en="Egress / Network",
+        icon="Network",
+        description_es=(
+            "Qué puede alcanzar la plataforma fuera del stack. El egress es deny-by-default "
+            "(ADR 0019): lo que no esté aquí, no sale."
+        ),
+        description_en=(
+            "What the platform may reach outside the stack. Egress is deny-by-default "
+            "(ADR 0019): what is not listed here does not get out."
+        ),
+        settings={
+            MCP_ALLOWLIST_KEY: PlatformSettingDef(
+                type="string_list",
+                default=[],
+                label_es="Hosts MCP remotos permitidos",
+                label_en="Allowed remote MCP hosts",
+                description_es=(
+                    "Hostnames de servidores MCP remotos que los sandboxes pueden alcanzar por el "
+                    "egress-proxy (por ejemplo `mcp.atlassian.com`). Un tenant lo pide, un System "
+                    "Admin lo abre. GUARDARLO NO LO APLICA: el filtro del proxy está horneado "
+                    "en su imagen, así que hace falta el paso de aplicación del runbook "
+                    "`docs/06-runbooks/egress-mcp-allowlist.md` (ADR 0165)."
+                ),
+                description_en=(
+                    "Hostnames of remote MCP servers the sandboxes may reach through the egress "
+                    "proxy (for example `mcp.atlassian.com`). A tenant asks, a System Admin opens "
+                    "it. SAVING DOES NOT APPLY IT: the proxy filter is baked into its image, "
+                    "so the apply step in `docs/06-runbooks/egress-mcp-allowlist.md` is required "
+                    "(ADR 0165)."
+                ),
+                max_items=MAX_MCP_HOSTS,
+                item_validator=normalise_mcp_host,
+            ),
+        },
+    ),
     "modelos": PlatformCategoryDef(
         label_es="Modelos",
         label_en="Models",
@@ -422,7 +472,40 @@ def validate_platform_setting_value(key: str, value: Any) -> Any:
         except Exception as exc:
             raise ValueError(f"{key}: invalid guardrails config: {exc}") from exc
         return dict(value)
+    if sdef.type == "string_list":
+        return _validate_string_list(key, value, sdef)
     raise ValueError(f"unknown setting type {sdef.type!r}")  # pragma: no cover
+
+
+def _validate_string_list(key: str, value: Any, sdef: PlatformSettingDef) -> list[str]:
+    """Lista de cadenas validada entrada a entrada, guardada ordenada y sin repetir.
+
+    El orden y la unicidad no son estética: lo que se guarda aquí es lo que después
+    renderiza el bloque generado de `filter.txt` (ADR 0165 D8), y si dependiese de
+    cómo lo tecleó el operador, el `diff` de ese fichero dejaría de significar algo
+    en la revisión de un cambio de egress.
+
+    Los duplicados se colapsan ANTES de mirar el tope: cien veces el mismo host son
+    cien entradas tecleadas y un solo host permitido.
+    """
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{key}: expected a list of strings (lista de cadenas)")
+    validador = sdef.item_validator
+    canonicos: set[str] = set()
+    for item in value:
+        if validador is None:
+            canonicos.add(item.strip())
+            continue
+        try:
+            canonicos.add(validador(item))
+        except ValueError as exc:
+            raise ValueError(f"{key}: {exc}") from exc
+    ordenados = sorted(canonicos)
+    if sdef.max_items is not None and len(ordenados) > sdef.max_items:
+        raise ValueError(
+            f"{key}: {len(ordenados)} entradas distintas y el tope son {sdef.max_items}"
+        )
+    return ordenados
 
 
 def _validate_decimal(key: str, value: Any, sdef: PlatformSettingDef) -> str:
@@ -493,6 +576,9 @@ def platform_registry_to_dict() -> dict[str, Any]:
                         if sdef.type == "model_config"
                         else {}
                     ),
+                    # El panel necesita el tope para no dejar guardar una entrada
+                    # de más y descubrirlo en el 422.
+                    **({"max_items": sdef.max_items} if sdef.type == "string_list" else {}),
                 }
                 for key, sdef in cat.settings.items()
             },
