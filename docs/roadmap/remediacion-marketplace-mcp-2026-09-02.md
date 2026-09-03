@@ -1,9 +1,9 @@
 ---
 plan_id: remediacion-marketplace-mcp-2026-09-02
 title: Remediación del marketplace y de los MCP por proyecto — de la instalación al run, con anclas Jira/Confluence
-status: pending_approval
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-09-03
 completed_at: null
 estimated_duration_calendar: 3 semanas
 estimated_effort_person_days: 14
