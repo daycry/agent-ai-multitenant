@@ -37,6 +37,9 @@ vi.mock("@/lib/use-current-user", () => ({
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "inst-1" }),
+  // `task_mk_00`: el catálogo navega tras instalar, así que usa `useRouter`.
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 import MarketplaceAdminPage from "@/app/admin/marketplace/page";

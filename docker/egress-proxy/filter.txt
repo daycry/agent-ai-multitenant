@@ -53,3 +53,9 @@
 # por proyecto sobre lo que SÍ se permite a nivel de red. Si en el
 # futuro hay dominios "siempre permitidos" del producto (p.ej. un
 # registry, un CDN propio), se añaden aquí.
+
+# >>> BEGIN generated: egress.mcp_allowed_hosts — NO EDITAR A MANO
+# Lo reescribe `scripts/egress/render_mcp_allowlist.py` desde el ajuste de
+# plataforma `egress.mcp_allowed_hosts` (ADR 0165). Editarlo a mano hace que
+# el fichero y el ajuste digan cosas distintas, que es justo lo que el ADR evita.
+# <<< END generated: egress.mcp_allowed_hosts

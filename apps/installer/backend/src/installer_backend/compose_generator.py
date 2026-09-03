@@ -1053,6 +1053,18 @@ def _api_server_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "API_SERVER_RESULT_BACKEND": _redis_dsn(2, prod=prod),
             "API_SERVER_VAULT_URL": "http://vault:8200",
             "API_SERVER_MINIO_URL": "http://minio:9000",
+            # TODA la salida a Internet del api-server por el proxy con allowlist:
+            # las web tools del córtex (ADR 0067) y la prueba de conexión de un MCP
+            # remoto (ADR 0165 D9). El hermano de `WORKERS_EGRESS_PROXY_URL`, y hasta
+            # la corrección A1 del addendum de ese ADR NO EXISTÍA: el api-server se
+            # quedaba con el default de `api_server.config` (`http://localhost:8888`,
+            # que dentro del contenedor no es nada), así que la proxificación de
+            # «Probar conexión» no habría funcionado en ninguna instalación salida
+            # del wizard. Alcanzable: este servicio va en `agentic-net` +
+            # `agentic-agents` (`_api_server_service`) y el egress-proxy está en esas
+            # dos mismas redes (`_egress_proxy_service`), así que el nombre
+            # `egress-proxy` resuelve por el DNS del compose.
+            "API_SERVER_EGRESS_PROXY_URL": "http://egress-proxy:8888",
             # Secrets: reference the per-service prefixed .env var that
             # config_generators.build_env_vars writes (the compose↔.env contract
             # is asserted by tests/unit/test_compose_env_contract.py). VAULT_TOKEN

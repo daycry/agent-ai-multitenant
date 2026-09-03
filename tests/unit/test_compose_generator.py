@@ -1081,6 +1081,30 @@ def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: st
     assert "agentic-docker" in nets, f"{service_name} must join the socket-proxy network"
 
 
+def test_api_server_reaches_the_egress_proxy_like_the_workers_do() -> None:
+    """ADR 0165 (D9 y corrección A1 del addendum): el api-server también sale por
+    el proxy — «Probar conexión» de un MCP remoto deja de ir directa.
+
+    Es el hermano de la aserción de arriba, y existe porque el hueco era
+    exactamente esa asimetría: `_workers_env` emitía su `WORKERS_EGRESS_PROXY_URL`
+    y `_api_server_env` NO emitía ninguna variable de egress, así que el
+    api-server se quedaba con el default de `config.py` (`http://localhost:8888`,
+    que dentro del contenedor no es nada). Sin esta línea, la proxificación de la
+    prueba de conexión no funciona en NINGUNA instalación salida del wizard, y el
+    fallo se ve en producción, no aquí.
+
+    Se comprueba además la red: emitir la URL de un servicio inalcanzable sería
+    la misma avería con mejor aspecto."""
+    services = generate_compose(_config())["services"]
+    api = services["api-server"]
+
+    assert api["environment"].get("API_SERVER_EGRESS_PROXY_URL") == "http://egress-proxy:8888", (
+        "api-server must be told where the egress-proxy is (ADR 0165 A1)"
+    )
+    shared = set(api["networks"]) & set(services["egress-proxy"]["networks"])
+    assert shared, "api-server and egress-proxy share no network: the URL would not resolve"
+
+
 # --- prod-01 A9/A10 (auditoría 2026-07-06): el compose GENERADO por el
 # instalador divergía del stack real (manuals.yml). Estos tests fijan la
 # reconciliación.

@@ -95,12 +95,21 @@ def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
-def _host_is_blocked_name(host: str) -> bool:
-    """True si el host es un nombre de metadata/interno que se bloquea sin resolver."""
+def host_is_blocked_name(host: str) -> bool:
+    """True si el host es un nombre de metadata/interno que se bloquea sin resolver.
+
+    Pública desde `task_mk_02` (ADR 0165 D2 + addendum A5): la allowlist de hosts
+    MCP remotos tiene que rechazar exactamente lo mismo, y dos copias de una lista
+    de bloqueo se bifurcan — siempre hacia el lado permisivo.
+    """
     h = host.lower().rstrip(".")
     if h in _BLOCKED_HOST_EXACT:
         return True
     return any(h.endswith(suffix) for suffix in _BLOCKED_HOST_SUFFIXES)
+
+
+#: Alias del nombre privado que usaban los llamantes internos antes de promoverlo.
+_host_is_blocked_name = host_is_blocked_name
 
 
 def assert_safe_url(
@@ -194,4 +203,5 @@ __all__ = [
     "Resolver",
     "UnsafeUrlError",
     "assert_safe_url",
+    "host_is_blocked_name",
 ]

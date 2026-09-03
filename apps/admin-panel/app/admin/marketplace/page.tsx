@@ -54,6 +54,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
 
+import { CatalogInstallButton } from "./catalog-install";
 import {
   CatalogUpdateChip,
   INSTALLATIONS_KEY,
@@ -149,6 +150,11 @@ const STATUS_BADGE: Record<
   enabled: { variant: "success", labelKey: "installStatusEnabled" },
   disabled: { variant: "warning", labelKey: "installStatusDisabled" },
   revoked: { variant: "muted", labelKey: "installStatusRevoked" },
+  // `task_mk_00`: los dos estados que faltaban. Existen en el enum del backend
+  // (`db/marketplace.py`) y llegan por la API; sin entrada aquí se pintaban en
+  // crudo, con el valor del enum en inglés técnico.
+  analyzing: { variant: "info", labelKey: "installStatusAnalyzing" },
+  blocked: { variant: "danger", labelKey: "installStatusBlocked" },
 };
 
 /** Listings carrying a non-null tenant_id are the caller tenant's PRIVATE rows. */
@@ -235,6 +241,30 @@ function CatalogTab() {
   // caché con el aviso de arriba y con la ficha, así que no cuesta una segunda
   // ronda de peticiones.
   const { byListing } = useInstallationUpdates();
+  // `task_mk_00`: qué listings tiene ya este tenant, para no ofrecer instalar
+  // dos veces. Misma clave y misma ruta que el aviso de actualizaciones, así
+  // que sale de la caché ya caliente y no cuesta una petición extra.
+  const installedQuery = useQuery({
+    queryKey: INSTALLATIONS_KEY,
+    queryFn: () => apiFetch<MarketplaceInstallation[]>(INSTALLATIONS_PATH),
+    refetchOnWindowFocus: false,
+  });
+  // Ni `revoked` ni `blocked` cuentan como instalada: la primera se desinstaló y
+  // la segunda la rechazó una puerta de seguridad. Ofrecer instalar de nuevo es
+  // lo correcto en ambos casos, y pintar «Instalada» en verde sobre una
+  // bloqueada diría lo contrario que la pestaña Instaladas, que la pinta en rojo.
+  const instaladas = useMemo(
+    () =>
+      new Set(
+        (installedQuery.data ?? [])
+          .filter(
+            (installation) =>
+              installation.status !== "revoked" && installation.status !== "blocked",
+          )
+          .map((installation) => installation.listing_id),
+      ),
+    [installedQuery.data],
+  );
   const listingsQuery = useQuery({
     queryKey: ["marketplace-listings"],
     queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
@@ -329,6 +359,11 @@ function CatalogTab() {
                       testId={`catalog-review-note-${listing.id}`}
                     />
                   </div>
+                  <CatalogInstallButton
+                    listingId={listing.id}
+                    installed={instaladas.has(listing.id)}
+                    pidePermisos={(listing.requested_permissions ?? []).length > 0}
+                  />
                 </CardHeader>
               </Card>
             </li>

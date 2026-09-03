@@ -4789,6 +4789,13 @@ export const dictionary = {
     permissions: { es: "Permisos", en: "Permissions" },
     revoke: { es: "Revocar", en: "Revoke" },
     uninstall: { es: "Desinstalar", en: "Uninstall" },
+    // `task_mk_00`: instalar desde el catálogo. Hasta 2026-09-03 el panel no
+    // sabía crear una instalación: sólo listarlas.
+    install: { es: "Instalar", en: "Install" },
+    installing: { es: "Instalando…", en: "Installing…" },
+    installed: { es: "Instalada", en: "Installed" },
+    installStatusAnalyzing: { es: "en análisis", en: "under analysis" },
+    installStatusBlocked: { es: "bloqueada", en: "blocked" },
     shareCardTitle: {
       es: "Compartir un listing privado con otro tenant",
       en: "Share a private listing with another tenant",
