@@ -6,7 +6,7 @@ blocking_plan: []
 started_at: 2026-09-03
 completed_at: null
 estimated_duration_calendar: 3 semanas
-estimated_effort_person_days: 14
+estimated_effort_person_days: 16
 created_by: claude-fable-5-1-audit-2026-09-02
 docs_language: es
 priority: P1
@@ -69,11 +69,48 @@ Backend (`apps/api-server/src/api_server`, `apps/workers/src/workers`, runtime):
 - **MK-08 · MEDIO** · No hay test end-to-end marketplace → run: `test_marketplace_v2_chain.py`
   para en «el agente tiene la fila».
 
+Lo que el mapeo del 2026-09-03 anadió (y que cambia el orden de la ola 0):
+
+- **MK-09 · BLOQUEANTE** · El [ADR 0052](../05-architecture-decisions/0052-import-mcp-tools-catalogo.md)
+  está `accepted` y **rechazó expresamente** el auto-import (su opción P-B, «por meter ruido/superficie
+  no querida»). Por la cadena de precedencia de `CLAUDE.md`, `task_mk_01` no puede implementarse sin un
+  ADR que enmiende esa alternativa rechazada y deje el 0052 sin mentir.
+- **MK-10 · BLOQUEANTE** · `mcp/config.py::_to_runtime_config` (`routers/mcp.py:463`) **no propaga
+  `oauth_ref`** y `MCPClient.connect` tampoco lo consume: el OAuth lo resuelve el RUNTIME vía
+  `internal_agent`. Un MCP con OAuth —Atlassian, el caso que motiva el plan— **no se puede descubrir
+  desde el api-server**.
+- **MK-11 · ALTO** · `get_tenant_session` mantiene abierta la transacción del request durante todo el
+  handler. Descubrir dentro de `PUT /projects/{id}` mete una llamada de red de hasta 300 s en esa
+  transacción: es el antipatrón que cerró prod-13 (`tests/integration/test_assistant_no_tx_during_llm.py`).
+- **MK-12 · MEDIO** · `marketplace/materialize.py:229-250` ya crea una fila `Tool` `mcp_tool` con nombre
+  **sin namespacear**, invisible al runtime (`agent_tools_enforcement.py:282-284` exige el prefijo). Tras
+  el auto-import convivirían duplicados y `dematerialize_installation` sólo borra la suya.
+- **MK-13 · ALTO** · `docker/egress-proxy/Dockerfile` hornea `filter.txt` en la imagen y **ningún compose
+  lo monta como bind**: cambiar la allowlist exige `build` + `up -d --force-recreate`. Un ajuste que
+  valide sin re-renderizar el fichero convierte un fallo honesto de red en un «guardado en verde» que
+  miente.
+- **MK-14 · ALTO** · El instalador **no puede leer la BD**: `installer_backend` no importa `api_server` y
+  en `GENERATE_CONFIG` todavía no hay base de datos. «El instalador vuelca el platform setting al
+  filtro», tal como lo escribía `task_mk_02`, no es implementable sin una segunda fuente en
+  `InstallerConfig` o un paso de aplicación posterior.
+- **MK-15 · MEDIO** · `POST /projects/{id}/mcp/test-connection` (`routers/mcp.py:246`) descubre **desde el
+  api-server**, que vive en `agentic-net` y no tiene `HTTP_PROXY`: «Probar conexión» puede salir verde
+  mientras el run muere con `403 Filtered`. Sin cerrar esto, el mensaje accionable de egress no se llega
+  a disparar nunca.
+- **MK-16 · MEDIO** · Instalar **no es** desplegar: `POST /marketplace/installations` sólo crea la fila; el
+  servidor llega a `projects.mcp_servers` en el despliegue (`marketplace/deploy.py:397-460`). Y navegar
+  siempre a consentimiento es incorrecto en dos de los tres caminos: un listing `verified` nace `ENABLED`
+  sin permisos que otorgar (`marketplace/install.py:369-374`) y con `async_gates` la fila nace
+  `analyzing` sin nada materializado. `async_gates` además es **opt-in** (`schemas/marketplace.py:143`,
+  default `False`) y, sin worker en esa cola, `analyzing` es permanente.
+
 UI (`apps/admin-panel`):
 
 - **UI-01 · ALTO** · `app/admin/marketplace/page.tsx:282-333`: la tarjeta del catálogo no tiene
-  botón **Instalar**; `e2e/marketplace-admin.spec.ts:179` lo fija en negativo. Sólo se instala
-  por API.
+  botón **Instalar** — ni el panel entero emite un solo `POST /marketplace/installations`. Sólo se
+  instala por API. _Corregido el 2026-09-03_: el plan decía que `e2e/marketplace-admin.spec.ts:179`
+  fija la ausencia en negativo, y es falso; esa línea es el NOMBRE del test y el único negativo
+  (`:196`) es sobre el enlace de configuración de Playwright (ADR 0142), que NO se toca.
 - **UI-02 · ALTO** · `components/marketplace/available-capabilities-section.tsx:114-131`: el
   despliegue descarta `warnings` y `oauth_pending`; `created_refs` (`deployment-types.ts:87`) no
   se pinta en ningún sitio.
@@ -102,56 +139,92 @@ UI (`apps/admin-panel`):
 
 ---
 
-## Ola 0 — La cadena abre de punta a punta (P0 · ~4,5 d)
+## Ola 0 — La cadena abre de punta a punta (P0 · ~7 d)
 
-Tres huecos que hoy hacen que «instalar un MCP desde el panel y que el agente lo use» sea
-imposible sin tocar la API a mano y el filtro del proxy a mano.
+> **Reordenada el 2026-09-03** tras el mapeo con anclas verificadas. El orden original
+> (`mk_00 → mk_01 → mk_02`) era incorrecto por dos razones medidas: (1) mientras el egress bloquee,
+> el auto-import **falla para todo MCP remoto**, así que `mk_01` entregado antes sólo funcionaría con
+> transporte `stdio` y sus tests pasarían por mocks; (2) `mk_01` contradice un ADR aceptado (MK-09) y
+> `mk_02` toca la postura de seguridad del egress, así que **los dos ADR van primero** — es el criterio
+> de cierre nº 5 del plan y la cadena de precedencia de `CLAUDE.md`. `mk_00` puede ir en paralelo, pero
+> su e2e no puede afirmar «el agente la usa» hasta que `mk_01` esté.
 
-### `task_mk_00` — Instalar desde el catálogo (UI-01)
+### `task_mk_0a` — ADR de la allowlist de MCP remotos en el egress (MK-03, MK-13, MK-14, MK-15)
 
-- [ ] **Título**: la tarjeta del catálogo (`app/admin/marketplace/page.tsx:282-333`) gana un
-      botón **Instalar** que llama al POST de instalación ya existente
-      (`routers/marketplace/installations.py:212`), muestra el `202 + Location` del análisis
-      asíncrono (`installations.py:177-202`) y salta a la pantalla de consentimiento
-      (`installations/[id]/permissions/page.tsx`). El e2e que fija la ausencia
-      (`e2e/marketplace-admin.spec.ts:179`) se invierte.
-      **Test**: vitest de la tarjeta (botón, estado «analizando», error 4xx visible); e2e
-      `marketplace-admin` con el flujo instalar → consentir → aparece en «Instaladas».
+- [ ] **Título**: escribir el ADR 0165 y llevarlo a `accepted` por el operador. Decide QUIÉN manda sobre
+      la allowlist (platform setting como fuente de verdad con paso de aplicación, o el `filter.txt` del
+      repo con el api-server sólo validando), y cierra explícitamente: escapado ERE + anclado `^…$` y
+      validador de FQDN; prohibición de hosts internos, IPs literales y `169.254.169.254`; si la
+      allowlist es de host o de `host:puerto` (hoy `ConnectPort 443 8443`); el `Allow` por IP cliente de
+      tinyproxy si el api-server pasa a probar por el proxy; quién aprueba la apertura de un host de un
+      tenant y dónde queda su auditoría; que esto **no** es control de exfiltración; cómo se evita la
+      deriva ajuste↔fichero (MK-13); qué fuente usa el instalador (MK-14); y si «Probar conexión» debe
+      salir por el proxy (MK-15).
+      **Test**: `tests/docs` y `tests/unit/test_docs_governance.py` en verde con el ADR nuevo.
+      **Coste**: 0,5 d.
+
+### `task_mk_0b` — ADR que enmienda el 0052 sobre el auto-import (MK-09, MK-10, MK-11, MK-12)
+
+- [ ] **Título**: escribir el ADR 0166 y llevarlo a `accepted`. Enmienda la alternativa P-B rechazada por
+      el [ADR 0052](../05-architecture-decisions/0052-import-mcp-tools-catalogo.md) —que queda actualizado
+      en el mismo commit— y decide cómo dejan de existir servidores MCP cuyas tools el modelo nunca ve:
+      síncrono al guardar (descartado a priori por MK-11), asíncrono por cola, semiautomático de un clic,
+      o descubrimiento desde el worker. Cierra: qué pasa con los MCP OAuth que hoy no se pueden descubrir
+      desde el api-server (MK-10); qué sustituye al control de supply chain de P-A; qué se hace con la
+      fila `Tool` sin namespacear de `materialize.py` (MK-12); idempotencia y borrado al retirar un
+      servidor; fail-open o fail-closed al guardar; y los límites (`Tool.name` es `String(120)` con
+      único por tenant).
+      **Test**: `tests/docs`, `test_docs_governance.py` y, si usa `rejects:`,
+      `tests/docs/test_adr_precedence.py`.
+      **Coste**: 0,5 d.
+
+### `task_mk_02` — Un MCP remoto sale por el egress (MK-03, MK-13, MK-14, MK-15, UI-03)
+
+- [ ] **Título**: implementar lo que decida el ADR 0165. En cualquiera de sus variantes: `mcp.atlassian.com`
+      (y los hosts que el ADR fije) pasan el proxy; el api-server valida el host al guardar un servidor
+      con `url` externa y al probar la conexión, con un error accionable que diga **cómo se aplica** el
+      cambio, en vez del `403 Filtered` crudo de `mcp-connection-test-section.tsx:135-141`; y las dos
+      copias del filtro (`docker/egress-proxy/filter.txt` y la de `installer_backend.stack_assets`) se
+      mueven en el mismo commit (`tests/unit/test_installer_ships_stack_assets.py`).
+      `project.allowed_domains` sigue gobernando sólo `http_request`.
+      **Test**: unit del validador (escapado, anclado, hosts prohibidos); integración del guardado y del
+      test de conexión con host no permitido; unit del render del filtro y de la guarda de deriva entre
+      las dos copias; vitest del mapeo del error en el panel.
+      **Coste**: 2 d.
+
+### `task_mk_01` — Las tools de un MCP llegan al catálogo sin un paso manual (MK-02, MK-09…MK-12, UI-03)
+
+- [ ] **Título**: implementar lo que decida el ADR 0166, extrayendo primero la lógica de
+      `import_mcp_tools` (`routers/mcp.py:308-457`) a una función reutilizable (hoy vive en línea) para no
+      duplicarla entre el guardado, el despliegue del marketplace (`deploy.py:418-424`, donde hoy sólo
+      avisa «vuelve a desplegar») y el endpoint manual. En la UI, la tarjeta del servidor
+      (`mcp-server-card.tsx`) muestra el recuento de tools importadas o «tools sin importar», con probar e
+      importar como acciones directas fuera del diálogo de edición, y el estado vacío de
+      `mcp-tool-roles-section.tsx:197` enlaza a la causa.
+      **Test**: integración (guardar/desplegar → filas `Tool` namespaceadas sin pulsar nada, o el
+      contrato que fije el ADR; segundo intento no duplica; discovery caído → sin filas y con aviso; un
+      servidor retirado deja de anunciar sus tools); el rojo legítimo hoy es el sembrado manual de
+      `tests/integration/test_marketplace_v2_chain.py:241-253`; vitest de la tarjeta con sus tres estados.
+      **Coste**: 2 d.
+
+### `task_mk_00` — Instalar desde el catálogo (UI-01, MK-16)
+
+- [ ] **Título**: la tarjeta del catálogo (`app/admin/marketplace/page.tsx:282-333`) gana un botón
+      **Instalar** que llama al `POST /marketplace/installations` ya existente
+      (`routers/marketplace/installations.py:85`). Tres cosas que el mapeo obliga a decidir y dejar
+      escritas en el commit: (1) el botón y su mutación viven en un módulo aparte —`page.tsx` está en 728
+      líneas de un techo de 800 que vigila `scripts/check-component-size.test.ts` sobre el árbol real—;
+      (2) todo el texto sale del diccionario, porque `check-i18n.test.ts` corre sobre el árbol real y
+      `marketplace` no está en ninguna allowlist; (3) a dónde se navega tras instalar, sabiendo que un
+      listing `verified` nace `ENABLED` sin permisos que consentir y que `async_gates` es opt-in y sin
+      worker deja `analyzing` para siempre (MK-16). Se añaden además los estados `analyzing` y `blocked`
+      a `STATUS_BADGE` (`page.tsx:145`), que hoy se pintarían crudos.
+      **Test**: vitest de la tarjeta (ofrece instalar y manda el `listing_id`; un 409 de ya-instalado se
+      lee con `errorText` y no se pinta el cuerpo crudo; lo ya instalado no se ofrece dos veces; a un
+      miembro no admin no se le ofrece); e2e nuevo que captura el `postDataJSON` y comprueba el destino
+      de la navegación. El e2e existente (`marketplace-admin.spec.ts:179`) cambia de nombre, y su
+      negativo de la línea 196 —el enlace de configuración de Playwright, ADR 0142— **no se toca**.
       **Coste**: 1 d.
-
-### `task_mk_01` — Las tools de un MCP se importan solas (MK-02, UI-03)
-
-- [ ] **Título**: al guardar un servidor MCP (`routers/mcp.py` POST/PUT) y al desplegarlo desde
-      el marketplace (`marketplace/deploy.py:430-440`, donde hoy sólo avisa «vuelve a
-      desplegar») se encadena `discover_tools` + upsert idempotente de las filas `Tool`
-      `mcp_tool` (la misma lógica que `routers/mcp.py:308`, fail-closed y con el fallo en el
-      preámbulo como ya hace `test_mcp_failure_in_preamble.py`). En la UI, la tarjeta del
-      servidor (`mcp-server-card.tsx`) muestra el recuento de tools importadas o el badge
-      «tools sin importar», con «Probar conexión» e «Importar» como acciones directas fuera
-      del diálogo de edición; el estado vacío de `mcp-tool-roles-section.tsx:197` enlaza a la
-      causa.
-      **Test**: integración `test_mcp_tool_import_and_threading.py` extendida (guardar → filas
-      sin pulsar nada; segundo guardar no duplica; discovery caído → sin filas y aviso);
-      vitest de la tarjeta con los tres estados.
-      **Coste**: 1,5 d.
-
-### `task_mk_02` — Un MCP remoto sale por el egress (MK-03, UI-03)
-
-- [ ] **Título**: ADR corto primero (toca la postura de seguridad de los ADR 0060 y 0129):
-      allowlist de hosts MCP remotos como **platform setting** gestionado por System Admin
-      (`platform_settings`, UI en el área de sistema), que el instalador vuelca al filtro del
-      egress-proxy (`apps/installer/.../stack_assets/egress-proxy/filter.txt` +
-      `docker/egress-proxy/filter.txt`) y que el api-server comprueba al guardar y al probar
-      la conexión de un servidor con `url` externa: si el host no está, error accionable
-      («añade `mcp.atlassian.com` a la allowlist de MCP remotos») en vez del `403 Filtered`
-      crudo de `mcp-connection-test-section.tsx:135-141`. `project.allowed_domains` sigue
-      gobernando sólo `http_request`. Opción descartada en el ADR: derivar el filtro de
-      `projects.mcp_servers` en caliente (el proxy es estático y cualquier proyecto podría
-      abrir egress).
-      **Test**: unit del validador de host contra la allowlist; integración del POST con host
-      no permitido (422 con el mensaje); unit del generador del instalador (filter.txt contiene
-      los hosts del setting); vitest del mapeo del error.
-      **Coste**: 2 d (0,5 ADR + 1,5 implementación).
 
 ## Ola 1 — El contrato es honesto (P1 · ~4,5 d)
 
