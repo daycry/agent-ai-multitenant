@@ -14,8 +14,8 @@ se fijan aquí antes de que exista el código:
   dicte la entrada— meta `.*` y abra el proxy entero.
 
 Y una corrección medida del addendum del ADR (A3): IDNA **no** rechaza un
-homógrafo unicode, lo convierte en punycode válido — `"раypal.com".encode("idna")`
-sale `b'xn--ypal-43d9g.com'`, que pasaría el alfabeto sin despeinarse. Así que lo
+homógrafo unicode, lo convierte en punycode válido: un `paypal.com` con dos
+letras cirílicas sale `xn--ypal-43d9g.com`, que pasaría el alfabeto sin despeinarse. Así que lo
 no-ASCII se rechaza pidiendo el punycode explícito, que es una decisión que el
 operador puede auditar leyendo.
 """
@@ -30,6 +30,11 @@ from api_server.egress.mcp_allowlist import (
     render_filter_line,
     render_generated_block,
 )
+
+#: `paypal.com` con la `p` y la `a` CIRÍLICAS. Se compone con `chr()` a propósito:
+#: un literal homógrafo en el código fuente es exactamente el problema que este
+#: caso prueba, y además ruff lo rechaza (RUF001) — con razón.
+_HOMOGRAFO = chr(0x0440) + chr(0x0430) + "ypal.com"
 
 pytestmark = pytest.mark.unit
 
@@ -71,7 +76,9 @@ def test_un_host_legitimo_se_normaliza_a_minusculas(entrada: str, canonico: str)
         ("metadata.google.internal", "bloqueado"),
         ("cosa.internal", "bloqueado"),
         ("cosa.local", "bloqueado"),
-        ("раypal.com", "ASCII"),
+        # `paypal.com` con la `p` y la `a` cirílicas, escrito con escapes a propósito:
+        # el literal dispara RUF001 y, sobre todo, así se ve que son otras letras.
+        (_HOMOGRAFO, "ASCII"),
     ],
 )
 def test_lo_que_no_puede_entrar_no_entra(entrada: str, motivo: str) -> None:
