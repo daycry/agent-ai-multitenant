@@ -234,13 +234,24 @@ test("installing from the catalog posts the listing and lands where the flow con
       route.fulfill({
         status: 200,
         contentType: "application/json",
+        // El contrato REAL es InstallationPermissionsResponse
+        // (api_server/schemas/marketplace.py): consent_required + all_granted +
+        // permissions. Con el fixture de antes la pantalla reventaba en render
+        // leyendo `data.permissions.length` sobre undefined, y el test seguía
+        // verde porque sólo miraba la URL.
         body: JSON.stringify({
           installation_id: "inst-nueva",
           listing_id: PRIVATE_ID,
           status: "disabled",
-          requested_permissions: [],
-          granted_permissions: [],
-          denied_permissions: [],
+          consent_required: true,
+          all_granted: false,
+          permissions: [
+            {
+              type: "network_policy",
+              descriptor: { type: "network_policy", value: "none" },
+              state: "pending",
+            },
+          ],
         }),
       }),
   );
@@ -260,6 +271,11 @@ test("installing from the catalog posts the listing and lands where the flow con
   await expect
     .poll(() => new URL(page.url()).pathname)
     .toBe("/admin/marketplace/installations/inst-nueva/permissions");
+  // Y la pantalla de destino RENDERIZA: sin esto el test pasaría igual aterrizando
+  // en una página rota, que es justo lo que este criterio quería cubrir.
+  // Margen amplio a propósito: en `next dev` la ruta de destino se compila bajo
+  // demanda la primera vez que se entra, y eso pasa de los 5 s por defecto.
+  await expect(page.getByTestId("consent-page")).toBeVisible({ timeout: 30_000 });
 });
 
 // ---------------------------------------------------------------------------

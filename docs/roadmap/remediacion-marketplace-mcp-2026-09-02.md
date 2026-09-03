@@ -97,6 +97,18 @@ Lo que el mapeo del 2026-09-03 anadió (y que cambia el orden de la ola 0):
   api-server**, que vive en `agentic-net` y no tiene `HTTP_PROXY`: «Probar conexión» puede salir verde
   mientras el run muere con `403 Filtered`. Sin cerrar esto, el mensaje accionable de egress no se llega
   a disparar nunca.
+- **MK-17 · ALTO** · _(lo encontró la revisión de dos lentes de `task_mk_00`, 2026-09-03)_ Una
+  instalación puede nacer **imposible de habilitar**. `needs_consent` mira SÓLO el nivel de
+  confianza (`marketplace/finalize.py:79-85`), así que un listing `community` que no pide ningún
+  permiso nace `disabled` — y toda publicación privada nace `community`
+  (`routers/marketplace/private.py:113`), y un `SKILL.md` sin bloque `permissions` pide cero. Esa
+  instalación no se puede consentir (`ConsentDecisionRequest.decisions` exige `min_length=1`,
+  `schemas/marketplace.py:215`) ni desplegar (`marketplace/deploy.py:665-669` exige `enabled`). El
+  backend ya sabe habilitarla —su propia regla es
+  `enable = (not consent_required) or all_granted`, y con cero permisos `all_granted` es cierto por
+  vacuidad (`marketplace/consent.py:239`)— pero no hay forma de pedírselo. Es **anterior** al botón
+  de `task_mk_00`, que sólo lo hace alcanzable desde la UI; se cierra en `task_mk_14`.
+
 - **MK-16 · MEDIO** · Instalar **no es** desplegar: `POST /marketplace/installations` sólo crea la fila; el
   servidor llega a `projects.mcp_servers` en el despliegue (`marketplace/deploy.py:397-460`). Y navegar
   siempre a consentimiento es incorrecto en dos de los tres caminos: un listing `verified` nace `ENABLED`
@@ -260,6 +272,23 @@ UI (`apps/admin-panel`):
       e2e `marketplace-deploy` comprobando el resumen.
       **Coste**: 1 d.
 
+### `task_mk_14` — Una instalación no nace imposible de habilitar (MK-17)
+
+- [ ] **Título**: decidir y cerrar el callejón de MK-17. Dos caminos, y el ADR/commit tiene que
+      argumentar cuál: (a) que `needs_consent` sea `consent_required_for(trust) and
+    bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
+      `marketplace/install.py:369`), con lo que un listing sin permisos nace `enabled` —coherente
+      con la regla de habilitación que el backend ya usa— y hay que actualizar con su justificación
+      el test que hoy fija lo contrario
+      (`tests/integration/test_marketplace_install_static_analysis.py:295`, «community nace
+      DISABLED», cuyo listing tiene `requested_permissions = '[]'`); o (b) permitir confirmar un
+      consentimiento vacío (`decisions` sin `min_length=1`) y que la pantalla de permisos ofrezca
+      el botón en su estado vacío. (a) arregla el origen; (b) conserva intacta la política de
+      confianza y arregla el síntoma.
+      **Test**: integración (instalar un listing `community` sin permisos → la instalación se puede
+      desplegar sin pasos imposibles); el test citado se actualiza con su motivo escrito.
+      **Coste**: 0,5 d.
+
 ### `task_mk_12` — Un test que llama la tool de verdad (MK-08, UI-07)
 
 - [ ] **Título**: `tests/integration/test_marketplace_v2_chain.py` gana un tramo que despacha
@@ -361,3 +390,25 @@ que alguien lo escriba en cada plan.
   vacío. El preámbulo se omite si no hay anclas.
 - **Dependencia de #182**: `spec_approval_category` y el gate fail-closed de tools MCP sin
   categoría ya están en `master`; este plan los asume.
+
+---
+
+## Revisión de dos lentes — `task_mk_00`, intento 1
+
+Lentes: **A+B**. La C no corrió: `review-lens-select.py` la descartó (`lente_c: false`, cero
+motivos) porque el diff no toca rutas ni patrones sensibles. La puerta de alcance
+(`scope-check.py`) se saltó con aviso: espera la estructura `docs/roadmap/<fecha>-<slug>/tasks.md`
+y este repo usa un fichero por plan; la lente A la sustituyó comprobando el alcance a mano.
+
+Veredicto por criterio: **7 de 7 entregados** (5 `ok`, 2 `parcial`, ninguno `fail`). Nada del diff
+cae fuera de `task_mk_00`, y el negativo del e2e que la casilla mandaba no tocar sigue intacto.
+
+| #   | Grado         | Gap                                                                                                                         | Corrección                                                                                                                                           | Evidencia                                                  |
+| --- | ------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 1   | **Important** | La regla de navegación daba por hecho que `disabled` ⇒ hay permisos que otorgar. Falso para un `community` sin permisos.    | `destinoTrasInstalar` mira también el listing; sin permisos declarados se va a la ficha, no a una pantalla vacía. El callejón de fondo es **MK-17**. | `catalog-install.tsx:73-79`; test nuevo en `page.test.tsx` |
+| 2   | Minor         | El fixture del e2e no respetaba `InstallationPermissionsResponse`: la pantalla de destino reventaba y el test seguía verde. | Fixture al contrato real (`type`/`descriptor`/`state`) y aserción de que `consent-page` renderiza.                                                   | `e2e/marketplace-admin.spec.ts:242-259`                    |
+| 3   | Minor         | `installed` contaba una instalación `blocked` como instalada, en verde, contradiciendo a la pestaña «Instaladas».           | `blocked` deja de contar: se puede reintentar.                                                                                                       | `page.tsx:252-266`; test nuevo en `page.test.tsx`          |
+
+Un cuarto señalamiento —que una instalación con `project_id` oculte el botón para la instalación
+tenant-wide del mismo listing— se anota como **deuda conocida**: el botón instala siempre a nivel
+de tenant, y el selector de proyecto no está en el alcance de esta casilla.

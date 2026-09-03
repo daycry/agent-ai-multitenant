@@ -249,11 +249,18 @@ function CatalogTab() {
     queryFn: () => apiFetch<MarketplaceInstallation[]>(INSTALLATIONS_PATH),
     refetchOnWindowFocus: false,
   });
+  // Ni `revoked` ni `blocked` cuentan como instalada: la primera se desinstaló y
+  // la segunda la rechazó una puerta de seguridad. Ofrecer instalar de nuevo es
+  // lo correcto en ambos casos, y pintar «Instalada» en verde sobre una
+  // bloqueada diría lo contrario que la pestaña Instaladas, que la pinta en rojo.
   const instaladas = useMemo(
     () =>
       new Set(
         (installedQuery.data ?? [])
-          .filter((installation) => installation.status !== "revoked")
+          .filter(
+            (installation) =>
+              installation.status !== "revoked" && installation.status !== "blocked",
+          )
           .map((installation) => installation.listing_id),
       ),
     [installedQuery.data],
@@ -355,6 +362,7 @@ function CatalogTab() {
                   <CatalogInstallButton
                     listingId={listing.id}
                     installed={instaladas.has(listing.id)}
+                    pidePermisos={(listing.requested_permissions ?? []).length > 0}
                   />
                 </CardHeader>
               </Card>

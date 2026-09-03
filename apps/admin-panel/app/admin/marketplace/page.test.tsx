@@ -320,6 +320,9 @@ describe("instalar desde el catálogo", () => {
 
   it("si el listing exige consentimiento, lleva a otorgar los permisos", async () => {
     montar({
+      listings: [
+        { ...LISTING, requested_permissions: [{ type: "filesystem_read", value: ["/x"] }] },
+      ],
       installations: [],
       onInstall: () => Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "disabled" }),
     });
@@ -387,5 +390,37 @@ describe("instalar desde el catálogo", () => {
 
     await screen.findByText("acme-checker");
     expect(screen.queryByTestId("catalog-install-listing-1")).toBeNull();
+  });
+});
+
+// La revisión de dos lentes (2026-09-03) encontró el caso que faltaba: un listing
+// `community` que NO pide permisos también nace `disabled`, porque `needs_consent`
+// mira sólo el nivel de confianza. Llevarlo a la pantalla de permisos lo dejaba en
+// una página vacía sin botón que pulsar — y sin forma de habilitar la instalación.
+describe("el destino tras instalar mira si hay algo que consentir", () => {
+  it("un listing sin permisos declarados no manda a una pantalla de consentimiento vacía", async () => {
+    montar({
+      listings: [{ ...LISTING, trust_level: "community", requested_permissions: [] }],
+      installations: [],
+      onInstall: () => Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "disabled" }),
+    });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith("/admin/marketplace/installations/inst-nueva"),
+    );
+    expect(pushMock).not.toHaveBeenCalledWith(
+      "/admin/marketplace/installations/inst-nueva/permissions",
+    );
+  });
+
+  it("una instalación bloqueada no se pinta como instalada: se puede reintentar", async () => {
+    montar({
+      installations: [{ ...INSTALACION, listing_id: "listing-1", status: "blocked" }],
+    });
+
+    await screen.findByTestId("catalog-install-listing-1");
+    expect(screen.queryByTestId("catalog-installed-listing-1")).toBeNull();
   });
 });
