@@ -1,7 +1,7 @@
 ---
 adr_id: "0166"
 title: "Las tools de un servidor MCP llegan al catálogo sin un paso manual (enmienda de los ADR 0052 y 0100)"
-status: proposed
+status: accepted
 date: 2026-09-03
 authors: [claude-opus-5, operador]
 plan_referenced: remediacion-marketplace-mcp-2026-09-02
@@ -12,7 +12,10 @@ docs_language: es
 
 # ADR 0166 — Las tools de un servidor MCP llegan al catálogo sin un paso manual
 
-> **Estado: `proposed`.** Lo acepta el operador, no el redactor.
+> **Aceptado por el operador el 2026-09-03** en la sesión de ejecución del
+> plan `remediacion-marketplace-mcp-2026-09-02` (puerta de los ADR de la ola 0).
+
+> **Estado: `accepted`** (firmado por el operador el 2026-09-03).
 >
 > **Este ADR contradice DOS decisiones `accepted`** y lo dice de frente:
 >

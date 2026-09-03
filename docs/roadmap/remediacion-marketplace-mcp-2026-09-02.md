@@ -163,7 +163,7 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_0a` — ADR de la allowlist de MCP remotos en el egress (MK-03, MK-13, MK-14, MK-15)
 
-- [ ] **Título**: escribir el ADR 0165 y llevarlo a `accepted` por el operador. Decide QUIÉN manda sobre
+- [x] **Título**: escribir el ADR 0165 y llevarlo a `accepted` por el operador. Decide QUIÉN manda sobre
       la allowlist (platform setting como fuente de verdad con paso de aplicación, o el `filter.txt` del
       repo con el api-server sólo validando), y cierra explícitamente: escapado ERE + anclado `^…$` y
       validador de FQDN; prohibición de hosts internos, IPs literales y `169.254.169.254`; si la
@@ -174,10 +174,18 @@ UI (`apps/admin-panel`):
       salir por el proxy (MK-15).
       **Test**: `tests/docs` y `tests/unit/test_docs_governance.py` en verde con el ADR nuevo.
       **Coste**: 0,5 d.
+      _Cerrada el 2026-09-03_:
+      [ADR 0165](../05-architecture-decisions/0165-allowlist-de-hosts-mcp-remotos-en-el-egress.md),
+      `accepted` por el operador. Decide que el ajuste de plataforma es la fuente de verdad de la
+      INTENCIÓN y `filter.txt` la autoridad de lo aplicado, y que quien responde «¿está permitido?»
+      no es ninguno de los dos sino el propio proxy, al que se le pregunta (D7.3, D9). Una crítica
+      adversarial tumbó una promesa del borrador: el puerto por entrada no existe, porque
+      `ConnectPort` son dos directivas globales de tinyproxy, así que el ajuste guarda **sólo
+      hostname** (D3).
 
 ### `task_mk_0b` — ADR que enmienda el 0052 sobre el auto-import (MK-09, MK-10, MK-11, MK-12)
 
-- [ ] **Título**: escribir el ADR 0166 y llevarlo a `accepted`. Enmienda la alternativa P-B rechazada por
+- [x] **Título**: escribir el ADR 0166 y llevarlo a `accepted`. Enmienda la alternativa P-B rechazada por
       el [ADR 0052](../05-architecture-decisions/0052-import-mcp-tools-catalogo.md) —que queda actualizado
       en el mismo commit— y decide cómo dejan de existir servidores MCP cuyas tools el modelo nunca ve:
       síncrono al guardar (descartado a priori por MK-11), asíncrono por cola, semiautomático de un clic,
@@ -189,6 +197,15 @@ UI (`apps/admin-panel`):
       **Test**: `tests/docs`, `test_docs_governance.py` y, si usa `rejects:`,
       `tests/docs/test_adr_precedence.py`.
       **Coste**: 0,5 d.
+      _Cerrada el 2026-09-03_:
+      [ADR 0166](../05-architecture-decisions/0166-tools-mcp-en-el-catalogo-sin-paso-manual.md),
+      `accepted` por el operador. No hay auto-import al guardar el proyecto (D1: la transacción del
+      request abierta sobre una red de hasta 300 s es el antipatrón que cerró prod-13); sí lo hay
+      atado a dos actos sobre ESE servidor —desplegar desde el marketplace y completar el «Conectar»
+      de OAuth— encolado en la lane `marketplace` (D3, D5); el estado es derivado y nunca una
+      columna, para que no exista un `analyzing` que se quede atascado (D4). La crítica encontró que
+      el ADR no sólo contradecía al 0052: también al **0100**, que ordena expresamente materializar
+      esa fila; ahora enmienda los dos, con la obligación de mismo-commit.
 
 ### `task_mk_02` — Un MCP remoto sale por el egress (MK-03, MK-13, MK-14, MK-15, UI-03)
 
@@ -276,7 +293,7 @@ UI (`apps/admin-panel`):
 
 - [ ] **Título**: decidir y cerrar el callejón de MK-17. Dos caminos, y el ADR/commit tiene que
       argumentar cuál: (a) que `needs_consent` sea `consent_required_for(trust) and
-    bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
+bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       `marketplace/install.py:369`), con lo que un listing sin permisos nace `enabled` —coherente
       con la regla de habilitación que el backend ya usa— y hay que actualizar con su justificación
       el test que hoy fija lo contrario

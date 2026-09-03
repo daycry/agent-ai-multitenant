@@ -1,7 +1,7 @@
 ---
 adr_id: "0165"
 title: "Allowlist de hosts MCP remotos en el egress-proxy: quién manda, quién aplica y qué NO controla"
-status: proposed
+status: accepted
 date: 2026-09-03
 authors: [claude-opus-5, operador]
 plan_referenced: remediacion-marketplace-mcp-2026-09-02
@@ -10,7 +10,10 @@ docs_language: es
 
 # ADR 0165 — Allowlist de hosts MCP remotos en el egress-proxy
 
-> **Estado: `proposed`.** Lo firma el operador. Lo pide **`task_mk_0a`** del plan
+> **Aceptado por el operador el 2026-09-03** en la sesión de ejecución del
+> plan `remediacion-marketplace-mcp-2026-09-02` (puerta de los ADR de la ola 0).
+
+> **Estado: `accepted`** (firmado el 2026-09-03). Lo pidió **`task_mk_0a`** del plan
 > [`remediacion-marketplace-mcp-2026-09-02`](../roadmap/remediacion-marketplace-mcp-2026-09-02.md)
 > (hallazgos MK-03, MK-13, MK-14, MK-15), y quien lo **consume** es `task_mk_02`,
 > cuya implementación el criterio de cierre nº5 del plan condiciona a que este ADR
@@ -750,7 +753,7 @@ disparador (i) pasa de prosa a comprobable.
 | Riesgo                                                                                                                                            | Prob.    | Impacto     | Mitigación                                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Host sin escapar/anclar: el punto actúa de comodín y `mcp.atlassian.com` casa `mcpXatlassianYcom`                                                 | Media    | **Alto**    | D1 (escape sólo del punto + `^…$`) + unit con los dos negativos exactos                                                                                                                                                                                        |
-| El operador mete una regex (`.*`) y abre el proxy entero                                                                                          | Baja     | **Crítico** | D2: el alfabeto `[a-z0-9.-]` rechaza `*`, `\`, `(`, `                                                                                                                                                                                                          | ` en el guardado; el setting nunca almacena regex, y los patrones legítimos viven fuera del bloque generado, con PR y revisor |
+| El operador mete una regex (`.*`) y abre el proxy entero                                                                                          | Baja     | **Crítico** | D2: el alfabeto `[a-z0-9.-]` rechaza `*`, `\`, `(`, `\|` en el guardado; el setting nunca almacena regex, y los patrones legítimos viven fuera del bloque generado, con PR y revisor                                                                           |
 | Host permitido que resuelve (o pasa a resolver) a una IP interna                                                                                  | Baja     | Alto        | `assert_safe_url` al guardar el setting + las dos directivas `ConnectPort` (443/8443; los servicios internos están en 5432/6379/8200/11434). Residual: un servicio interno HTTP en 443/8443 sería alcanzable — se acepta y se anota en el runbook              |
 | **Guardar en verde y no aplicar**: el panel dice permitido, el run muere                                                                          | **Alta** | Medio       | D7: «pendiente de aplicar» + sondeo empírico a través del proxy; ni el panel ni el guardado de D11 afirman «permitido» sin haberlo probado                                                                                                                     |
 | **Revocación asimétrica**: quitar un host del setting NO cierra el egress hasta el paso manual, y el sondeo lo reporta como `permitido` con razón | Media    | **Alto**    | D8: el script es el mismo para abrir y para cerrar, y el runbook lo escribe **primero** en el procedimiento de revocación, con su tiempo medido (D10). El sondeo de D7.3 detecta el sentido «aplicado pero ya no listado», que es justo éste                   |
@@ -812,6 +815,56 @@ juzgarla al aprobarla.
   restrictiva (`^host(:8443)?$` casa igual el host pelado) o es letal
   (`^host:8443$` no casaría nada si el CONNECT llega pelado), y en ningún caso
   `ConnectPort` —global, dos directivas— puede acotarse por host.
+
+## Addendum del 2026-09-03: cinco cosas que no eran implementables como estaban escritas
+
+Este ADR exige en D10 «verificación empírica obligatoria, no razonada». El mapeo previo a
+implementar la aplicó al propio ADR y encontró cinco prescripciones falsas. Se corrigen aquí, antes
+de escribir código contra ellas, porque implementar una prescripción equivocada la convierte en
+comportamiento y entonces cuesta diez veces más.
+
+**A1 — D9 no funcionaría en ninguna instalación real.** El generador del instalador
+(`compose_generator._api_server_env`) **no emite ninguna variable de egress-proxy para el
+api-server**: sólo `_workers_env` la tiene (`WORKERS_EGRESS_PROXY_URL`). El único sitio donde el
+api-server la recibe hoy es `docker/docker-compose.manuals.yml`, y el default de `config.py` es
+`http://localhost:8888`, que dentro del contenedor no es nada. Corrección: la variable
+(`API_SERVER_EGRESS_PROXY_URL`) entra en el generador y en el compose manual como parte de esta
+tarea. Sin eso, «Probar conexión» proxificada muere en todo stack producido por el wizard.
+
+**A2 — El discriminante de D9.2 no puede leerse donde D9.2 dice.** Dos medidas. (i) `httpx` levanta
+`ProxyError` cuando el **CONNECT** vuelve non-2xx, o sea sólo con `https://`; un MCP declarado con
+`http://` recibe el 403 de tinyproxy como respuesta HTTP normal, **indistinguible del 403 del
+propio servidor MCP** — el error exacto que la tabla de riesgos dice evitar. (ii) Peor:
+`shared_mcp/client.py` normaliza **todo** fallo del camino de conexión a `MCPTransportError` y
+clasifica por **olfateo de cadena**. Corrección doble: el fail-closed de forma de D11 rechaza
+`http://` con host externo (coherente con D3, que ya lo rechaza para el setting), y el cliente MCP
+conserva la excepción original como `__cause__` para que el discriminante mire el tipo y no el
+texto.
+
+**A3 — IDNA no rechaza homógrafos: los admite.** Medido: `"раypal.com".encode("idna")` produce
+`b'xn--ypal-43d9g.com'`, que pasa el alfabeto `[a-z0-9.-]` de D2 sin despeinarse. La regla que D2
+prescribe y el test que D10 exige se contradicen. Corrección: **se rechaza toda entrada no ASCII** y
+se pide el punycode explícito, que es una decisión que el operador puede auditar leyendo. Y el
+`.lower()` va **antes** del IDNA, porque `str.encode("idna")` no minusculiza y rebotaría un host
+legítimo escrito en mayúsculas; el `UnicodeError` de una etiqueta de más de 63 caracteres se captura
+(no es `ValueError`) o el PUT devuelve 500 en vez del 422 con motivo.
+
+**A4 — «Las dos copias del filtro» sólo existen en el repo.** En un host producido por el wizard hay
+**una sola**, bajo `{compose_dir}/stack/egress-proxy/`, y allí no existe ni `docker/` ni el paquete
+`api_server`. Corrección: el renderizador es **stdlib puro** y toma las rutas por argumento, con las
+dos del repo como defaults cuando corre desde un checkout.
+
+**A5 — Lo que D2 manda reutilizar es privado.** `_BLOCKED_HOST_EXACT`, `_BLOCKED_HOST_SUFFIXES`,
+`_is_public_ip` y `_host_is_blocked_name` no están en el `__all__` de `cortex.web_safety`.
+Reutilizarlos sin bifurcar la lista de bloqueo —que es justo lo que D2 exige— obliga a promoverlos a
+API pública en el mismo commit. Y `assert_safe_url` resuelve DNS **síncrono**: llamarlo desde el
+handler async del PUT bloquearía el bucle de eventos (el hallazgo perf-7 de prod-10), así que va en
+`asyncio.to_thread`.
+
+Y dos matices menores, sin consecuencia de diseño: el `icon` que D6.3 exige es obligatorio por el
+dataclass pero **decorativo** en la pantalla de ajustes de plataforma (el mapa de iconos que se cita
+vive en la de tenant); y donde D10 dice «el diálogo del servidor» hay que leer «la página», porque
+el diálogo se cierra al guardar y el aviso de D11 no llegaría a verse.
 
 ## Trazabilidad
 
