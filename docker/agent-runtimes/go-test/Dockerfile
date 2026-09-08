@@ -65,6 +65,13 @@ ENV GOFLAGS="-mod=mod" \
 # arriba — la imagen upstream no se ha reconstruido desde que Debian publico el
 # parche.
 #
+# `libssh2-1` (2026-09-08): el tercero, mismo caso. CVE-2026-58050 (HIGH,
+# desbordamiento de heap por overflow de entero al asignar atributos de clave
+# publica) y CVE-2026-7598 (HIGH, overflow de entero con usuario/contrasena
+# largos), instalado 1.10.0-3+b1 y **con fix ya publicado** en 1.10.0-3+deb12u1.
+# Entra por la base (`buildpack-deps` -> `libcurl4` -> `libssh2-1`), no por
+# nosotros; Trivy lo cazo en el PR #183 sin que este fichero hubiera cambiado.
+#
 # La lista crece DE UNO EN UNO a proposito. Un `apt-get -y upgrade` general
 # parchearia este y los que vengan, pero mueve todo lo demas con el, y entonces
 # el pineado por digest de la linea `FROM` deja de significar gran cosa: la base
@@ -75,7 +82,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends --only-upgrade \
         libaprutil1 \
-        libexpat1; \
+        libexpat1 \
+        libssh2-1; \
     rm -rf /var/lib/apt/lists/*
 
 # go test is built in. gotestsum produces structured JSON for the
