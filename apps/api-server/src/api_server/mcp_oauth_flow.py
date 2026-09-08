@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -253,9 +253,17 @@ async def complete_flow(
     resolver: object,
     redis: Redis,
     http_client: httpx.AsyncClient,
+    on_connected: Callable[[str, str, str], Awaitable[None]] | None = None,
 ) -> str:
     """Exchange the authorization code for tokens + persist them. Returns the
-    server_name that was connected (for the redirect back to the UI)."""
+    server_name that was connected (for the redirect back to the UI).
+
+    ``on_connected(tenant_id, project_id, server_name)`` runs AFTER the tokens
+    are stored (ADR 0166 D5): it is the hook the router uses to enqueue the
+    automatic tool import — "Connect" completing is the moment an OAuth server
+    becomes reachable, so it is the trigger, not the project save. A failing
+    hook must not undo a successful connection: it is logged and swallowed.
+    """
     flow = await _pop_pending(redis, state)
     data = {
         "grant_type": "authorization_code",
@@ -291,6 +299,16 @@ async def complete_flow(
         server=flow.server_name,
         has_refresh=bool(token.refresh_token),
     )
+    if on_connected is not None:
+        try:
+            await on_connected(flow.tenant_id, flow.project_id, flow.server_name)
+        except Exception as exc:  # la conexión ya está: el import es un atajo (D4)
+            _log.warning(
+                "mcp_oauth.on_connected_failed",
+                project_id=flow.project_id,
+                server=flow.server_name,
+                error=str(exc),
+            )
     return flow.server_name
 
 

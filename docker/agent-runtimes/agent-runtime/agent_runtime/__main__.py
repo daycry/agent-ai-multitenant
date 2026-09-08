@@ -941,8 +941,46 @@ _MCP_STATUS_INSTRUCTION = (
 )
 
 
-def build_mcp_status_preamble(failures: list[dict[str, str]] | None) -> str:
-    """Tell the agent which MCP servers did not connect (task_wf_14, B-07).
+_MCP_NO_TOOLS_REASON = (
+    "declared in the project but NONE of its tools are imported into the catalog, "
+    "so none is available here (the operator imports them from the project's MCP tab)"
+)
+
+
+def servers_without_imported_tools(
+    spec: dict[str, Any], failures: list[dict[str, str]] | None = None
+) -> list[str]:
+    """Declared MCP servers with ZERO `<server>.` tools in the run's allowlist (ADR 0166 D4).
+
+    The runtime connects every declared server and registers what it announces,
+    but the model only sees the tools the project IMPORTED into the catalog
+    (`allowed_tools` carries them as `<server>.<tool>`). A server that connected
+    fine and has nothing imported used to be invisible: the model kept asking for
+    tools "the project has" that were never advertised. This is the runtime
+    REPORTING the gap, not closing it (the ADR rejected discovery-side import).
+
+    Only decidable when the spec carries `allowed_tools`; without the key there
+    is no restriction and nothing to report. Servers that failed to connect are
+    already reported by `failures` and are excluded here.
+    """
+    if "allowed_tools" not in spec:
+        return []
+    allowed = spec.get("allowed_tools") or []
+    prefixes = {str(t).split(".", 1)[0] for t in allowed if isinstance(t, str) and "." in str(t)}
+    failed = {str(f.get("server")) for f in (failures or []) if isinstance(f, dict)}
+    out: list[str] = []
+    for raw in spec.get("mcp_servers") or []:
+        name = str(raw.get("name") or "").strip() if isinstance(raw, dict) else ""
+        if name and name not in prefixes and name not in failed and name not in out:
+            out.append(name)
+    return sorted(out)
+
+
+def build_mcp_status_preamble(
+    failures: list[dict[str, str]] | None, without_tools: list[str] | None = None
+) -> str:
+    """Tell the agent which MCP servers did not connect (task_wf_14, B-07), and
+    which connected but have no tools imported (ADR 0166 D4).
 
     A failed server is emitted as an event and a step, so the OPERATOR sees it in
     the run viewer. The agent did not: its ``<server>.<tool>`` tools were simply
@@ -959,6 +997,11 @@ def build_mcp_status_preamble(failures: list[dict[str, str]] | None) -> str:
         for f in (failures or [])
         if isinstance(f, dict) and str(f.get("server") or "").strip()
     ]
+    lines.extend(
+        f"- {str(name).strip()}: {_MCP_NO_TOOLS_REASON}"
+        for name in (without_tools or [])
+        if str(name).strip()
+    )
     if not lines:
         return ""
     return "\n".join([_MCP_STATUS_INSTRUCTION, _fence_untrusted("\n".join(lines))])
@@ -1034,7 +1077,9 @@ def assemble_system_preamble(
     # task_wf_14: qué servidores MCP NO están disponibles. Va justo tras la
     # persona: es contexto sobre las CAPACIDADES del agente en esta ejecución, y
     # sin él el modelo insiste en llamar tools que no existen.
-    mcp_preamble = build_mcp_status_preamble(mcp_failures)
+    mcp_preamble = build_mcp_status_preamble(
+        mcp_failures, servers_without_imported_tools(spec, mcp_failures)
+    )
     if mcp_preamble:
         preamble = f"{mcp_preamble}\n\n{preamble}" if preamble else mcp_preamble
 

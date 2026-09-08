@@ -75,6 +75,9 @@ DiscoveryErrorCode = Literal[
     "UNKNOWN_ERROR",
     "EGRESS_BLOCKED",
     "EGRESS_PROXY_UNAVAILABLE",
+    # ADR 0166 (D5, L1): los dos que añade el import de tools.
+    "OAUTH_NOT_CONNECTED",
+    "TOO_MANY_TOOLS",
 ]
 
 

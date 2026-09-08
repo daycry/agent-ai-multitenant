@@ -182,15 +182,26 @@ async def materialize_installation(
             materialized=True, kind="skill", catalog_id=str(skill.id), catalog_name=skill.name
         )
 
-    # kind ∈ {tool, mcp_server}
-    impl_type = str(
-        manifest.get("implementation_type")
-        or (
-            ToolImplementationType.MCP_TOOL.value
-            if listing.kind == MarketplaceListingKind.MCP_SERVER.value
-            else ""
+    if listing.kind == MarketplaceListingKind.MCP_SERVER.value:
+        # ADR 0166 D6 (enmienda del ADR 0100, pieza 2): instalar un servidor MCP ya
+        # NO produce una fila `Tool` con el nombre del listing. Esa fila representaba
+        # un servidor, no una tool; era invisible al runtime (`_project_mcp_tool_rows`
+        # exige el prefijo `<server>.`) y, tras el import automático, duplicaba a
+        # ojos del operador lo que no duplica en el sistema. Las filas invocables son
+        # las `<server>.*` que crea el import disparado por el DESPLIEGUE en un
+        # proyecto (deploy.py), estampadas con `source_installation_id` para que
+        # `dematerialize_installation` retire exactamente eso.
+        return MaterializeResult(
+            materialized=False,
+            kind=listing.kind,
+            deferred_reason=(
+                "un servidor MCP no produce fila de catálogo al instalar (ADR 0166 D6): sus "
+                "tools `<server>.*` las crea el import que dispara el despliegue en un proyecto"
+            ),
         )
-    ).strip()
+
+    # kind == tool
+    impl_type = str(manifest.get("implementation_type") or "").strip()
     if impl_type in _DEFERRED_IMPL_TYPES:
         # Diferido honesto: ejecuta código arbitrario → necesita el sandbox
         # out-of-process (ADR 0081 Fase B/C). ENABLED queda como intent.

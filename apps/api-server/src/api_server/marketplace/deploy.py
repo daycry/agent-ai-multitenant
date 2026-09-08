@@ -51,6 +51,7 @@ con el runtime; el estado «pendiente» es una lectura derivada, no un dato nuev
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -60,6 +61,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Agent, AgentSkill, AgentTool, Project, Skill, TeamMember, Tool
 from api_server.db.marketplace import (
     DeploymentStatus,
@@ -384,10 +386,20 @@ async def _materialize_mcp_server(
     manifest: dict[str, Any],
     values: dict[str, Any],
     role_map: dict[str, list[str]],
+    installation: MarketplaceInstallation | None = None,
+    enqueue_import: EnqueueImportFn | None = None,
 ) -> tuple[dict[str, Any], list[str], bool]:
-    """`projects.mcp_servers` + `projects.mcp_tool_roles`. Nada más.
+    """`projects.mcp_servers` + `projects.mcp_tool_roles`, y el import encolado.
 
     Devuelve ``(created_refs, warnings, oauth_pending)``.
+
+    ADR 0166 D3: cuando el servidor aún no tiene filas `<server>.*` en el catálogo,
+    este despliegue ya no se rinde con «vuelve a desplegar»: encola el import en
+    la lane `marketplace` TRAS el commit (`schedule_after_commit`), y la task
+    aplica el `role_map` cuando las filas existen. No se hace en línea porque
+    la transacción del request está abierta y el discovery es una red de hasta
+    300 s (perf-2/db-2). Un servidor OAuth no se encola aquí: su disparador es
+    completar «Conectar» (D5), que es cuando pasa a ser alcanzable.
     """
     refs: dict[str, Any] = {}
     warnings: list[str] = []
@@ -412,43 +424,48 @@ async def _materialize_mcp_server(
             ) from exc
         refs["mcp_servers"] = [name]
 
+    oauth_pending = _uses_oauth(entry.get("url"))
+
     # --- la política rol→tool, en el sitio de siempre (ADR 0128) -----------
     roles = roles_for(role_map, name)
-    if roles:
-        tool_names = await _namespaced_tool_names(session, project, server_name=name)
-        if not tool_names:
+    tool_names = await _namespaced_tool_names(session, project, server_name=name)
+    if not tool_names:
+        if oauth_pending:
             warnings.append(
-                f"el servidor {name!r} aún no tiene tools importadas en el catálogo"
-                " (`<servidor>.<tool>`), así que no hay nada que restringir por rol:"
-                " tras importarlas, vuelve a desplegar para aplicar el role_map"
+                f"el servidor {name!r} usa OAuth y aún no tiene tools en el catálogo: se"
+                " importarán solas al completar «Conectar» (ADR 0166 D5); hasta entonces el"
+                " role_map no tiene sobre qué aplicarse"
             )
         else:
-            policy = {
-                str(k): list(v)
-                for k, v in (project.mcp_tool_roles or {}).items()
-                if isinstance(v, list)
-            }
-            written: list[str] = []
-            for tool_name in tool_names:
-                if tool_name in policy:
-                    warnings.append(
-                        f"la tool {tool_name!r} ya tenía política de roles: se respeta"
-                        " y la retirada no la tocará"
-                    )
-                    continue
-                policy[tool_name] = list(roles)
-                written.append(tool_name)
-            if written:
-                project.mcp_tool_roles = policy
-                refs["mcp_tool_roles"] = written
-    else:
+            _queue_import(
+                session,
+                project=project,
+                server_name=name,
+                roles=list(roles),
+                installation=installation,
+                listing=listing,
+                enqueue_import=enqueue_import,
+            )
+            refs["mcp_import"] = {"server": name, "queue": "marketplace", "publish": "after_commit"}
+            warnings.append(
+                f"las tools de {name!r} se importarán al catálogo en segundo plano (lane"
+                " `marketplace`, ADR 0166 D3)"
+                + (" y el role_map se aplicará sobre ellas" if roles else "")
+                + "; la tarjeta del servidor dice cuántas hay y el botón «Importar» sigue"
+                " disponible si la cola no se drena"
+            )
+    if roles and tool_names:
+        _apply_role_map_now(
+            project, tool_names=tool_names, roles=roles, warnings=warnings, refs=refs
+        )
+    elif not roles:
         warnings.append(
             "sin roles en el role_map: la política de `mcp_tool_roles` no se escribe,"
             " así que las tools quedan abiertas a todos los roles del proyecto (el"
             " default del ADR 0128)"
         )
+    # con roles y sin filas todavía, el role_map lo aplica la task cuando existan (D3)
 
-    oauth_pending = _uses_oauth(entry.get("url"))
     if oauth_pending:
         warnings.append(
             "el servidor declara OAuth: la entrada nace SIN estado de conexión;"
@@ -457,6 +474,84 @@ async def _materialize_mcp_server(
 
     await session.flush()
     return refs, warnings, oauth_pending
+
+
+def _apply_role_map_now(
+    project: Project,
+    *,
+    tool_names: list[str],
+    roles: list[str],
+    warnings: list[str],
+    refs: dict[str, Any],
+) -> None:
+    """La política rol→tool sobre las filas `<server>.*` que YA existen (ADR 0128).
+    Una tool con política previa se respeta y la retirada no la toca."""
+    policy = {
+        str(k): list(v) for k, v in (project.mcp_tool_roles or {}).items() if isinstance(v, list)
+    }
+    written: list[str] = []
+    for tool_name in tool_names:
+        if tool_name in policy:
+            warnings.append(
+                f"la tool {tool_name!r} ya tenía política de roles: se respeta"
+                " y la retirada no la tocará"
+            )
+            continue
+        policy[tool_name] = list(roles)
+        written.append(tool_name)
+    if written:
+        project.mcp_tool_roles = policy
+        refs["mcp_tool_roles"] = written
+
+
+#: Firma del productor del import (ADR 0166 D3). Inyectable para que el test mida
+#: que se llamó y con qué, sin tocar un broker.
+EnqueueImportFn = Callable[..., Awaitable[bool]]
+
+
+def _queue_import(
+    session: AsyncSession,
+    *,
+    project: Project,
+    server_name: str,
+    roles: list[str],
+    installation: MarketplaceInstallation | None,
+    listing: MarketplaceListing,
+    enqueue_import: EnqueueImportFn | None,
+) -> None:
+    """Registra el mensaje para DESPUÉS del commit. Los ids se capturan fuera del
+    closure: el callback corre con la sesión ya comiteada y leer un atributo de
+    una instancia expirada dispararía un refresh sobre una transacción cerrada."""
+    tenant_id = project.tenant_id
+    project_id = project.id
+    installation_id = installation.id if installation is not None else None
+    version = installation.version if installation is not None else None
+    listing_id = listing.id
+
+    async def _publish() -> None:
+        publisher = enqueue_import if enqueue_import is not None else _default_enqueue_import
+        ok = await publisher(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            server_name=server_name,
+            installation_id=installation_id,
+            listing_id=listing_id,
+            version=version,
+            roles=roles or None,
+        )
+        if not ok:
+            logger.warning(
+                "mcp.import.enqueue_failed", project_id=str(project_id), server=server_name
+            )
+
+    schedule_after_commit(session, _publish)
+
+
+async def _default_enqueue_import(**kwargs: Any) -> bool:
+    """El productor real. Import diferido para no arrastrar Celery en los tests."""
+    from api_server.celery_client import enqueue_mcp_import_server_tools
+
+    return await enqueue_mcp_import_server_tools(**kwargs)
 
 
 def _uses_oauth(url: Any) -> bool:
@@ -777,6 +872,7 @@ async def deploy_installation(
             manifest=manifest,
             values=values,
             role_map=normalized_roles,
+            installation=installation,
         )
     else:
         refs, warnings = await _materialize_agent_grants(

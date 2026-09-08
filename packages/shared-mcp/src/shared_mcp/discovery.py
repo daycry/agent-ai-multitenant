@@ -35,11 +35,15 @@ v<version>" alongside the tool list.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from shared_mcp.auth import VaultResolver
 from shared_mcp.client import MCPClient
 from shared_mcp.egress import HttpxClientFactory
 from shared_mcp.types import MCPServerConfig, MCPTool
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import httpx
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ async def discover_tools(
     *,
     vault_resolver: VaultResolver | None = None,
     httpx_client_factory: HttpxClientFactory | None = None,
+    auth: httpx.Auth | None = None,
 ) -> DiscoveryResult:
     """Open a session, run the MCP handshake, list tools, close.
 
@@ -85,6 +90,10 @@ async def discover_tools(
             (ADR 0165 D9) — the api-server passes the egress-proxy one so
             the probe walks the same path the sandbox will. ``None`` keeps
             the SDK default (direct).
+        auth: optional ``httpx.Auth`` handed to the HTTP transports as-is
+            (ADR 0166 D5) — in practice the OAuth provider built from the
+            Vault-stored tokens, so an OAuth server can be discovered from
+            a platform process once "Connect" has completed.
 
     Returns:
         A :class:`DiscoveryResult` with the tools the server
@@ -97,7 +106,10 @@ async def discover_tools(
         (Other errors from the SDK bubble up as MCPTransportError.)
     """
     async with MCPClient.connect(
-        config, vault_resolver=vault_resolver, httpx_client_factory=httpx_client_factory
+        config,
+        vault_resolver=vault_resolver,
+        auth=auth,
+        httpx_client_factory=httpx_client_factory,
     ) as session:
         tools = await session.list_tools()
         info = _extract_server_info(session.init_result)

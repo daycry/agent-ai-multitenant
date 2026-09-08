@@ -38,21 +38,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.config import get_settings
-from api_server.db.domain import (
-    Project,
-    Tool,
-    ToolCategory,
-    ToolImplementationType,
-    ToolSecurityLevel,
-)
+from api_server.db.domain import Project, ToolSecurityLevel
 from api_server.egress.mcp_discovery import (
     EgressProxyNotConfiguredError,
     classify_discovery_failure,
     egress_client_factory_for,
 )
 from api_server.mcp.config import MCPServerConfigModel
+from api_server.mcp.import_tools import (
+    ConfigInvalidError,
+    DiscoveryFailedError,
+    ImportAbstainedError,
+    ServerNotDeclaredError,
+    import_server_tools,
+    to_runtime_config,
+)
 from api_server.routers._helpers import require_tenant_id
-from api_server.schemas.catalog import ToolResponse, normalize_tool_name, to_tool_response
+from api_server.schemas.catalog import ToolResponse, to_tool_response
 
 router = APIRouter(prefix="/projects/{project_id}/mcp", tags=["mcp"])
 
@@ -181,6 +183,10 @@ McpErrorCode = Literal[
     "UNKNOWN_ERROR",
     "EGRESS_BLOCKED",
     "EGRESS_PROXY_UNAVAILABLE",
+    # ADR 0166: un servidor OAuth sin «Conectar» completado (D5) y la abstención
+    # por encima del tope de 200 tools (L1).
+    "OAUTH_NOT_CONNECTED",
+    "TOO_MANY_TOOLS",
 ]
 
 
@@ -320,26 +326,36 @@ async def test_mcp_connection(
 # POST /projects/{id}/mcp/servers/{server_name}/import-tools  (ADR 0052)
 # ---------------------------------------------------------------------------
 class ImportMcpToolsRequest(BaseModel):
-    """Operator's multiselección de tools a importar al catálogo.
+    """Qué importar del servidor al catálogo.
 
     ``tool_names`` son los nombres *crudos* que el server expone (los que
-    ``test-connection`` devolvió); el endpoint los namespacea
-    ``<server>.<tool>`` antes de persistirlos. La lista es la decisión del
-    operador (supply chain, ADR 0052 opción P-A) — NO se importa todo
-    automáticamente. ``security_level`` arranca en ``sandboxed`` (mínimo
-    privilegio para código de terceros) y el operador puede ajustarlo.
+    ``test-connection`` devolvió); se namespacean ``<server>.<tool>`` antes de
+    persistirlos. Desde el ADR 0166 (D2) la lista es OPCIONAL: ausente = todas
+    las que el servidor anuncie ahora, con reconciliación de lo que ya no anuncia
+    (R3) y el tope de 200 con abstención (L1); con lista = la multiselección del
+    ADR 0052, intacta, sin reconciliación.
+
+    ``security_level`` también es opcional: ausente = no tocar el de las filas
+    que ya existen (R2) y `sandboxed` para las nuevas. Antes se sobreescribía
+    siempre con el default, así que un re-import pisaba en silencio la elección
+    de un operador que lo hubiera subido o bajado.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    tool_names: list[str] = Field(min_length=1, max_length=200)
-    security_level: ToolSecurityLevel = ToolSecurityLevel.SANDBOXED
+    tool_names: list[str] | None = Field(default=None, min_length=1, max_length=200)
+    security_level: ToolSecurityLevel | None = None
 
 
 class ImportMcpToolsResponse(BaseModel):
-    """Las filas ``Tool`` resultantes del upsert (creadas o actualizadas)."""
+    """Las filas ``Tool`` resultantes del upsert, y lo que NO entró y por qué."""
 
     tools: list[ToolResponse] = Field(default_factory=list)
+    #: R3: nombres namespaceados retirados porque el servidor ya no los anuncia.
+    retired: list[str] = Field(default_factory=list)
+    #: L2/L3: nombres crudos omitidos; el motivo está en `warnings`.
+    omitted: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 @router.post("/servers/{server_name}/import-tools", response_model=ImportMcpToolsResponse)
@@ -377,142 +393,77 @@ async def import_mcp_tools(
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
 
-    declared = {
-        str(server.get("name")): server
-        for server in (project.mcp_servers or [])
-        if isinstance(server, dict) and server.get("name")
-    }
-    if server_name not in declared:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"MCP server {server_name!r} not declared on this project",
-        )
-
-    # ADR 0101: re-descubrir server-side EN el import para persistir el
-    # ``input_schema`` real de cada tool. Sin esto la fila quedaba con
-    # ``'{}'::jsonb`` y toda tool con argumentos se anunciaba al LLM con
-    # ``parameters: {}`` → el pre-guard del runtime la rechazaba (inservible).
-    # FAIL-CLOSED: un server inalcanzable aborta el import con un error tipado
-    # en vez de crear una tool rota que recrearía el bug en silencio.
-    #
-    # `task_mk_02` (ADR 0165 D9): el import sale por el MISMO camino que la prueba
-    # y que el run. Antes tenía su propio `except` que aplanaba todo a
-    # `TRANSPORT_ERROR`; ahora comparte el mapeo tipado de `_discover_or_raise`.
+    # ADR 0101 (fail-closed: discovery caído ⇒ cero filas), ADR 0165 D9 (sale por
+    # el egress-proxy) y ADR 0166 (D2 lista opcional, D5 OAuth, D7 reconciliación,
+    # D9 límites): todo vive en `import_server_tools`, que es el ÚNICO sitio donde
+    # se importa — este endpoint, la task de la lane `marketplace` y el final de
+    # «Conectar» lo comparten. Aquí sólo se traducen sus excepciones a HTTP.
     try:
-        server_model = MCPServerConfigModel.model_validate(declared[server_name])
-    except ValueError as exc:
-        # Una fila anterior a la regla de forma (D11) que hoy no validaría: se
-        # dice cuál es el problema en vez de intentar descubrir contra ella.
+        outcome = await import_server_tools(
+            session,
+            tenant_id=tenant_id,
+            project=project,
+            server_name=server_name,
+            tool_names=payload.tool_names,
+            security_level=payload.security_level,
+            resolver=resolver,
+            proxy_url=get_settings().egress_proxy_url,
+            discover=discover_tools,
+            actor_user_id=principal.user_id,
+        )
+    except ServerNotDeclaredError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ConfigInvalidError as exc:
+        # Una fila anterior a la regla de forma (ADR 0165 D11) que hoy no
+        # validaría: se dice cuál es el problema en vez de descubrir contra ella.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=McpTestConnectionError(error_code="CONFIG_ERROR", message=str(exc)).model_dump(),
         ) from exc
-    discovery = await _discover_or_raise(_to_runtime_config(server_model), resolver)
-    discovered = {tool.name: tool for tool in discovery.tools}
-
-    # Namespaced name <server>.<tool>; the tool segment is normalised to a
-    # slug so it matches the ``tools.name`` invariant (task_06_18_04). Dedupe
-    # the requested names so a duplicated selection upserts once.
-    namespaced: dict[str, str] = {}
-    for raw in payload.tool_names:
-        tool_slug = normalize_tool_name(raw)
-        if not tool_slug:
-            continue
-        namespaced[f"{server_name}.{tool_slug}"] = raw
-    if not namespaced:
+    except DiscoveryFailedError as exc:
+        raise HTTPException(
+            status_code=exc.failure.status_code,
+            detail=McpTestConnectionError(
+                error_code=exc.failure.error_code, message=exc.failure.message
+            ).model_dump(),
+        ) from exc
+    except ImportAbstainedError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="no importable tool names after normalisation",
-        )
-
-    # Existing live rows for these names (so re-import updates rather than
-    # inserts) — keyed by name, scoped to the tenant session (RLS).
-    existing_rows = (
-        (
-            await session.execute(
-                select(Tool).where(
-                    Tool.name.in_(list(namespaced)),
-                    Tool.deleted_at.is_(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    by_name = {row.name: row for row in existing_rows}
-
-    result_tools: list[Tool] = []
-    for name, raw_name in namespaced.items():
-        # ADR 0101: el schema/descripción REALES del server; una tool que el
-        # server ya no anuncia degrada al comportamiento histórico ({} +
-        # placeholder) en vez de abortar todo el lote.
-        spec = discovered.get(raw_name)
-        input_schema = dict(spec.input_schema) if spec is not None else {}
-        description = (
-            spec.description
-            if spec is not None and spec.description
-            else f"MCP tool {raw_name!r} from server {server_name!r}"
-        )
-        row = by_name.get(name)
-        if row is None:
-            row = Tool(
-                tenant_id=tenant_id,
-                name=name,
-                description=description,
-                category=ToolCategory.MCP.value,
-                implementation_type=ToolImplementationType.MCP_TOOL.value,
-                implementation_ref=name,
-                input_schema=input_schema,
-                security_level=payload.security_level.value,
-                is_builtin=False,
-            )
-            session.add(row)
-        else:
-            # ON CONFLICT-style update: keep the row, refresh the operator's
-            # security choice (the editable default, ADR 0052) AND the
-            # discovered schema/description (ADR 0101: el re-import refresca
-            # un schema evolucionado en el server).
-            row.security_level = payload.security_level.value
-            row.implementation_ref = name
-            row.input_schema = input_schema
-            row.description = description
-        result_tools.append(row)
-
-    try:
-        await session.flush()
+            detail=McpTestConnectionError(
+                error_code="TOO_MANY_TOOLS", message=str(exc)
+            ).model_dump(),
+        ) from exc
     except IntegrityError as exc:  # pragma: no cover - racing concurrent import
         await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="concurrent import collided on a tool name; retry",
         ) from exc
-    for row in result_tools:
+
+    if not outcome.tools and not outcome.retired and not outcome.omitted:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="no importable tool names after normalisation",
+        )
+    for row in outcome.tools:
         await session.refresh(row)
 
-    return ImportMcpToolsResponse(tools=[to_tool_response(t) for t in result_tools])
+    return ImportMcpToolsResponse(
+        tools=[to_tool_response(t) for t in outcome.tools],
+        retired=outcome.retired,
+        omitted=outcome.omitted,
+        warnings=outcome.warnings,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Pydantic → runtime dataclass conversion
 # ---------------------------------------------------------------------------
-def _to_runtime_config(payload: MCPServerConfigModel) -> MCPServerConfig:
-    """Map :class:`MCPServerConfigModel` (HTTP shape, dict-friendly) to
-    :class:`shared_mcp.MCPServerConfig` (frozen dataclass the SDK
-    consumes). The shapes are intentionally 1:1 except for ``args``
-    (list ↔ tuple) — the dataclass keeps tuple to stay hashable."""
-    data = payload.model_dump()
-    return MCPServerConfig(
-        name=data["name"],
-        transport=data["transport"],
-        command=data.get("command"),
-        args=tuple(data.get("args") or ()),
-        env=dict(data.get("env") or {}),
-        url=data.get("url"),
-        headers=dict(data.get("headers") or {}),
-        auth_ref=data.get("auth_ref"),
-        timeout_s=float(data.get("timeout_s", 30.0)),
-        max_output_bytes=int(data.get("max_output_bytes", 65536)),
-    )
+# ADR 0166 D2: la conversión vive en `api_server.mcp.import_tools` porque la
+# comparten los tres llamantes del import; aquí queda el nombre histórico para
+# los tests que lo importan por ruta.
+_to_runtime_config = to_runtime_config
 
 
 __all__ = [

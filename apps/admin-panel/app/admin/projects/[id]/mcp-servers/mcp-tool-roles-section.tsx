@@ -196,7 +196,7 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
           </p>
         ) : mcpTools.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="mcp-tool-roles-empty">
-            {t("rolesEmptyBefore")} <strong>“{t("testButton")}”</strong> {t("rolesEmptyAfter")}
+            {t("rolesEmptyBefore")} <strong>“{t("cardImportAll")}”</strong> {t("rolesEmptyAfter")}
           </p>
         ) : (
           <ul className="space-y-3" data-testid="mcp-tool-roles-list">

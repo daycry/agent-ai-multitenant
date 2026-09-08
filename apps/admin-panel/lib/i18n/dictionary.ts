@@ -5869,13 +5869,36 @@ export const dictionary = {
     rolesDiscard: { es: "Descartar", en: "Discard" },
     rolesSave: { es: "Guardar", en: "Save" },
     rolesSaved: { es: "Guardado", en: "Saved" },
+    // ADR 0166 D2: el estado vacío enlaza a la CAUSA — el botón «Importar» de la
+    // tarjeta del servidor —, no a «pulsa Probar» dentro del diálogo.
     rolesEmptyBefore: {
-      es: "Este proyecto aún no tiene tools MCP importadas. Configura un MCP server arriba y usa",
-      en: "This project has no MCP tools imported yet. Configure an MCP server above and use",
+      es: "Este proyecto aún no tiene tools MCP importadas en el catálogo: sus tarjetas de arriba dicen «sin importar». Pulsa",
+      en: "This project has no MCP tools imported into the catalog yet: its cards above say “not imported”. Press",
     },
     rolesEmptyAfter: {
-      es: "para importar sus tools al catálogo; luego podrás afinar aquí qué roles las usan.",
-      en: "to import its tools into the catalog; then you can tune here which roles may use them.",
+      es: "en la tarjeta del servidor para traerlas todas en un viaje (o elige cuáles desde Editar); luego podrás afinar aquí qué roles las usan.",
+      en: "on the server card to bring them all in one go (or pick which ones from Edit); then you can tune here which roles may use them.",
+    },
+
+    // --- tarjeta: recuento e import directo (ADR 0166 D2/D4, task_mk_01) -----
+    cardImportedCount: { es: "{count} tools importadas", en: "{count} tools imported" },
+    cardNotImported: { es: "sin importar", en: "not imported" },
+    cardImportAll: { es: "Importar", en: "Import" },
+    cardTestOk: {
+      es: "Conexión OK: el servidor anuncia {count} tools.",
+      en: "Connection OK: the server announces {count} tools.",
+    },
+    cardImportDone: {
+      es: "Importadas {count} tools al catálogo ({retired} retiradas por dejar de anunciarse).",
+      en: "{count} tools imported into the catalog ({retired} retired as no longer announced).",
+    },
+    cardImportTooMany: {
+      es: "El servidor anuncia más de 200 tools: el import automático se abstiene. Elige cuáles importar desde Editar → Probar conexión.",
+      en: "The server announces more than 200 tools: the automatic import stands down. Pick which ones to import from Edit → Test connection.",
+    },
+    cardImportOauthNotConnected: {
+      es: "Este servidor usa OAuth y no está conectado: pulsa «Conectar» y sus tools se importarán solas al completarlo.",
+      en: "This server uses OAuth and is not connected: press “Connect” and its tools will be imported on completion.",
     },
     rolesOpenToAll: { es: "Abierta a todos", en: "Open to all" },
     rolesCount: { es: "{count} roles", en: "{count} roles" },
