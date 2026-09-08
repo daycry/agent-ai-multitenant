@@ -25,11 +25,13 @@ from shared_mcp.auth import (
 from shared_mcp.catalog import CATALOG, McpServerTemplate, render_vault_path
 from shared_mcp.client import MCPClient, MCPSession
 from shared_mcp.discovery import DiscoveryResult, discover_tools
+from shared_mcp.egress import HttpxClientFactory, proxied_httpx_client_factory
 from shared_mcp.exceptions import (
     MCPAuthError,
     MCPError,
     MCPToolError,
     MCPTransportError,
+    transport_root_cause,
 )
 from shared_mcp.oauth import (
     VaultTokenStorage,
@@ -47,6 +49,7 @@ from shared_mcp.types import (
 __all__ = [
     "CATALOG",
     "DiscoveryResult",
+    "HttpxClientFactory",
     "HvacVaultResolver",
     "MCPAuthError",
     "MCPClient",
@@ -67,5 +70,7 @@ __all__ = [
     "build_oauth_provider",
     "discover_tools",
     "oauth_vault_path",
+    "proxied_httpx_client_factory",
     "render_vault_path",
+    "transport_root_cause",
 ]

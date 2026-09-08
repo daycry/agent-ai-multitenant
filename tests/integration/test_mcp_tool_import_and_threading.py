@@ -196,7 +196,7 @@ def _patch_discovery(monkeypatch: pytest.MonkeyPatch, schema: dict | None = None
 
     effective = schema if schema is not None else _SCHEMA_V1
 
-    async def _discover(config, *, vault_resolver=None):
+    async def _discover(config, *, vault_resolver=None, **_kw):
         return DiscoveryResult(
             tools=[
                 MCPTool(
@@ -384,7 +384,7 @@ def _fake_discovery(schema: dict, description: str = "Read a file from disk"):
     from shared_mcp.discovery import DiscoveryResult
     from shared_mcp.types import MCPTool
 
-    async def _discover(config, *, vault_resolver=None):
+    async def _discover(config, *, vault_resolver=None, **_kw):
         return DiscoveryResult(
             tools=[
                 MCPTool(name="read_file", description=description, input_schema=schema),
@@ -450,7 +450,7 @@ async def test_import_fails_closed_when_discovery_unreachable(
     headers = {"Authorization": f"Bearer {token}"}
     project_id = seeded["project_a"]
 
-    async def _boom(config, *, vault_resolver=None):
+    async def _boom(config, *, vault_resolver=None, **_kw):
         raise MCPTransportError("connection refused")
 
     monkeypatch.setattr("api_server.routers.mcp.discover_tools", _boom)

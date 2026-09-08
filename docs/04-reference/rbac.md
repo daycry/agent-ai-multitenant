@@ -140,6 +140,24 @@ API nunca las devuelve (write-only).
 > `tests/unit/test_rbac_matrix_drift.py`, que falla si aparece un prefijo
 > o una ruta `/admin/*` sin fila aquí.
 
+#### `egress.py` — sondeo de la allowlist de MCP remotos (ADR 0165 D7.3, `task_mk_02`)
+
+| Endpoint                            | Método | Rol mínimo     |
+| ----------------------------------- | ------ | -------------- |
+| `/admin/egress/mcp-allowlist/probe` | POST   | `system_admin` |
+
+> `require_system_admin` sobre `get_admin_session`, y además el endurecimiento
+> de la superficie `/admin/*` que `main.py` engancha al montar. Abre un CONNECT
+> **a través del egress-proxy** por cada host del ajuste
+> `egress.mcp_allowed_hosts` (o de los `hosts` del cuerpo) y devuelve
+> `permitido` / `bloqueado` / `error` por host: es la única forma de afirmar
+> que un host está en vigor, porque el ajuste es la intención y el `filter.txt`
+> vive horneado en la imagen del proxy. Es System Admin y no tenant porque
+> convierte al api-server en un cliente que abre conexiones hacia fuera (por el
+> proxy, así que sólo alcanza lo que el filtro ya permite) y porque el mismo
+> actor es el único que puede escribir el ajuste. Nunca corre en barrido
+> periódico: sólo bajo petición. Runbook: `06-runbooks/egress-mcp-allowlist.md` §4.
+
 #### `ollama.py` — gestión de modelos Ollama (ADR 0056)
 
 | Endpoint                    | Método | Rol mínimo     |

@@ -3089,6 +3089,49 @@ export const dictionary = {
       es: "Elige un proveedor para ver sus modelos.",
       en: "Pick a provider to see its models.",
     },
+
+    // --- `string_list` y la allowlist de egress (task_mk_02, ADR 0165) -------
+    // El control es genérico (una lista de cadenas); los textos de egress sólo
+    // se pintan para `egress.mcp_allowed_hosts`. Ninguno dice «permitido»: eso
+    // sólo lo puede decir el sondeo contra el proxy (D7.2/D7.3).
+    stringListHelp: {
+      es: "Una entrada por línea. Sólo hostnames: sin esquema, puerto, ruta ni comodines.",
+      en: "One entry per line. Hostnames only: no scheme, port, path or wildcards.",
+    },
+    stringListCount: { es: "{count} de {max} entradas", en: "{count} of {max} entries" },
+    stringListSavedPendingApply: {
+      es: "Guardado — pendiente de aplicar al proxy. Esto es la intención; el proxy sigue con su filtro anterior hasta que alguien ejecute, en el host:",
+      en: "Saved — pending apply to the proxy. This is the intent; the proxy keeps its previous filter until someone runs, on the host:",
+    },
+    egressConnectPorts: {
+      es: "El proxy sólo deja salir CONNECT por 443 y 8443, para todos los hosts permitidos. Un host que sólo escuche en otro puerto no se puede habilitar desde aquí.",
+      en: "The proxy only lets CONNECT out on 443 and 8443, for every allowed host. A host that only listens on another port cannot be enabled from here.",
+    },
+    egressNoWildcards: {
+      es: "Aquí no caben comodines: un patrón abre una familia entera de hosts y se revisa en el repo, con PR.",
+      en: "No wildcards here: a pattern opens a whole family of hosts and gets reviewed in the repo, with a PR.",
+    },
+    egressNotExfiltration: {
+      es: "Esto NO es control de exfiltración: cada host abierto es un canal de salida completamente escribible desde cualquier sandbox de cualquier tenant.",
+      en: "This is NOT exfiltration control: every opened host is a fully writable outbound channel from any sandbox of any tenant.",
+    },
+    probeButton: { es: "Comprobar contra el proxy", en: "Check against the proxy" },
+    probing: { es: "Comprobando…", en: "Checking…" },
+    probeHelp: {
+      es: "Abre un CONNECT a través del egress-proxy por cada host guardado. Es la única forma de saber qué está en vigor; sondear no enumera lo que el proxy permite además.",
+      en: "Opens a CONNECT through the egress proxy for every saved host. It is the only way to know what is in force; probing does not enumerate what else the proxy allows.",
+    },
+    probeNoProxy: {
+      es: "El api-server no tiene egress-proxy configurado (API_SERVER_EGRESS_PROXY_URL): no hay a quién preguntar.",
+      en: "The api-server has no egress proxy configured (API_SERVER_EGRESS_PROXY_URL): there is nobody to ask.",
+    },
+    probeEmpty: {
+      es: "No hay hosts guardados que comprobar.",
+      en: "There are no saved hosts to check.",
+    },
+    verdictPermitido: { es: "permitido", en: "allowed" },
+    verdictBloqueado: { es: "bloqueado", en: "blocked" },
+    verdictError: { es: "error", en: "error" },
   },
 
   /**
@@ -5787,6 +5830,31 @@ export const dictionary = {
     importSuccess: {
       es: "Importadas {count} al catálogo (Origen MCP, nivel “Aislada”).",
       en: "{count} imported to the catalog (Origin MCP, “Isolated” level).",
+    },
+
+    // --- egress: probar sale por el proxy (task_mk_02, ADR 0165 D9/D11) ------
+    // El backend devuelve `error_code` tipado; la UI ramifica por él y no por el
+    // texto, que es lo que antes pintaba crudo (`403 Filtered`).
+    egressBlockedTitle: {
+      es: "El egress-proxy bloqueó el host",
+      en: "The egress proxy blocked the host",
+    },
+    egressBlockedHelp: {
+      es: "El host de este servidor no está en la allowlist de MCP remotos de la plataforma. Pídele a un System Admin que lo añada en Sistema → Egress y que aplique el cambio al proxy. La prueba recorre el mismo camino que las ejecuciones: hasta entonces fallarán igual.",
+      en: "This server's host is not in the platform's remote MCP allowlist. Ask a System Admin to add it under System → Egress and apply the change to the proxy. The test walks the same path as the runs: until then they will fail the same way.",
+    },
+    egressProxyUnavailableTitle: {
+      es: "El api-server no puede usar el egress-proxy",
+      en: "The api-server cannot use the egress proxy",
+    },
+    egressProxyUnavailableHelp: {
+      es: "No es la allowlist. Revisa API_SERVER_EGRESS_PROXY_URL, que el proxy esté en marcha y que la IP del api-server caiga en las redes Allow de tinyproxy (runbook egress-mcp-allowlist §5).",
+      en: "It is not the allowlist. Check API_SERVER_EGRESS_PROXY_URL, that the proxy is running, and that the api-server's IP falls within tinyproxy's Allow networks (egress-mcp-allowlist runbook §5).",
+    },
+    egressWarningBadge: { es: "host sin abrir en el egress", en: "host not opened in egress" },
+    egressWarning: {
+      es: "Guardado. El host {host} no está hoy en la allowlist de egress de la plataforma; pídele su apertura a un System Admin (Sistema → Egress). Hasta entonces, las ejecuciones y las pruebas con este servidor fallarán.",
+      en: "Saved. The host {host} is not in the platform's egress allowlist today; ask a System Admin to open it (System → Egress). Until then, runs and tests with this server will fail.",
     },
 
     // --- política rol→tool (ADR 0128 fase 4) ------------------------------

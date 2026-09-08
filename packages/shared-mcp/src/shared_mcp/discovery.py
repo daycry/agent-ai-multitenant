@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 
 from shared_mcp.auth import VaultResolver
 from shared_mcp.client import MCPClient
+from shared_mcp.egress import HttpxClientFactory
 from shared_mcp.types import MCPServerConfig, MCPTool
 
 
@@ -69,6 +70,7 @@ async def discover_tools(
     config: MCPServerConfig,
     *,
     vault_resolver: VaultResolver | None = None,
+    httpx_client_factory: HttpxClientFactory | None = None,
 ) -> DiscoveryResult:
     """Open a session, run the MCP handshake, list tools, close.
 
@@ -79,6 +81,10 @@ async def discover_tools(
             ``config.auth_ref`` is set. The "Probar" button in the
             admin-panel (task_05_07) wires this with a resolver
             backed by the api-server's hvac client.
+        httpx_client_factory: optional factory for the HTTP transports
+            (ADR 0165 D9) — the api-server passes the egress-proxy one so
+            the probe walks the same path the sandbox will. ``None`` keeps
+            the SDK default (direct).
 
     Returns:
         A :class:`DiscoveryResult` with the tools the server
@@ -90,7 +96,9 @@ async def discover_tools(
                            config declares auth_ref without a resolver.
         (Other errors from the SDK bubble up as MCPTransportError.)
     """
-    async with MCPClient.connect(config, vault_resolver=vault_resolver) as session:
+    async with MCPClient.connect(
+        config, vault_resolver=vault_resolver, httpx_client_factory=httpx_client_factory
+    ) as session:
         tools = await session.list_tools()
         info = _extract_server_info(session.init_result)
         return DiscoveryResult(

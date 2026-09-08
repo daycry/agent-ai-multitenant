@@ -32,9 +32,42 @@ class MCPToolError(MCPError):
     the tool's business logic failed."""
 
 
+def transport_root_cause(exc: BaseException) -> BaseException | None:
+    """La excepción ORIGINAL debajo de un `MCPError`, o ``None`` si no la hay.
+
+    `MCPClient.connect` normaliza todo fallo del camino de conexión a
+    :class:`MCPTransportError`, y lo que envuelve suele ser un
+    `BaseExceptionGroup` (el TaskGroup de anyio del SDK), a veces anidado, a
+    veces con otro `MCPError` intermedio dentro. Quien tiene que decidir «¿esto
+    fue el proxy rechazando el CONNECT o el servidor rechazando la credencial?»
+    necesita mirar el TIPO de la hoja —`httpx.ProxyError`, `httpx.ConnectError`,
+    `httpx.HTTPStatusError`— y no olfatear el texto del mensaje (ADR 0165,
+    addendum A2). Esta función baja por `__cause__` y por los grupos hasta la
+    primera hoja que no sea ni grupo ni `MCPError`.
+    """
+    seen: set[int] = set()
+    pendientes: list[BaseException] = [exc]
+    while pendientes:
+        actual = pendientes.pop(0)
+        if id(actual) in seen:
+            continue
+        seen.add(id(actual))
+        if isinstance(actual, BaseExceptionGroup):
+            pendientes = list(actual.exceptions) + pendientes
+            continue
+        if isinstance(actual, MCPError):
+            causa = actual.__cause__
+            if causa is not None:
+                pendientes.insert(0, causa)
+            continue
+        return actual
+    return None
+
+
 __all__ = [
     "MCPAuthError",
     "MCPError",
     "MCPToolError",
     "MCPTransportError",
+    "transport_root_cause",
 ]

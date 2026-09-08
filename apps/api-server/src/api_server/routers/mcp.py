@@ -27,9 +27,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from shared_mcp import (
-    MCPAuthError,
+    DiscoveryResult,
     MCPServerConfig,
-    MCPTransportError,
     VaultResolver,
     discover_tools,
 )
@@ -38,12 +37,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
+from api_server.config import get_settings
 from api_server.db.domain import (
     Project,
     Tool,
     ToolCategory,
     ToolImplementationType,
     ToolSecurityLevel,
+)
+from api_server.egress.mcp_discovery import (
+    EgressProxyNotConfiguredError,
+    classify_discovery_failure,
+    egress_client_factory_for,
 )
 from api_server.mcp.config import MCPServerConfigModel
 from api_server.routers._helpers import require_tenant_id
@@ -165,7 +170,18 @@ class TestConnectionResponse(BaseModel):
 
 # Typed error codes the UI can branch on. Free-form messages aren't
 # stable across SDK versions; codes are.
-McpErrorCode = Literal["AUTH_ERROR", "TRANSPORT_ERROR", "CONFIG_ERROR", "UNKNOWN_ERROR"]
+#
+# `task_mk_02` (ADR 0165 D9) añade los dos de egress. Antes se veían como un
+# `TRANSPORT_ERROR` con un `403 Filtered` crudo dentro, que la UI pintaba tal
+# cual y el operador leía como un fallo del servidor MCP.
+McpErrorCode = Literal[
+    "AUTH_ERROR",
+    "TRANSPORT_ERROR",
+    "CONFIG_ERROR",
+    "UNKNOWN_ERROR",
+    "EGRESS_BLOCKED",
+    "EGRESS_PROXY_UNAVAILABLE",
+]
 
 
 class McpTestConnectionError(BaseModel):
@@ -179,6 +195,47 @@ class McpTestConnectionError(BaseModel):
 
     error_code: McpErrorCode
     message: str
+
+
+async def _discover_or_raise(
+    runtime_config: MCPServerConfig, resolver: VaultResolver | None
+) -> DiscoveryResult:
+    """Descubrir las tools de un servidor POR EL MISMO CAMINO que el run (ADR 0165 D9).
+
+    Es el único sitio desde el que este router llama a `discover_tools`, y tiene
+    que seguir siéndolo: `task_mk_01` abre un tercer call site (descubrir al
+    desplegar) y si uno quedase directo la asimetría probar≠ejecutar volvería
+    por esa puerta. Un host externo sale por el egress-proxy
+    (`API_SERVER_EGRESS_PROXY_URL`); un servicio del compose y un `stdio`, no —
+    con la misma regla que el worker aplica por `NO_PROXY`.
+
+    Los fallos se traducen a `McpTestConnectionError` mirando el TIPO de la causa
+    raíz (addendum A2): un `403 Filtered` del proxy es `EGRESS_BLOCKED` (422 con
+    el host y dónde pedirlo), no un `TRANSPORT_ERROR` con el texto crudo.
+    """
+    try:
+        factory = egress_client_factory_for(runtime_config, get_settings().egress_proxy_url)
+    except EgressProxyNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=McpTestConnectionError(
+                error_code="EGRESS_PROXY_UNAVAILABLE", message=str(exc)
+            ).model_dump(),
+        ) from exc
+    try:
+        return await discover_tools(
+            runtime_config, vault_resolver=resolver, httpx_client_factory=factory
+        )
+    except Exception as exc:
+        failure = classify_discovery_failure(
+            exc, config=runtime_config, proxied=factory is not None
+        )
+        raise HTTPException(
+            status_code=failure.status_code,
+            detail=McpTestConnectionError(
+                error_code=failure.error_code, message=failure.message
+            ).model_dump(),
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -242,27 +299,7 @@ async def test_mcp_connection(
             detail=McpTestConnectionError(error_code="CONFIG_ERROR", message=str(exc)).model_dump(),
         ) from exc
 
-    try:
-        result_obj = await discover_tools(runtime_config, vault_resolver=resolver)
-    except MCPAuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=McpTestConnectionError(error_code="AUTH_ERROR", message=str(exc)).model_dump(),
-        ) from exc
-    except MCPTransportError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=McpTestConnectionError(
-                error_code="TRANSPORT_ERROR", message=str(exc)
-            ).model_dump(),
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=McpTestConnectionError(
-                error_code="UNKNOWN_ERROR", message=f"{type(exc).__name__}: {exc}"
-            ).model_dump(),
-        ) from exc
+    result_obj = await _discover_or_raise(runtime_config, resolver)
 
     return TestConnectionResponse(
         server_name=result_obj.server_name,
@@ -357,22 +394,20 @@ async def import_mcp_tools(
     # ``parameters: {}`` → el pre-guard del runtime la rechazaba (inservible).
     # FAIL-CLOSED: un server inalcanzable aborta el import con un error tipado
     # en vez de crear una tool rota que recrearía el bug en silencio.
+    #
+    # `task_mk_02` (ADR 0165 D9): el import sale por el MISMO camino que la prueba
+    # y que el run. Antes tenía su propio `except` que aplanaba todo a
+    # `TRANSPORT_ERROR`; ahora comparte el mapeo tipado de `_discover_or_raise`.
     try:
         server_model = MCPServerConfigModel.model_validate(declared[server_name])
-        discovery = await discover_tools(_to_runtime_config(server_model), vault_resolver=resolver)
-    except MCPAuthError as exc:
+    except ValueError as exc:
+        # Una fila anterior a la regla de forma (D11) que hoy no validaría: se
+        # dice cuál es el problema en vez de intentar descubrir contra ella.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=McpTestConnectionError(error_code="AUTH_ERROR", message=str(exc)).model_dump(),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=McpTestConnectionError(error_code="CONFIG_ERROR", message=str(exc)).model_dump(),
         ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=McpTestConnectionError(
-                error_code="TRANSPORT_ERROR",
-                message=f"discovery failed during import: {type(exc).__name__}: {exc}",
-            ).model_dump(),
-        ) from exc
+    discovery = await _discover_or_raise(_to_runtime_config(server_model), resolver)
     discovered = {tool.name: tool for tool in discovery.tools}
 
     # Namespaced name <server>.<tool>; the tool segment is normalised to a

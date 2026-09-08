@@ -24,7 +24,12 @@ import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 import { TestResultPanel, type TestConnectionResult } from "./mcp-test-result-panel";
-import { type McpServerConfig } from "./mcp-server-types";
+import {
+  MCP_EGRESS_BLOCKED,
+  MCP_EGRESS_PROXY_UNAVAILABLE,
+  mcpErrorCode,
+  type McpServerConfig,
+} from "./mcp-server-types";
 
 export function McpConnectionTestSection({
   projectId,
@@ -39,6 +44,9 @@ export function McpConnectionTestSection({
   const t = useT("mcpServers");
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  // task_mk_02 (ADR 0165 D9): el `error_code` tipado del fallo, para ramificar
+  // los dos casos de egress con un texto accionable en vez del mensaje crudo.
+  const [testErrorCode, setTestErrorCode] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   // task_06_18_12 (ADR 0052) — selección de tools a importar al catálogo.
   // Multiselección configurable por el operador: NO importamos todo, el
@@ -52,6 +60,7 @@ export function McpConnectionTestSection({
     setTesting(true);
     setTestResult(null);
     setTestError(null);
+    setTestErrorCode(null);
     setImportError(null);
     setImportedCount(null);
     try {
@@ -68,6 +77,7 @@ export function McpConnectionTestSection({
       setSelectedTools(new Set(result.tools.map((t) => t.name)));
     } catch (err) {
       setTestError(errorText(err));
+      setTestErrorCode(mcpErrorCode(err));
     } finally {
       setTesting(false);
     }
@@ -133,15 +143,43 @@ export function McpConnectionTestSection({
           importedCount={importedCount}
         />
       ) : testError ? (
-        <p
-          className="text-destructive mt-2 whitespace-pre-wrap text-xs"
-          data-testid="mcp-form-test-error"
-        >
-          {testError}
-        </p>
+        <div className="mt-2 space-y-1" data-testid="mcp-form-test-error">
+          {testErrorCode === MCP_EGRESS_BLOCKED ? (
+            <EgressErrorNote
+              title={t("egressBlockedTitle")}
+              help={t("egressBlockedHelp")}
+              testId="mcp-form-test-egress-blocked"
+            />
+          ) : testErrorCode === MCP_EGRESS_PROXY_UNAVAILABLE ? (
+            <EgressErrorNote
+              title={t("egressProxyUnavailableTitle")}
+              help={t("egressProxyUnavailableHelp")}
+              testId="mcp-form-test-egress-proxy-unavailable"
+            />
+          ) : null}
+          <p className="text-destructive whitespace-pre-wrap text-xs">{testError}</p>
+        </div>
       ) : (
         <p className="text-muted-foreground mt-2 text-xs">{t("testHelp")}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Los dos fallos de egress (ADR 0165 D9.2) con su texto accionable ENCIMA del
+ * mensaje del backend, no en vez de él: el mensaje trae el host concreto y el
+ * runbook; la nota dice qué hacer y, sobre todo, qué NO hacer (rotar un token
+ * sano porque se leyó un 403 del proxy como un 403 del servidor).
+ */
+function EgressErrorNote({ title, help, testId }: { title: string; help: string; testId: string }) {
+  return (
+    <div
+      className="bg-warning-soft text-warning-soft-foreground border-warning/30 rounded-md border p-2 text-xs"
+      data-testid={testId}
+    >
+      <p className="font-medium">{title}</p>
+      <p>{help}</p>
     </div>
   );
 }

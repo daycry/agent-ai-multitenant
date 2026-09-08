@@ -21,6 +21,7 @@ import {
   TRANSPORT_BADGE,
   TRANSPORT_LABEL,
   type McpServerConfig,
+  type McpServerEgressWarning,
 } from "./mcp-server-types";
 
 // --------------------------------------------------------------------------
@@ -34,6 +35,7 @@ export function McpServerCard({
   projectId,
   authKind,
   providerLabel,
+  egressWarning,
 }: {
   server: McpServerConfig;
   onEdit: () => void;
@@ -45,6 +47,10 @@ export function McpServerCard({
   projectId?: string;
   authKind?: string;
   providerLabel?: string;
+  // task_mk_02 (ADR 0165 D11): el aviso del backend cuando el host externo del
+  // servidor aún no está en la allowlist de egress. Se pinta en la PÁGINA (esta
+  // tarjeta), no en el diálogo, porque el diálogo se cierra al guardar.
+  egressWarning?: McpServerEgressWarning;
 }) {
   const t = useT("mcpServers");
   const isOAuth = authKind === OAUTH_AUTH_KIND;
@@ -66,12 +72,26 @@ export function McpServerCard({
                 vault
               </Badge>
             ) : null}
+            {egressWarning ? (
+              <Badge variant="warning" data-testid={`mcp-server-egress-badge-${server.name}`}>
+                {t("egressWarningBadge")}
+              </Badge>
+            ) : null}
           </CardTitle>
           <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
             {server.transport === "stdio"
               ? `${server.command ?? ""} ${server.args.join(" ")}`.trim()
               : (server.url ?? "")}
           </p>
+          {egressWarning ? (
+            <p
+              className="text-warning-soft-foreground mt-1 text-xs"
+              title={egressWarning.message}
+              data-testid={`mcp-server-egress-warning-${server.name}`}
+            >
+              {t("egressWarning", { host: egressWarning.host })}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button

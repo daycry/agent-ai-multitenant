@@ -684,6 +684,13 @@ class ProjectResponse(BaseModel):
     allowed_domains: list[str]
     # ADR 0128 fase 2: política rol→tool de las MCP del proyecto (`{}` = sin política).
     mcp_tool_roles: dict[str, list[str]]
+    # `task_mk_02` (ADR 0165 D11): avisos tipados sobre servidores MCP cuyo host
+    # externo aún no está en la allowlist de egress de la plataforma. Viajan en
+    # el 200 del guardado (fail-open) y en el GET de la ficha, porque el diálogo
+    # se cierra al guardar y la página es donde el operador los va a leer. Cada
+    # uno: {server, host, code, message}. Vacío = nada que avisar (o el endpoint
+    # no lo calcula, caso de los listados).
+    mcp_server_warnings: list[dict[str, str]] = Field(default_factory=list)
 
     # Plan 16 task_16_11.
     human_task_review_mode: str
@@ -701,11 +708,14 @@ class ProjectResponse(BaseModel):
     deleted_at: datetime | None
 
 
-def to_project_response(p: Project) -> ProjectResponse:
+def to_project_response(
+    p: Project, *, mcp_server_warnings: list[dict[str, str]] | None = None
+) -> ProjectResponse:
     # Vía `model_validate` con la clave ALIAS `model_config`: el plugin mypy de
     # Pydantic no expone el kwarg field-name (`llm_config`) cuando hay alias
     # (mismo patrón que to_agent_response / to_team_response).
     payload: dict[str, Any] = {
+        "mcp_server_warnings": list(mcp_server_warnings or []),
         "id": p.id,
         "tenant_id": p.tenant_id,
         "name": p.name,

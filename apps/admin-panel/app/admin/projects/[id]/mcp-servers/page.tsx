@@ -106,6 +106,12 @@ export default function ProjectMcpServersPage() {
   const [editingIndex, setEditingIndex] = useState<number>(-1);
 
   const servers = projectQuery.data?.mcp_servers ?? [];
+  // task_mk_02 (ADR 0165 D11): avisos por servidor con host externo fuera de la
+  // allowlist de egress. Vienen en la ficha y en el 200 del guardado; se pintan
+  // aquí y no en el diálogo, que se cierra al guardar.
+  const egressWarningByServer = new Map(
+    (projectQuery.data?.mcp_server_warnings ?? []).map((w) => [w.server, w] as const),
+  );
 
   const saveMutation = useMutation({
     mutationFn: (next: McpServerConfig[]) =>
@@ -212,6 +218,7 @@ export default function ProjectMcpServersPage() {
               projectId={projectId}
               authKind={server.url ? kindByUrl[server.url] : undefined}
               providerLabel={server.url ? nameByUrl[server.url] : undefined}
+              egressWarning={egressWarningByServer.get(server.name)}
             />
           ))}
         </div>

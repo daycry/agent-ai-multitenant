@@ -4,6 +4,7 @@
 // (shared_mcp.catalog vía GET /mcp-catalog). Sin JSX ni hooks.
 
 import { type BadgeVariant } from "@/components/ui/badge";
+import { ApiError } from "@/lib/api";
 import type { MessageKey } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
@@ -23,6 +24,19 @@ export interface McpServerConfig {
   timeout_s: number;
 }
 
+/**
+ * Aviso D11 (ADR 0165) que el backend adjunta al guardar y al leer la ficha:
+ * un servidor cuyo host externo aún no está en la allowlist de egress de la
+ * plataforma. No es un error —el guardado es 200— y no dice «permitido» ni
+ * «pendiente de aplicar»: afirma menos a propósito.
+ */
+export interface McpServerEgressWarning {
+  server: string;
+  host: string;
+  code: string;
+  message: string;
+}
+
 export interface ProjectResponse {
   id: string;
   name: string;
@@ -32,7 +46,33 @@ export interface ProjectResponse {
   // `{}` (default) = sin política: todo agente del proyecto ve toda tool MCP.
   // Ausente en respuestas antiguas → se trata como `{}`.
   mcp_tool_roles?: Record<string, string[]>;
+  // task_mk_02 (ADR 0165 D11). Ausente en respuestas antiguas → `[]`.
+  mcp_server_warnings?: McpServerEgressWarning[];
   // ...other Project fields exist; we don't touch them
+}
+
+/** Los códigos tipados de `McpTestConnectionError` que la UI trata aparte. */
+export const MCP_EGRESS_BLOCKED = "EGRESS_BLOCKED";
+export const MCP_EGRESS_PROXY_UNAVAILABLE = "EGRESS_PROXY_UNAVAILABLE";
+
+/**
+ * El `error_code` tipado del cuerpo de un fallo de `test-connection` /
+ * `import-tools` (`{"detail": {"error_code", "message"}}`), o `null` si el error
+ * no es de la API o el cuerpo no lo trae. La UI ramifica por el código y no por
+ * el texto: los textos del SDK cambian, los códigos no.
+ */
+export function mcpErrorCode(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const detail = (parsed as { detail?: unknown }).detail;
+    if (typeof detail !== "object" || detail === null) return null;
+    const code = (detail as { error_code?: unknown }).error_code;
+    return typeof code === "string" && code !== "" ? code : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

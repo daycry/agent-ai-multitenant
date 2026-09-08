@@ -208,6 +208,51 @@ tinyproxy:
 | `connect=403` **sin ninguna línea nueva en el log**                | El puerto del CONNECT no es 443 ni 8443. `ConnectPort` es global y no lo arregla ninguna allowlist |
 | `connect=200` y luego un timeout                                   | El proxy dejó pasar; el fallo está más allá — el origen no escucha ahí, o no responde              |
 
+**4.2 bis — El mismo veredicto desde el panel o por API.** El botón **«Comprobar
+contra el proxy»** de la tarjeta del ajuste (Sistema → Ajustes de plataforma →
+Egress / Red) hace exactamente el CONNECT de 4.2 desde el api-server, **a través
+del egress-proxy** (`API_SERVER_EGRESS_PROXY_URL`), por cada host del ajuste, y
+pinta `permitido` / `bloqueado` / `error` por host. Por API:
+
+```bash
+curl -sS -X POST https://<tu-host>/admin/egress/mcp-allowlist/probe \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{}'                                   # {} = los hosts del ajuste
+# -d '{"hosts": ["host-que-acabo-de-quitar.example.com"]}'  # un host suelto
+```
+
+Sólo System Admin, y **sólo bajo petición**: nunca corre en un barrido periódico,
+porque convierte al api-server en un cliente que abre conexiones hacia fuera (por
+el proxy, así que no alcanza más que lo que el filtro ya permite). Pasar hosts
+sueltos sirve para el sentido de la deriva que el ajuste no puede enseñar: el host
+que acabas de **quitar** sigue `permitido` hasta que apliques (§1).
+
+La lectura es la de la tabla de 4.2: `permitido` = el proxy abrió el túnel (aunque
+el origen responda 404 o no responda a tiempo); `bloqueado` = `403 Filtered`;
+`error` = el proxy rechazó al **cliente** (§5), no se pudo conectar con el proxy, o
+el host no es válido. Sin `API_SERVER_EGRESS_PROXY_URL` no se sondea nada y la
+respuesta lo dice (`proxy_url_configured: false`): sondear directo diría
+«permitido» de todo.
+
+**Y «Probar conexión» ya no miente.** Desde el ADR 0165 (D9) el botón «Probar» del
+servidor MCP en el proyecto —y la importación de tools— salen por el **mismo**
+egress-proxy que el sandbox. Un host fuera de la allowlist ya no devuelve un
+`502` con `403 Filtered` crudo: devuelve **`422` con `error_code: EGRESS_BLOCKED`**
+y el mensaje dice el host y dónde pedirlo. Los tres códigos que hay que saber
+leer, porque el síntoma se parecía y el arreglo no:
+
+| `error_code`               | Qué pasó                                                           | Qué hacer                                              |
+| -------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------ |
+| `EGRESS_BLOCKED`           | El proxy rechazó el CONNECT: el host no está en el filtro aplicado | §2 y §3: abrir el host y aplicar                       |
+| `EGRESS_PROXY_UNAVAILABLE` | No se llegó al proxy, o rechazó al api-server como cliente         | `API_SERVER_EGRESS_PROXY_URL`, `docker compose ps`, §5 |
+| `AUTH_ERROR`               | El túnel abrió y el **servidor MCP** rechazó la credencial         | La credencial (Vault/OAuth), NO la allowlist           |
+
+Al **guardar** un servidor cuyo host aún no está permitido no hay error: el
+proyecto devuelve `200` con `mcp_server_warnings` y la tarjeta del servidor lo
+pinta (fail-open, D11). Lo que sí se rechaza con `422` al guardar es la forma:
+IP literal, `localhost` o sufijo `.internal`, `http://` contra un host externo, y
+un puerto distinto de 443/8443.
+
 **4.3 — El límite, que hay que saber antes de fiarse:** sondear **no enumera**.
 Una allowlist de regex no se puede recorrer desde fuera, así que se puede afirmar
 «todo lo que pedí está permitido» y **nunca** «el proxy no permite nada más».

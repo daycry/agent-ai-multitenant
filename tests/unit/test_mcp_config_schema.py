@@ -352,3 +352,76 @@ def test_project_update_validates_when_mcp_servers_present() -> None:
                 ]
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# `task_mk_02` (ADR 0165 D11 + addendum A2) — fail-CLOSED de FORMA de la `url`
+# ---------------------------------------------------------------------------
+# La allowlist NO se mira aquí (eso es fail-open con aviso, en el router): lo que
+# se rechaza al guardar es una URL que la prueba de conexión marcaría después
+# desde el api-server — IP literal, nombre de metadata, host mal formado— y el
+# `http://` en claro contra un host externo, porque el token de un MCP remoto
+# viaja en cabecera y `ConnectPort` sólo gobierna el túnel TLS.
+
+
+def _http(url: str) -> dict[str, object]:
+    return {"name": "remote", "transport": "streamable_http", "url": url}
+
+
+def test_external_https_host_is_accepted() -> None:
+    cfg = MCPServerConfigModel.model_validate(_http("https://mcp.atlassian.com/v1/mcp"))
+    assert cfg.url == "https://mcp.atlassian.com/v1/mcp"
+
+
+def test_external_host_on_8443_is_accepted() -> None:
+    """`ConnectPort 443` y `ConnectPort 8443` son las dos directivas globales del
+    proxy (ADR 0165 D3): un puerto explícito 8443 sale; 9443 no saldría nunca."""
+    cfg = MCPServerConfigModel.model_validate(_http("https://mcp.example.com:8443/mcp"))
+    assert cfg.url == "https://mcp.example.com:8443/mcp"
+
+
+def test_internal_compose_host_is_accepted_over_plain_http() -> None:
+    """Un host sin punto es un servicio del compose: se exime por NO_PROXY y no
+    lleva TLS (`http://docling:5001/mcp`). La regla es la del worker."""
+    cfg = MCPServerConfigModel.model_validate(_http("http://docling:5001/mcp"))
+    assert cfg.url == "http://docling:5001/mcp"
+
+
+@pytest.mark.parametrize(
+    ("url", "fragment"),
+    [
+        ("https://10.0.0.5/mcp", "IP literal"),
+        ("https://169.254.169.254/latest", "IP literal"),
+        ("https://metadata.google.internal/mcp", "interno o de metadata"),
+        ("https://foo.internal/mcp", "interno o de metadata"),
+        ("https://mcp.atlassian.com:9443/mcp", "443 y 8443"),
+    ],
+)
+def test_prohibited_external_host_shapes_are_rejected_with_reason(url: str, fragment: str) -> None:
+    """422 con el MOTIVO, nunca un booleano: la lista de prohibidos es la misma que
+    usa el córtex (`web_safety`), no una copia."""
+    with pytest.raises(ValidationError) as exc_info:
+        MCPServerConfigModel.model_validate(_http(url))
+    assert fragment in str(exc_info.value)
+
+
+def test_external_host_over_plain_http_is_rejected() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        MCPServerConfigModel.model_validate(_http("http://mcp.atlassian.com/v1/mcp"))
+    assert "https" in str(exc_info.value)
+
+
+def test_url_without_host_is_rejected() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        MCPServerConfigModel.model_validate(_http("https:///mcp"))
+    assert "host" in str(exc_info.value)
+
+
+def test_the_reason_reaches_the_project_request_with_the_index() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ProjectUpdateRequest.model_validate(
+            {"mcp_servers": [_http("https://mcp.atlassian.com/mcp"), _http("https://10.0.0.5/mcp")]}
+        )
+    text = str(exc_info.value)
+    assert "mcp_servers[1]" in text
+    assert "IP literal" in text

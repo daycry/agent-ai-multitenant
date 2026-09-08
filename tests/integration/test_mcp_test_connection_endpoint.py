@@ -174,7 +174,7 @@ async def test_returns_200_with_discovered_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_discover(
-        _config: MCPServerConfig, *, vault_resolver: Any = None
+        _config: MCPServerConfig, *, vault_resolver: Any = None, **_kw: Any
     ) -> DiscoveryResult:
         return DiscoveryResult(
             tools=[
@@ -367,7 +367,7 @@ async def test_resolver_is_forwarded_to_discover_tools(
     seen: dict[str, Any] = {}
 
     async def fake_discover(
-        config: MCPServerConfig, *, vault_resolver: Any = None
+        config: MCPServerConfig, *, vault_resolver: Any = None, **_kw: Any
     ) -> DiscoveryResult:
         seen["config"] = config
         seen["vault_resolver"] = vault_resolver
@@ -388,3 +388,114 @@ async def test_resolver_is_forwarded_to_discover_tools(
     assert isinstance(seen["config"], MCPServerConfig)
     assert seen["config"].name == "toy"
     assert seen["config"].transport == "stdio"
+
+
+# ---------------------------------------------------------------------------
+# `task_mk_02` (ADR 0165 D9) — la prueba sale por el MISMO camino que el run
+# ---------------------------------------------------------------------------
+def _remote_payload() -> dict[str, Any]:
+    return {
+        "name": "atlassian",
+        "transport": "streamable_http",
+        "url": "https://mcp.example.com/mcp",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_remote_host_is_discovered_through_the_egress_proxy(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un host externo llega a `discover_tools` con una factoría httpx que sale por
+    el proxy; un `stdio` (o un host sin punto) llega con `None`. Si la factoría
+    se perdiera aquí, «Probar conexión» volvería a salir directo — el falso verde
+    de MK-15 — sin que ningún otro test lo viera."""
+    seen: dict[str, Any] = {}
+
+    async def fake_discover(
+        config: MCPServerConfig, *, vault_resolver: Any = None, httpx_client_factory: Any = None
+    ) -> DiscoveryResult:
+        seen[config.name] = httpx_client_factory
+        return DiscoveryResult(tools=[], server_name="x", server_version="")
+
+    monkeypatch.setattr(mcp_router_module, "discover_tools", fake_discover)
+    monkeypatch.setenv("API_SERVER_EGRESS_PROXY_URL", "http://egress-proxy:8888")
+    from api_server.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert (
+            await client.post(
+                f"/projects/{_PROJECT_ID}/mcp/test-connection", json=_remote_payload()
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                f"/projects/{_PROJECT_ID}/mcp/test-connection", json=_minimal_payload()
+            )
+        ).status_code == 200
+    finally:
+        get_settings.cache_clear()
+    assert callable(seen["atlassian"]), "el host externo tiene que salir por el proxy"
+    assert seen["toy"] is None, "stdio no tiene cliente HTTP al que atar un proxy"
+
+
+@pytest.mark.asyncio
+async def test_a_403_filtered_from_the_proxy_maps_to_422_egress_blocked(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El `403 Filtered` que antes llegaba crudo dentro de un `TRANSPORT_ERROR`
+    ahora es un 422 tipado que dice el host y dónde pedirlo."""
+    import httpx
+
+    async def fake_discover(*_a: Any, **_kw: Any) -> DiscoveryResult:
+        err = MCPTransportError("failed to open 'streamable_http' transport")
+        err.__cause__ = BaseExceptionGroup("unhandled", [httpx.ProxyError("403 Filtered")])
+        raise err
+
+    monkeypatch.setattr(mcp_router_module, "discover_tools", fake_discover)
+    resp = await client.post(f"/projects/{_PROJECT_ID}/mcp/test-connection", json=_remote_payload())
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error_code"] == "EGRESS_BLOCKED"
+    assert "mcp.example.com" in detail["message"]
+    assert "Egress" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_without_an_egress_proxy_a_remote_host_is_not_probed_directly(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    async def fake_discover(*_a: Any, **_kw: Any) -> DiscoveryResult:
+        nonlocal called
+        called = True
+        return DiscoveryResult(tools=[], server_name="x", server_version="")
+
+    monkeypatch.setattr(mcp_router_module, "discover_tools", fake_discover)
+    monkeypatch.setenv("API_SERVER_EGRESS_PROXY_URL", "")
+    from api_server.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        resp = await client.post(
+            f"/projects/{_PROJECT_ID}/mcp/test-connection", json=_remote_payload()
+        )
+    finally:
+        get_settings.cache_clear()
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"]["error_code"] == "EGRESS_PROXY_UNAVAILABLE"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_a_plain_http_remote_url_is_rejected_by_the_body_schema(client: AsyncClient) -> None:
+    """Fail-closed de forma (D11 + A2): el token viaja en cabecera y el proxy sólo
+    abre túneles TLS, así que `http://` contra un host externo no se prueba ni se
+    guarda."""
+    resp = await client.post(
+        f"/projects/{_PROJECT_ID}/mcp/test-connection",
+        json={"name": "x", "transport": "streamable_http", "url": "http://mcp.example.com/mcp"},
+    )
+    assert resp.status_code == 422
+    assert "https" in resp.text

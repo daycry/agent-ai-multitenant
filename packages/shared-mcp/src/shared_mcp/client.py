@@ -34,6 +34,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from shared_mcp.auth import VaultResolver, apply_vault_auth
+from shared_mcp.egress import HttpxClientFactory
 from shared_mcp.exceptions import (
     MCPAuthError,
     MCPError,
@@ -132,6 +133,7 @@ class MCPClient:
         *,
         vault_resolver: VaultResolver | None = None,
         auth: httpx.Auth | None = None,
+        httpx_client_factory: HttpxClientFactory | None = None,
     ) -> AsyncIterator[MCPSession]:
         """Open + initialise a session, yield it, close on exit.
 
@@ -154,6 +156,11 @@ class MCPClient:
         static ``auth_ref`` header are complementary; using both on the
         same server is a config smell (double credential).
 
+        ``httpx_client_factory`` (ADR 0165 D9) is handed to the HTTP transports
+        so the session can leave through the egress-proxy
+        (:func:`shared_mcp.egress.proxied_httpx_client_factory`). ``None``
+        keeps the SDK's default client (direct). Ignored for stdio.
+
         Errors are normalised:
             * Auth resolution → :class:`MCPAuthError`.
             * Anything in the connect path → :class:`MCPTransportError`
@@ -172,7 +179,9 @@ class MCPClient:
         try:
             async with AsyncExitStack() as stack:
                 try:
-                    read_stream, write_stream = await _open_streams(stack, config, auth=auth)
+                    read_stream, write_stream = await _open_streams(
+                        stack, config, auth=auth, httpx_client_factory=httpx_client_factory
+                    )
                 except MCPError:
                     raise
                 except BaseExceptionGroup as eg:
@@ -230,6 +239,7 @@ async def _open_streams(
     config: MCPServerConfig,
     *,
     auth: httpx.Auth | None = None,
+    httpx_client_factory: HttpxClientFactory | None = None,
 ) -> tuple[Any, Any]:
     """Open the right transport for `config.transport` and return its
     `(read_stream, write_stream)` pair. Registers cleanup on `stack`.
@@ -238,10 +248,15 @@ async def _open_streams(
     `get_session_id` callback); we drop it because we don't expose
     HTTP-session-id resumption yet.
 
-    ``auth`` (ADR 0127) is forwarded to the HTTP transports only; stdio
-    has no HTTP client to carry an ``httpx.Auth``.
+    ``auth`` (ADR 0127) and ``httpx_client_factory`` (ADR 0165) are forwarded
+    to the HTTP transports only; stdio has no HTTP client to carry either.
+    The factory kwarg is OMITTED when ``None`` (not passed as ``None``) so the
+    SDK keeps its own default client instead of receiving a null factory.
     """
     transport: Transport = config.transport
+    http_kwargs: dict[str, Any] = {}
+    if httpx_client_factory is not None:
+        http_kwargs["httpx_client_factory"] = httpx_client_factory
 
     if transport == "stdio":
         params = StdioServerParameters(
@@ -259,6 +274,7 @@ async def _open_streams(
                 headers=dict(config.headers) or None,
                 sse_read_timeout=config.timeout_s * 10,  # longer than per-call
                 auth=auth,
+                **http_kwargs,
             )
         )
         return read_stream, write_stream
@@ -271,6 +287,7 @@ async def _open_streams(
                 timeout=config.timeout_s,
                 sse_read_timeout=config.timeout_s * 10,
                 auth=auth,
+                **http_kwargs,
             )
         )
         return read_stream, write_stream

@@ -39,11 +39,16 @@ import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
 
 import { CortexModelSection } from "./cortex-model-section";
+import { StringListControl } from "./string-list-control";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.platform_settings_registry.platform_registry_to_dict.
 // ---------------------------------------------------------------------------
-type SettingType = "bool" | "int" | "decimal" | "model_config" | "guardrails_config";
+// `string_list` (task_mk_02, ADR 0165 D6): una lista de cadenas validada
+// entrada a entrada en el backend; el registry manda `max_items` para no dejar
+// guardar una de más y descubrirlo en el 422.
+type SettingType =
+  "bool" | "int" | "decimal" | "string_list" | "model_config" | "guardrails_config";
 
 interface SettingDef {
   type: SettingType;
@@ -54,6 +59,7 @@ interface SettingDef {
   description_en: string;
   min_value: number | null;
   max_value: number | null;
+  max_items?: number | null;
   provider_kinds?: string[];
 }
 
@@ -276,6 +282,18 @@ function SettingControl({
           value={value}
           onSave={(parsed) => save.mutate(parsed)}
           pending={save.isPending}
+        />
+      ) : def.type === "string_list" ? (
+        <StringListControl
+          settingKey={settingKey}
+          value={value}
+          maxItems={def.max_items}
+          onSave={(items) => {
+            setValue(items);
+            save.mutate(items);
+          }}
+          pending={save.isPending}
+          saved={save.isSuccess}
         />
       ) : null}
 
