@@ -213,6 +213,8 @@ describe("DeploymentsSection", () => {
     await waitFor(() => expect(screen.getByTestId("deploy-warnings-proj-b")).toBeTruthy());
     expect(screen.getByTestId("deploy-warnings-proj-b").textContent).toContain("ningún agente");
     expect(screen.getByTestId("deploy-oauth-proj-b")).toBeTruthy();
+    // task_mk_11 (UI-02): qué recibió quién — el `created_refs` del despliegue.
+    expect(screen.getByTestId("deploy-created-refs-proj-b").textContent).toContain("jira");
     // `already_deployed` NO se cuenta como un despliegue nuevo.
     expect(screen.getByTestId("deploy-result-proj-b").getAttribute("data-outcome")).toBe("already");
   });

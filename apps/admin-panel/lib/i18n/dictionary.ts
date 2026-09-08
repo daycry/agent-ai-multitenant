@@ -2332,6 +2332,22 @@ export const dictionary = {
       es: "El servidor declara OAuth: la entrada nace sin conexión. Complétala con «Conectar» en la pestaña MCP del proyecto.",
       en: "The server declares OAuth: the entry starts unconnected. Finish it with «Connect» on the project's MCP tab.",
     },
+    // task_mk_11 (UI-02): qué recibió quién, y el tipo diferido explicado.
+    createdRefsTitle: {
+      es: "Qué se escribió en el proyecto:",
+      en: "What was written to the project:",
+    },
+    refMcpServers: { es: "Servidores MCP declarados", en: "MCP servers declared" },
+    refMcpToolRoles: { es: "Política rol→tool escrita para", en: "Role→tool policy written for" },
+    refMcpImport: { es: "Import de tools encolado", en: "Tool import queued" },
+    refAgentTools: { es: "Agentes que recibieron la tool", en: "Agents that received the tool" },
+    refAgentSkills: { es: "Agentes que recibieron la skill", en: "Agents that received the skill" },
+    deferredTypeNote: {
+      es: "Este listing es de un tipo diferido: ejecuta código y la plataforma aún no tiene el sandbox que lo materialice (ADR 0081), así que no hay ninguna fila de catálogo que asignar. La instalación está autorizada, sin capacidad.",
+      en: "This listing is of a deferred type: it executes code and the platform does not yet have the sandbox to materialise it (ADR 0081), so there is no catalog row to assign. The installation is authorised, with no capability.",
+    },
+    deferredTypeLink: { es: "Ver en «Instaladas»", en: "See under “Installed”" },
+    lastResultTitle: { es: "Resultado del último despliegue", en: "Last deployment result" },
 
     // --- pestañas del proyecto (activación local) ------------------------
     availableTitle: { es: "Disponibles en tu tenant", en: "Available in your tenant" },

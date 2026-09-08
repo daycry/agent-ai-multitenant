@@ -342,13 +342,22 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_11` — La puerta de despliegue enseña lo que pasó (UI-02)
 
-- [ ] **Título**: `available-capabilities-section.tsx:114-131` pinta `warnings` y
+- [x] **Título**: `available-capabilities-section.tsx:114-131` pinta `warnings` y
       `oauth_pending` con el mismo bloque que ya usa `deployments-section.tsx:340-379`; la fila
       del despliegue muestra `created_refs` (qué agentes recibieron qué tool/skill, qué proyecto
       recibió el MCP); el aviso de tipo diferido va traducido y enlaza a `task_mk_10`.
       **Test**: vitest de la sección con respuesta que trae `warnings` y con `created_refs`;
       e2e `marketplace-deploy` comprobando el resumen.
       **Coste**: 1 d.
+      _Cerrada el 2026-09-09_: el bloque es uno, `components/marketplace/deploy-result-notes.tsx`
+      (`DeployResultNotes` + `summariseCreatedRefs` puro), usado por las dos puertas. La pestaña MCP
+      del proyecto conserva el resultado del último despliegue a nivel de sección (el ítem desaparece
+      de «disponibles» al refrescar) con avisos, OAuth pendiente y «qué se escribió en el proyecto»
+      (servidores MCP declarados, política rol→tool, import encolado, agentes que recibieron la
+      tool/skill; una clave desconocida del backend se pinta cruda). La ficha de la instalación pinta
+      lo mismo por proyecto y, en cada fila de despliegue, el resumen de `created_refs`. El aviso de
+      tipo diferido se detecta por texto (el backend no lo tipa) y añade la nota traducida con enlace
+      a «Instaladas», donde `task_mk_10` pinta «Autorizada, sin capacidad».
 
 ### `task_mk_14` — Una instalación no nace imposible de habilitar (MK-17)
 
