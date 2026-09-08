@@ -408,7 +408,14 @@ async def list_installed(
     installs are never returned. Soft-deleted (revoked) rows are excluded
     unless ``include_revoked=true``.
     """
-    stmt = select(MarketplaceInstallation)
+    # `task_mk_10`: se carga el listing para decir POR DÓNDE llega la capacidad de
+    # cada instalación (`capability`), que es lo que permite a la pestaña
+    # «Instaladas» no pintar `enabled` un tipo diferido sin fila (MK-01). LEFT
+    # JOIN a propósito: una instalación cuyo listing la RLS no deje ver (compartido
+    # y retirado, por ejemplo) sigue listándose, sin capacidad conocida.
+    stmt = select(MarketplaceInstallation, MarketplaceListing).outerjoin(
+        MarketplaceListing, MarketplaceListing.id == MarketplaceInstallation.listing_id
+    )
     if not include_revoked:
         stmt = stmt.where(MarketplaceInstallation.deleted_at.is_(None))
     if status_ is not None:
@@ -419,4 +426,4 @@ async def list_installed(
     )
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
-    return [to_installation_response(inst) for inst in result.scalars().all()]
+    return [to_installation_response(inst, listing=listing) for inst, listing in result.all()]

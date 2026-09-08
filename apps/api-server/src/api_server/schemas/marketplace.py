@@ -42,6 +42,7 @@ from api_server.db.marketplace import (
     MarketplaceShare,
     MarketplaceTrustLevel,
 )
+from api_server.marketplace.capability import capability_of
 from api_server.marketplace.consent import (
     ConsentState,
     ConsentSummary,
@@ -162,12 +163,23 @@ class MarketplaceInstallationResponse(BaseModel):
     revoked_by: UUID | None
     created_at: datetime
     updated_at: datetime
+    # `task_mk_10` (ADR 0081 reabierto): por dónde llega la capacidad de esta
+    # instalación — `catalog_row` (fila al habilitar), `on_deploy` (nace al
+    # desplegar en un proyecto) o `deferred` (código arbitrario sin sandbox: está
+    # autorizada y no produce nada). `None` cuando el endpoint no cargó el listing.
+    capability: str | None = None
+    capability_reason: str | None = None
 
 
 def to_installation_response(
     installation: MarketplaceInstallation,
+    *,
+    listing: MarketplaceListing | None = None,
 ) -> MarketplaceInstallationResponse:
+    capability = capability_of(listing.kind, listing.manifest) if listing is not None else None
     return MarketplaceInstallationResponse(
+        capability=capability.kind if capability else None,
+        capability_reason=capability.reason if capability else None,
         id=installation.id,
         tenant_id=installation.tenant_id,
         listing_id=installation.listing_id,

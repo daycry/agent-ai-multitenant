@@ -424,3 +424,30 @@ describe("el destino tras instalar mira si hay algo que consentir", () => {
     expect(screen.queryByTestId("catalog-installed-listing-1")).toBeNull();
   });
 });
+
+// task_mk_10 (ADR 0081 reabierto): `enabled` de un tipo diferido NO es una
+// capacidad viva, y la pestaña «Instaladas» deja de venderla como «Habilitada».
+describe("la pestaña Instaladas y los tipos diferidos", () => {
+  it("una instalación habilitada sin capacidad se pinta como autorizada, no habilitada", async () => {
+    montar({
+      installations: [
+        { ...INSTALACION, id: "inst-def", capability: "deferred", capability_reason: "ADR 0081" },
+      ],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const badge = await screen.findByTestId("installed-status-inst-def");
+    expect(badge.textContent).toBe("Autorizada, sin capacidad");
+    expect(badge.getAttribute("title")).toBe("ADR 0081");
+    expect(screen.getByTestId("installed-deferred-inst-def").textContent).toContain("ADR 0081");
+  });
+
+  it("una instalación con fila de catálogo sigue siendo «Habilitada»", async () => {
+    montar({
+      installations: [{ ...INSTALACION, id: "inst-row", capability: "catalog_row" }],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const badge = await screen.findByTestId("installed-status-inst-row");
+    expect(badge.textContent).toBe("Habilitada");
+    expect(screen.queryByTestId("installed-deferred-inst-row")).toBeNull();
+  });
+});

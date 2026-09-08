@@ -117,6 +117,10 @@ interface MarketplaceInstallation {
   revoked_by: string | null;
   created_at: string;
   updated_at: string;
+  // task_mk_10 (ADR 0081 reabierto): por dónde llega la capacidad —
+  // `catalog_row` | `on_deploy` | `deferred`. Ausente en respuestas antiguas.
+  capability?: string | null;
+  capability_reason?: string | null;
 }
 
 interface MarketplaceShare {
@@ -494,8 +498,18 @@ function InstalledTab() {
         // Un estado que este mapa no conoce se muestra CRUDO a proposito: es el
         // valor del backend, y traducirlo a un texto inventado esconderia la
         // divergencia en vez de enseniarla.
-        const statusVariant = known?.variant ?? ("muted" as BadgeVariant);
-        const statusLabel = known ? t(known.labelKey) : install.status;
+        // task_mk_10 (ADR 0081 reabierto): `enabled` de un tipo diferido no es
+        // una capacidad viva — el backend lo dice en `capability` y aquí no se
+        // pinta como «Habilitada».
+        const deferred = install.status === "enabled" && install.capability === "deferred";
+        const statusVariant = deferred
+          ? ("warning" as BadgeVariant)
+          : (known?.variant ?? ("muted" as BadgeVariant));
+        const statusLabel = deferred
+          ? t("installStatusDeferred")
+          : known
+            ? t(known.labelKey)
+            : install.status;
         const isRevoked = install.status === "revoked";
         return (
           <Card key={install.id} data-testid={`installed-${install.id}`}>
@@ -504,10 +518,22 @@ function InstalledTab() {
                 <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                   <span className="truncate font-mono text-sm">{install.listing_id}</span>
                   <Badge variant="muted">{install.version}</Badge>
-                  <Badge variant={statusVariant} data-testid={`installed-status-${install.id}`}>
+                  <Badge
+                    variant={statusVariant}
+                    title={deferred ? (install.capability_reason ?? undefined) : undefined}
+                    data-testid={`installed-status-${install.id}`}
+                  >
                     {statusLabel}
                   </Badge>
                 </CardTitle>
+                {deferred ? (
+                  <p
+                    className="text-warning-soft-foreground mt-1 text-xs"
+                    data-testid={`installed-deferred-${install.id}`}
+                  >
+                    {t("installDeferredHelp")}
+                  </p>
+                ) : null}
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-1">
                 <Button

@@ -4829,6 +4829,14 @@ export const dictionary = {
     installStatusEnabled: { es: "Habilitada", en: "Enabled" },
     installStatusDisabled: { es: "Deshabilitada", en: "Disabled" },
     installStatusRevoked: { es: "Revocada", en: "Revoked" },
+    // task_mk_10 (ADR 0081 reabierto): una instalación habilitada de un tipo que
+    // ejecuta código y no tiene sandbox está AUTORIZADA pero no produce nada. No se
+    // vende como «Habilitada».
+    installStatusDeferred: { es: "Autorizada, sin capacidad", en: "Authorised, no capability" },
+    installDeferredHelp: {
+      es: "Este listing ejecuta código arbitrario y la plataforma aún no tiene el sandbox que lo materialice (ADR 0081, Fase B/C). Ningún agente puede usarlo todavía.",
+      en: "This listing executes arbitrary code and the platform does not yet have the sandbox to materialise it (ADR 0081, Phase B/C). No agent can use it yet.",
+    },
     permissions: { es: "Permisos", en: "Permissions" },
     revoke: { es: "Revocar", en: "Revoke" },
     uninstall: { es: "Desinstalar", en: "Uninstall" },
