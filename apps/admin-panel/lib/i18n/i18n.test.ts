@@ -333,6 +333,11 @@ describe("dictionary — invariantes", () => {
       "tenantPicker.slugLabel",
       "tenantPicker.portfolioHint",
       "board.plansCountOne",
+      // task_mk_02 (ADR 0165 D7.3) — el veredicto del sondeo de la allowlist.
+      // «error» es la misma palabra en los dos idiomas y coincide con el literal
+      // que devuelve la API (`permitido` / `bloqueado` / `error`); los otros dos
+      // veredictos sí se traducen.
+      "platformDefaults.verdictError",
     ]);
 
     const identical = new Set(
