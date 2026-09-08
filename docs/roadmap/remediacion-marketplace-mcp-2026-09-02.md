@@ -209,7 +209,7 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_02` — Un MCP remoto sale por el egress (MK-03, MK-13, MK-14, MK-15, UI-03)
 
-- [ ] **Título**: implementar lo que decida el ADR 0165. En cualquiera de sus variantes: `mcp.atlassian.com`
+- [x] **Título**: implementar lo que decida el ADR 0165. En cualquiera de sus variantes: `mcp.atlassian.com`
       (y los hosts que el ADR fije) pasan el proxy; el api-server valida el host al guardar un servidor
       con `url` externa y al probar la conexión, con un error accionable que diga **cómo se aplica** el
       cambio, en vez del `403 Filtered` crudo de `mcp-connection-test-section.tsx:135-141`; y las dos
@@ -220,6 +220,26 @@ UI (`apps/admin-panel`):
       test de conexión con host no permitido; unit del render del filtro y de la guarda de deriva entre
       las dos copias; vitest del mapeo del error en el panel.
       **Coste**: 2 d.
+      _Cerrada el 2026-09-08_, en cuatro tandas. Las tres primeras (2026-09-03): validador D1/D2 con la
+      regla de host interno **compartida** con el worker (`shared_domain.mcp_hosts`), renderizador y
+      centinelas del bloque generado en las dos copias del filtro (D7.1/D8), ajuste `string_list`
+      genérico con `egress.mcp_allowed_hosts`, fila de `audit_log` por cambio (D5),
+      `API_SERVER_EGRESS_PROXY_URL` en generador y compose (A1) y el runbook con las medidas de D10
+      (en un CONNECT casa el host pelado; ventana de aplicación ≈ 7 s). La cuarta cierra el camino de
+      red: `shared_mcp` acepta `httpx_client_factory` y **probar, importar y descubrir salen por el
+      egress-proxy** desde un único call site (`routers/mcp.py::_discover_or_raise`, para que
+      `task_mk_01` lo herede y no reabra la asimetría); el fallo se clasifica por el **tipo** de la
+      causa raíz (A2) — `EGRESS_BLOCKED` (422, con host y dónde pedirlo), `EGRESS_PROXY_UNAVAILABLE`
+      (502) y `AUTH_ERROR` del origen —; el guardado es fail-open con `mcp_server_warnings` en el 200 y
+      en la ficha, y fail-closed de forma (IP literal, metadata, `http://` externo, puerto ≠ 443/8443)
+      (D11); sondeo `POST /admin/egress/mcp-allowlist/probe` (D7.3); en el panel, control `string_list`
+      que dice «guardado — pendiente de aplicar» con el comando y **nunca** «permitido», botón
+      «Comprobar contra el proxy», mapeo de los dos códigos en «Probar conexión» y aviso en la tarjeta
+      del servidor. El catálogo y `04-reference/mcp-servers.md` dejan de mandar al tenant a «dominios
+      permitidos del proyecto», que sólo gobierna `http_request`. **Lo que esta casilla no afirma**: el
+      camino proxificado del api-server no se ha ejercitado contra el stack vivo (D10 midió tinyproxy
+      desde `curl`; la primera «Probar conexión» real por el proxy es del despliegue y la recoge
+      `human_mk_02`), y la guía `configurar-mcp-server.md` sigue siendo de `task_mk_22`.
 
 ### `task_mk_01` — Las tools de un MCP llegan al catálogo sin un paso manual (MK-02, MK-09…MK-12, UI-03)
 

@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-02** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace (PR #183) espera aprobación.
+> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): ola 0 con `task_mk_0a`, `0b`, `00` y `02` cerradas, falta `task_mk_01`.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -26,10 +26,16 @@ Las 36 casillas están `[x]` con su test en verde.
   (`task_cv_40…45`), más los criterios de cierre: changelog
   [`docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md)
   y addenda en los ADR 0060, 0071, 0072, 0102, 0129, 0148 y 0163.
-- **Plan nuevo, pendiente de aprobación (PR #183)**:
-  [`remediacion-marketplace-mcp-2026-09-02.md`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md),
-  de la auditoría del 2026-09-02 al marketplace, skills/tools y MCP por proyecto.
-  No se empieza sin que el operador lo apruebe (`status: pending_approval`).
+- **Plan del marketplace, `in_progress` desde el 2026-09-03 (PR #183, rama
+  `plan/marketplace-mcp-2026-09-02`)**:
+  [`remediacion-marketplace-mcp-2026-09-02.md`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md).
+  Ola 0: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`), instalar desde el
+  catálogo (`task_mk_00`) y el egress de los MCP remotos (`task_mk_02`) cerrados;
+  **la siguiente es `task_mk_01`** (tools MCP al catálogo sin paso manual, ADR
+  0166), que debe descubrir a través de `routers/mcp.py::_discover_or_raise`,
+  el único call site proxificado. Al desplegar: el api-server necesita
+  `API_SERVER_EGRESS_PROXY_URL` (el compose manual y el generador ya lo emiten)
+  y la primera «Probar conexión» contra un MCP remoto real es `human_mk_02`.
 - **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
   Hasta que el operador los valide, el plan NO pasa a `completed`.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
