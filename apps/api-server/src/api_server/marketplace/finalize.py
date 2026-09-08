@@ -49,6 +49,7 @@ from api_server.db.marketplace import (
     MarketplaceListing,
 )
 from api_server.marketplace.consent import consent_required_for
+from api_server.marketplace.consent import needs_consent as consent_needed
 
 _log = structlog.get_logger("api_server.marketplace.finalize")
 
@@ -77,10 +78,19 @@ async def finalize_installation(
     Devuelve el detalle del audit row escrito, que es lo que los tests afirman y
     lo que el llamante puede loguear.
     """
-    needs_consent = consent_required_for(listing.trust_level)
+    # `task_mk_14` (MK-17): sin permisos que consentir no hay consentimiento que
+    # esperar — ver `consent.needs_consent`.
+    # Se decide por los permisos que DECLARA el listing, no por los que el llamante
+    # pidió conceder: si el listing declara y el llamante no pide nada, hay que
+    # consentir igual. Y cuando el listing no declara ninguno, tampoco se concede
+    # ninguno — conceder lo que nadie declaró sería el agujero por la otra puerta.
+    needs_consent = consent_needed(listing.trust_level, listing.requested_permissions)
     if needs_consent:
         final_status = InstallationStatus.DISABLED.value
         granted: list[Any] = []
+    elif consent_required_for(listing.trust_level):
+        final_status = InstallationStatus.ENABLED.value
+        granted = []
     else:
         final_status = InstallationStatus.ENABLED.value
         granted = list(requested_permissions or [])

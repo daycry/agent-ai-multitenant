@@ -292,8 +292,13 @@ async def test_clean_install_records_report_and_keeps_consent_gate(
             headers=headers,
         )
         assert resp.status_code == 201, resp.text
-        # El gate de consentimiento sigue intacto: community nace DISABLED.
-        assert resp.json()["status"] == "disabled"
+        # `task_mk_14` (MK-17): este listing `community` NO declara permisos
+        # (`requested_permissions = '[]'`), así que no hay nada que consentir y
+        # nace ENABLED. Antes nacía DISABLED sin poder habilitarse jamás — la
+        # pantalla de consentimiento exige al menos una decisión. La política de
+        # confianza sigue intacta para un community CON permisos
+        # (`test_consent.py`), que sí nace disabled.
+        assert resp.json()["status"] == "enabled"
 
     audits = await _fetch_audit_rows(migrations_pg_dsn, seeded["tenant"])
     assert len(audits) == 1

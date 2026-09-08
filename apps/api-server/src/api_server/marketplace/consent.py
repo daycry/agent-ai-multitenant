@@ -68,6 +68,24 @@ def consent_required_for(trust_level: MarketplaceTrustLevel | str) -> bool:
     return trust_policy(trust_level).per_permission_consent_required
 
 
+def needs_consent(trust_level: MarketplaceTrustLevel | str, requested_permissions: Any) -> bool:
+    """¿Nace la instalación `disabled`, a la espera de un consentimiento por permiso?
+
+    `task_mk_14` (MK-17, ADR 0081/0142): la respuesta mira el nivel de confianza
+    **y** si hay algo que consentir. Antes miraba sólo el primero, y un listing
+    `community` sin permisos declarados —toda publicación privada nace
+    `community`, y un `SKILL.md` sin bloque `permissions` pide cero— nacía
+    `disabled` **sin poder habilitarse jamás**: la pantalla de consentimiento exige
+    al menos una decisión (`ConsentDecisionRequest.decisions`, `min_length=1`) y el
+    despliegue exige `enabled`. El propio backend ya sabía habilitarlo —su regla es
+    `enable = (not consent_required) or all_granted`, y con cero permisos
+    `all_granted` es cierto por vacuidad—, pero no había forma de pedírselo. Se
+    corrige el origen (opción a del plan) y no el síntoma: la política de confianza
+    queda intacta para cualquier listing que sí pida permisos.
+    """
+    return consent_required_for(trust_level) and bool(list(requested_permissions or []))
+
+
 def permission_type(descriptor: Any) -> str:
     """Extract the canonical ``type`` of a permission descriptor.
 
@@ -255,6 +273,7 @@ __all__ = [
     "PermissionView",
     "apply_decisions",
     "consent_required_for",
+    "needs_consent",
     "permission_type",
     "requested_types",
     "summarize",

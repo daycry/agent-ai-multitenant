@@ -361,7 +361,7 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_14` — Una instalación no nace imposible de habilitar (MK-17)
 
-- [ ] **Título**: decidir y cerrar el callejón de MK-17. Dos caminos, y el ADR/commit tiene que
+- [x] **Título**: decidir y cerrar el callejón de MK-17. Dos caminos, y el ADR/commit tiene que
       argumentar cuál: (a) que `needs_consent` sea `consent_required_for(trust) and
 bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       `marketplace/install.py:369`), con lo que un listing sin permisos nace `enabled` —coherente
@@ -375,6 +375,16 @@ bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       **Test**: integración (instalar un listing `community` sin permisos → la instalación se puede
       desplegar sin pasos imposibles); el test citado se actualiza con su motivo escrito.
       **Coste**: 0,5 d.
+      _Cerrada el 2026-09-09 con la opción (a)_: `marketplace/consent.py::needs_consent(trust,
+    requested_permissions)` en los dos llamantes. Dos cosas que el mapeo añadió: (1) `finalize`
+      (camino asíncrono) decidía por la lista **del llamante**, no por la del listing, así que con la
+      regla nueva un listing que declara permisos se habría habilitado sin consentir si el llamante no
+      pedía ninguno — ahora los dos deciden por `listing.requested_permissions`; (2) cuando el listing
+      no declara permisos, se habilita **sin conceder nada** (conceder lo que nadie declaró sería el
+      agujero por la otra puerta). Tests actualizados con motivo: `test_marketplace_install_static_analysis`
+      (community con `[]` → `enabled`) y `test_marketplace_async_gates` (`enabled` con cero concedidos
+      aunque el llamante pida `net:https`); `test_consent`, `test_install_flow`, `test_marketplace_materialization`
+      y `test_prod12_network_policy_audit` siguen intactos porque sus community declaran permisos.
 
 ### `task_mk_12` — Un test que llama la tool de verdad (MK-08, UI-07)
 
