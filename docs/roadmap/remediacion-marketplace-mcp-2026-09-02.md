@@ -243,18 +243,38 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_01` — Las tools de un MCP llegan al catálogo sin un paso manual (MK-02, MK-09…MK-12, UI-03)
 
-- [ ] **Título**: implementar lo que decida el ADR 0166, extrayendo primero la lógica de
+- [x] **Título**: implementar lo que decida el ADR 0166, extrayendo primero la lógica de
       `import_mcp_tools` (`routers/mcp.py:308-457`) a una función reutilizable (hoy vive en línea) para no
       duplicarla entre el guardado, el despliegue del marketplace (`deploy.py:418-424`, donde hoy sólo
       avisa «vuelve a desplegar») y el endpoint manual. En la UI, la tarjeta del servidor
       (`mcp-server-card.tsx`) muestra el recuento de tools importadas o «tools sin importar», con probar e
       importar como acciones directas fuera del diálogo de edición, y el estado vacío de
       `mcp-tool-roles-section.tsx:197` enlaza a la causa.
-      **Test**: integración (guardar/desplegar → filas `Tool` namespaceadas sin pulsar nada, o el
-      contrato que fije el ADR; segundo intento no duplica; discovery caído → sin filas y con aviso; un
-      servidor retirado deja de anunciar sus tools); el rojo legítimo hoy es el sembrado manual de
+      **Test**: integración (desplegar → filas `Tool` namespaceadas sin pulsar nada; guardar → la
+      tarjeta dice «sin importar» y el botón importa en un viaje — el «guardar → filas» cayó por el ADR
+      0166 D1; segundo intento no duplica; discovery caído → sin filas y con aviso; un servidor retirado
+      deja de anunciar sus tools); el rojo legítimo hoy es el sembrado manual de
       `tests/integration/test_marketplace_v2_chain.py:241-253`; vitest de la tarjeta con sus tres estados.
       **Coste**: 2 d.
+      _Cerrada el 2026-09-08_. La lógica vive en `api_server/mcp/import_tools.py::import_server_tools`
+      y tiene los tres llamantes que el ADR 0166 D2 preveía: el endpoint manual (`tool_names` y
+      `security_level` ahora opcionales; sin lista = todas las anunciadas con reconciliación R3 y tope
+      L1 con abstención `TOO_MANY_TOOLS`; sin nivel = R2, no se pisa la elección del operador), la
+      task `workers.mcp_import_server_tools` de la lane `marketplace` (registrada en `celery_app.py`,
+      reintento acotado en `IntegrityError` — R5) que encola `_materialize_mcp_server` tras el commit en
+      vez de rendirse con «vuelve a desplegar», y el final de «Conectar» de OAuth (D5, con el proveedor
+      montado sobre Vault y `OAUTH_NOT_CONNECTED` tipado si no hay token). `discover_tools` gana `auth`;
+      el descubrimiento sale por el egress-proxy desde el único call site de `task_mk_02`. R4 en
+      `PUT /projects`: un servidor que sale se lleva sus filas y sus claves de `mcp_tool_roles` salvo
+      que otro proyecto vivo del tenant lo declare; L2/L3 omiten con aviso, nunca truncan. La fila
+      `Tool` no namespaceada de `materialize.py` se retira (D6, enmienda del ADR 0100) y las filas del
+      import de un despliegue llevan la procedencia para que `dematerialize_installation` las
+      encuentre. El preámbulo del run reporta el servidor declarado sin tools importadas (D4). Panel:
+      la tarjeta dice «N tools importadas» / «sin importar» con «Probar» e «Importar» directos, y el
+      estado vacío de roles enlaza al botón. **Lo que esta casilla no afirma**: la task no se ha
+      ejercitado contra un broker real (sus dos disparadores están cubiertos por tests de cableado y de
+      integración del endpoint; la lane `marketplace` la levanta el wizard, no el stack de dev), y el
+      aviso de la puerta de despliegue en la UI (UI-02) es de `task_mk_11`.
 
 ### `task_mk_00` — Instalar desde el catálogo (UI-01, MK-16)
 

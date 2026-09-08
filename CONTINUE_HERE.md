@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): ola 0 con `task_mk_0a`, `0b`, `00` y `02` cerradas, falta `task_mk_01`.
+> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): **ola 0 completa** (`task_mk_0a`, `0b`, `00`, `02`, `01`); la siguiente es la ola 1 (`task_mk_10`).
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -29,13 +29,16 @@ Las 36 casillas están `[x]` con su test en verde.
 - **Plan del marketplace, `in_progress` desde el 2026-09-03 (PR #183, rama
   `plan/marketplace-mcp-2026-09-02`)**:
   [`remediacion-marketplace-mcp-2026-09-02.md`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md).
-  Ola 0: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`), instalar desde el
-  catálogo (`task_mk_00`) y el egress de los MCP remotos (`task_mk_02`) cerrados;
-  **la siguiente es `task_mk_01`** (tools MCP al catálogo sin paso manual, ADR
-  0166), que debe descubrir a través de `routers/mcp.py::_discover_or_raise`,
-  el único call site proxificado. Al desplegar: el api-server necesita
-  `API_SERVER_EGRESS_PROXY_URL` (el compose manual y el generador ya lo emiten)
-  y la primera «Probar conexión» contra un MCP remoto real es `human_mk_02`.
+  **Ola 0 completa**: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`), instalar
+  desde el catálogo (`task_mk_00`), el egress de los MCP remotos (`task_mk_02`) y
+  las tools MCP al catálogo sin paso manual (`task_mk_01`). **La siguiente es la
+  ola 1**, empezando por `task_mk_10` (los tipos diferidos dejan de venderse:
+  reabrir el ADR 0081 B/C). Al desplegar esta rama: el api-server necesita
+  `API_SERVER_EGRESS_PROXY_URL` (el compose manual y el generador ya lo emiten);
+  el worker tiene que arrancar con la lane `marketplace` para que el import
+  automático de un despliegue ocurra (sin ella la tarjeta dice «sin importar» y
+  el botón manual basta, ADR 0166 D4); y la primera «Probar conexión» contra un
+  MCP remoto real es `human_mk_02`.
 - **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
   Hasta que el operador los valide, el plan NO pasa a `completed`.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
