@@ -87,3 +87,18 @@ sus conexiones por su cuenta. Ya pasó dos veces en agosto de 2026:
 Regla práctica: **al endurecer una credencial, busca quién más la construye a
 mano** — `grep -rn "redis://\|postgresql://" tests/` — antes de dar el
 endurecimiento por terminado.
+
+## La cuarta copia: los scripts de dev (2026-09-08)
+
+La regla de arriba se aplicó a `tests/`, no a `scripts/dev/`. `up.ps1`, `up.sh`,
+`run-e2e.ps1` y `run-e2e.sh` seguían exportando
+`API_SERVER_REDIS_URL=redis://localhost:6379/0` sin credencial. El síntoma es el
+más engañoso de los cuatro: el stack arranca, `/healthz` devuelve 200 y el
+panel carga; el **primer login** (y el primer `POST /auth/register`) muere con un
+500 cuyo traceback termina en `redis.exceptions.AuthenticationError`, porque el
+rate limiter del login es lo primero que toca Redis. En la máquina que llevaba el
+stack desplegado nunca se notó: el `.env` local tenía la contraseña vacía de
+antes de prod-10. Se descubrió en una máquina nueva, con `docker/.env` copiado
+del `.env.example` actual. Los cuatro scripts llevan ahora
+`redis://:changeme-redis-dev-only@localhost:6379/0`, que es lo que el
+`.env.example` fija.

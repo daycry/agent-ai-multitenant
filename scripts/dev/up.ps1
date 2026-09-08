@@ -126,7 +126,13 @@ try {
 # ---------------------------------------------------------------------------
 $env:API_SERVER_DATABASE_URL       = "postgresql+asyncpg://app_user:changeme-app-dev-only@localhost:15432/agentic_platform"
 $env:API_SERVER_ADMIN_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
-$env:API_SERVER_REDIS_URL          = "redis://localhost:6379/0"
+# Con contraseña: el compose arranca Redis con `--requirepass ${REDIS_PASSWORD}`
+# (prod-10) y el `.env.example` la fija en `changeme-redis-dev-only`. Sin ella el
+# api-server arranca, `/healthz` da 200 y el primer login muere con
+# `AuthenticationError: Authentication required` (gotcha
+# redis-con-contrasena-rompe-la-integracion). Descubierto el 2026-09-08 en una
+# máquina nueva: el script llevaba la URL sin credencial desde antes de prod-10.
+$env:API_SERVER_REDIS_URL          = "redis://:changeme-redis-dev-only@localhost:6379/0"
 $env:API_SERVER_JWT_SECRET         = "dev-only-jwt-secret-change-me"
 # Wire the dev Vault (compose service, healthy on :8200) so secret-backed
 # features work locally: LLM provider credentials (Plan 11.2), MCP server
