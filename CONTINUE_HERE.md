@@ -38,7 +38,18 @@ Las 36 casillas están `[x]` con su test en verde.
   el worker tiene que arrancar con la lane `marketplace` para que el import
   automático de un despliegue ocurra (sin ella la tarjeta dice «sin importar» y
   el botón manual basta, ADR 0166 D4); y la primera «Probar conexión» contra un
-  MCP remoto real es `human_mk_02`.
+  MCP remoto **con OAuth** sigue siendo `human_mk_02`.
+- **Verificado en vivo el 2026-09-08** en esta máquina (nueva, sin Docker de la
+  plataforma) con el **stack de dev** —`scripts/dev/up.ps1`: infra en Docker,
+  api-server y panel en el host— y el MCP público `mcp.context7.com`: guardado
+  con aviso D11 → `422 EGRESS_BLOCKED` real del tinyproxy → ajuste → render +
+  rebuild en 5 s → sondeo `permitido` → «Probar conexión» 200 → import de 2
+  tools → idempotente → retirada R4. Dos trampas de esa sesión: `up.ps1` se
+  murió por **memoria** (16 GB no bastan para los trece servicios más `next dev`;
+  bastó parar tts/stt/docling/ollama/clamav/searxng) y los cuatro scripts de dev
+  llevaban la URL de Redis **sin contraseña** (arreglado; gotcha
+  `redis-con-contrasena-rompe-la-integracion.md`). El stack sigue levantado:
+  `scripts/dev/down.ps1` lo para.
 - **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
   Hasta que el operador los valide, el plan NO pasa a `completed`.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,

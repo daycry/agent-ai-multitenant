@@ -236,10 +236,14 @@ UI (`apps/admin-panel`):
       que dice «guardado — pendiente de aplicar» con el comando y **nunca** «permitido», botón
       «Comprobar contra el proxy», mapeo de los dos códigos en «Probar conexión» y aviso en la tarjeta
       del servidor. El catálogo y `04-reference/mcp-servers.md` dejan de mandar al tenant a «dominios
-      permitidos del proyecto», que sólo gobierna `http_request`. **Lo que esta casilla no afirma**: el
-      camino proxificado del api-server no se ha ejercitado contra el stack vivo (D10 midió tinyproxy
-      desde `curl`; la primera «Probar conexión» real por el proxy es del despliegue y la recoge
-      `human_mk_02`), y la guía `configurar-mcp-server.md` sigue siendo de `task_mk_22`.
+      permitidos del proyecto», que sólo gobierna `http_request`. **Ejercitado contra el stack vivo el
+      2026-09-08** (stack de dev en una máquina nueva, MCP público `mcp.context7.com`): guardar el
+      servidor → 200 con el aviso D11; «Probar conexión» → `422 EGRESS_BLOCKED` sobre un
+      `403 Filtered` real del tinyproxy; sondeo → `bloqueado`; `PUT` del ajuste (una IP literal → 422);
+      `render_mcp_allowlist.py --host` + `build` + `up -d --force-recreate` en **5 s**; sondeo →
+      `permitido`; «Probar conexión» → 200 con las 2 tools del servidor; la ficha sin aviso. Lo que
+      sigue siendo humano es `human_mk_02` (Atlassian con OAuth). La guía `configurar-mcp-server.md`
+      sigue siendo de `task_mk_22`.
 
 ### `task_mk_01` — Las tools de un MCP llegan al catálogo sin un paso manual (MK-02, MK-09…MK-12, UI-03)
 
@@ -271,10 +275,13 @@ UI (`apps/admin-panel`):
       import de un despliegue llevan la procedencia para que `dematerialize_installation` las
       encuentre. El preámbulo del run reporta el servidor declarado sin tools importadas (D4). Panel:
       la tarjeta dice «N tools importadas» / «sin importar» con «Probar» e «Importar» directos, y el
-      estado vacío de roles enlaza al botón. **Lo que esta casilla no afirma**: la task no se ha
-      ejercitado contra un broker real (sus dos disparadores están cubiertos por tests de cableado y de
-      integración del endpoint; la lane `marketplace` la levanta el wizard, no el stack de dev), y el
-      aviso de la puerta de despliegue en la UI (UI-02) es de `task_mk_11`.
+      estado vacío de roles enlaza al botón. **Ejercitado contra el stack vivo el 2026-09-08** (dev,
+      `mcp.context7.com` por el proxy): `import-tools {}` → 2 filas `context7.*`; segundo import
+      idempotente sin retiradas ni omisiones; el catálogo del tenant tiene exactamente esas filas; al
+      quitar el servidor del proyecto (R4) desaparecen. **Lo que esta casilla no afirma**: la task de la
+      lane no se ha ejercitado contra un broker real (sus dos disparadores están cubiertos por tests de
+      cableado y de integración del endpoint; la lane `marketplace` la levanta el wizard, no el stack de
+      dev), y el aviso de la puerta de despliegue en la UI (UI-02) es de `task_mk_11`.
 
 ### `task_mk_00` — Instalar desde el catálogo (UI-01, MK-16)
 
