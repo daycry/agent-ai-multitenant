@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): **ola 0 completa** (`task_mk_0a`, `0b`, `00`, `02`, `01`); la siguiente es la ola 1 (`task_mk_10`).
+> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): **ola 0 completa** (`task_mk_0a`, `0b`, `00`, `02`, `01`) y `task_mk_10` de la ola 1 cerrada con la opción (b); **decisión pendiente del operador**: la opción (a) del ADR 0081 reabierto (materializar código arbitrario con el gate de sandbox). Siguiente: `task_mk_11`.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un

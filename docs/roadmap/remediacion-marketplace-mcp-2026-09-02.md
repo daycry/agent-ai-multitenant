@@ -316,7 +316,7 @@ UI (`apps/admin-panel`):
 
 ### `task_mk_10` — Los tipos diferidos dejan de venderse (MK-01)
 
-- [ ] **Título**: reabrir el ADR 0081 B/C con dos opciones y decidir: (a) materializar
+- [x] **Título**: reabrir el ADR 0081 B/C con dos opciones y decidir: (a) materializar
       `python_function` y `docker_command` con el gate de revisión ya existente
       (`workers/marketplace_gates.py`, `routers/marketplace/admin.py`), puesto que el runtime ya
       los ejecuta; (b) rechazar esos manifiestos en la publicación (`private.py:92`) hasta que
@@ -325,6 +325,20 @@ UI (`apps/admin-panel`):
       **Test**: integración `test_marketplace_materialization.py` (publicar `python_function`
       → 422 con motivo, o fila si se elige (a)); vitest del badge.
       **Coste**: 1,5 d.
+      _Cerrada el 2026-09-08 con la opción (b)_; la (a) queda **propuesta al operador** en la
+      §«Reapertura de la Fase B/C» del [ADR 0081](../05-architecture-decisions/0081-marketplace-install-gates-diferido.md),
+      con lo que hay que medir antes de firmarla (que ningún camino llegue a `enabled` sin
+      sandbox: `async_gates` es opt-in). Lo que el mapeo añadió: el formato privado de tools no
+      lleva `implementation_type` sino `implementation.runtime`, así que una tool privada ni se
+      difería ni se materializaba — moría al habilitar con `MaterializeError`. Entregado:
+      `marketplace/capability.py::capability_of` (`catalog_row` / `on_deploy` / `deferred`, con
+      Playwright y los `mcp_server` como `on_deploy`); `GET /marketplace/installations` devuelve
+      `capability` y `capability_reason` (LEFT JOIN al listing); «Instaladas» pinta «Autorizada,
+      sin capacidad» en vez de «Habilitada»; `POST /marketplace/private/listings` rechaza con 422 y
+      el ADR un `kind: tool` con `implementation.runtime` (un `mcp_server` privado sigue pasando).
+      Los tres tests de integración que usaban una tool privada como fixture genérico pasan a
+      `mcp_server`; el rechazo tiene el suyo (`test_publish_tool_with_code_runtime_is_rejected…`).
+      `materialize_installation` no cambia.
 
 ### `task_mk_11` — La puerta de despliegue enseña lo que pasó (UI-02)
 
