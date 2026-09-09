@@ -1,298 +1,139 @@
 "use client";
 
+/**
+ * El shell de `/admin/*`: cabecera, columna principal y **la barra lateral que
+ * toque**.
+ *
+ * Hasta `task_ui_01` este fichero tenía 522 líneas y lo hacía todo: los tipos
+ * del NAV, el gating por rol, los seis grupos del menú, el render del grupo
+ * colapsable y el layout. Era el fichero más acoplado del panel, y el plan
+ * `ui-reestructuracion-2026-09-09` empieza partiéndolo porque todo lo demás
+ * pasa por aquí.
+ *
+ * Dónde vive ahora cada cosa:
+ *
+ * | Antes, aquí                        | Ahora                        |
+ * | ---------------------------------- | ---------------------------- |
+ * | tipos + gating por rol             | `nav-model.ts`               |
+ * | las tres áreas y su ruta           | `nav-model.ts`               |
+ * | los grupos de Trabajo              | `sidebar-work.tsx`           |
+ * | los grupos de Plataforma y Córtex  | `sidebar-system.tsx`         |
+ * | (nuevo) las pestañas del proyecto  | `sidebar-project.tsx`        |
+ * | marca + `<nav>` de la barra        | `sidebar-frame.tsx`          |
+ * | grupo colapsable + enlace          | `nav-group-block.tsx`        |
+ * | selector de área                   | `area-switcher.tsx`          |
+ *
+ * **Re-exporta el modelo** (`NAV_GROUPS`, los predicados y los tipos) porque
+ * cuatro ficheros de test importan de aquí y su ruta de import no es lo que este
+ * cambio venía a mover. `NAV_GROUPS` sigue siendo la lista COMPLETA —Trabajo
+ * seguido de Sistema—, que es lo que esos tests afirman.
+ *
+ * ## El área activa: la ruta manda, el selector recuerda
+ *
+ * El área sale de `areaForPath(pathname)`; cuando la ruta no exige ninguna
+ * (`/admin/docs`) se queda la última elegida. Así se cumple la regla del plan
+ * —«un enlace a una ruta de Sistema desde Trabajo abre el área Sistema»— sin que
+ * las rutas compartidas te saquen del sitio donde estabas. Pulsar en el selector
+ * navega al inicio del área, porque cambiar de barra sin cambiar de pantalla
+ * deja al usuario mirando una página que su barra nueva no contiene.
+ */
+
 import { useEffect, useState, type ReactNode } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import {
-  Activity,
-  Building2,
-  Trophy,
-  BarChart3,
-  Bell,
-  BellRing,
-  BookOpen,
-  Bot,
-  Brain,
-  Briefcase,
-  ChevronDown,
-  ClipboardCheck,
-  Coins,
-  Cpu,
-  DatabaseBackup,
-  DoorOpen,
-  FileText,
-  FolderKanban,
-  Gauge,
-  HelpCircle,
-  Inbox,
-  KeyRound,
-  LayoutDashboard,
-  LayoutGrid,
-  Library,
-  ListChecks,
-  Server,
-  Settings,
-  ShieldAlert,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
-  Store,
-  Ticket,
-  UserRound,
-  Users,
-  Wrench,
-  X,
-} from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { AdminHeader } from "@/components/layout/admin-header";
 import { GlobalProgress } from "@/components/layout/global-progress";
-import { useT, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
 
-/** Las claves válidas del namespace `nav`: un typo no compila. */
-export type NavKey = MessageKey<"nav">;
+import {
+  areaForPath,
+  projectIdFromPath,
+  visibleAreas,
+  type Area,
+  type NavScope,
+} from "./nav-model";
+import { SidebarProject } from "./sidebar-project";
+import { SidebarSystem, SYSTEM_GROUPS } from "./sidebar-system";
+import { SidebarWork, WORK_GROUPS } from "./sidebar-work";
 
-export interface NavItem {
-  href: string;
-  /** Clave del namespace `nav` del diccionario (NO el texto). */
-  labelKey: NavKey;
-  Icon: typeof LayoutDashboard;
-  /** Si `adminOnly`, sólo se muestra a tenant_admin / system_admin. */
-  adminOnly?: boolean;
-  /** Si `systemAdminOnly`, sólo se muestra al System Admin global. */
-  systemAdminOnly?: boolean;
-  /** Si `systemOwnerOnly`, sólo se muestra al System Owner (córtex F1, ADR 0074). */
-  systemOwnerOnly?: boolean;
-}
-
-export interface NavGroup {
-  /** Identificador estable: clave de localStorage + `data-testid`. */
-  id: string;
-  /** Clave del namespace `nav` del diccionario (NO el texto). */
-  labelKey: NavKey;
-  Icon: typeof LayoutDashboard;
-  items: NavItem[];
-  /** Ámbito del grupo entero (RBAC + ADR 0028). */
-  adminOnly?: boolean;
-  systemAdminOnly?: boolean;
-  /** Ámbito de grupo reservado al System Owner (córtex F1). */
-  systemOwnerOnly?: boolean;
-}
-
-/** Predicados de rol que deciden la visibilidad de un ítem/grupo del NAV. */
-export interface NavScope {
-  isTenantAdmin: boolean;
-  isSystemAdmin: boolean;
-  isSystemOwner: boolean;
-}
+export {
+  navGroupVisible,
+  navItemVisible,
+  visibleNavGroups,
+  areaForPath,
+  projectIdFromPath,
+  projectNavItems,
+  visibleAreas,
+} from "./nav-model";
+export type { Area, NavGroup, NavItem, NavKey, NavScope } from "./nav-model";
+export { WORK_GROUPS } from "./sidebar-work";
+export { SYSTEM_GROUPS } from "./sidebar-system";
 
 /**
- * ¿Visible este ítem para el rol actual? Lógica pura, factorizada fuera del
- * componente para poder testearla sin renderizar React (vitest env `node`).
- * El gating más restrictivo manda; el backend sigue siendo la barrera real.
- */
-export function navItemVisible(item: NavItem, scope: NavScope): boolean {
-  if (item.systemOwnerOnly) return scope.isSystemOwner;
-  if (item.systemAdminOnly) return scope.isSystemAdmin;
-  if (item.adminOnly) return scope.isTenantAdmin;
-  return true;
-}
-
-/** ¿Visible este grupo (por su propio ámbito) para el rol actual? */
-export function navGroupVisible(group: NavGroup, scope: NavScope): boolean {
-  if (group.systemOwnerOnly) return scope.isSystemOwner;
-  if (group.systemAdminOnly) return scope.isSystemAdmin;
-  if (group.adminOnly) return scope.isTenantAdmin;
-  return true;
-}
-
-/**
- * Grupos visibles según el rol, con sus ítems ya filtrados por gating de ítem
- * y descartando los grupos que se quedan sin ítems. Pura → testeable.
- */
-export function visibleNavGroups(groups: NavGroup[], scope: NavScope): NavGroup[] {
-  return groups
-    .filter((group) => navGroupVisible(group, scope))
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => navItemVisible(item, scope)),
-    }))
-    .filter((group) => group.items.length > 0);
-}
-
-/**
- * Navegación en 5 grupos colapsables (Plan admin-menu-reorg task_menu_01).
+ * El NAV completo, en el orden en que estaba antes del troceo: los cuatro
+ * grupos de Trabajo y después los de Sistema.
  *
- * El orden y el ámbito son fijos (ver docs/03-guides/ui-conventions.md →
- * "Navegación del panel"). El ámbito de grupo (`adminOnly`/`systemAdminOnly`)
- * decide qué grupos ve cada rol; el gating por ítem se conserva además del de
- * grupo. La barrera real sigue siendo el backend — esto es UX.
- *
- * Las rutas (`href`) y los `data-testid` derivados (`nav-${último-segmento}`)
- * NO cambian: los e2e dependen de ellos.
+ * Se conserva porque es la lista sobre la que afirman `admin-shell-rbac`,
+ * `-cortex` y `-runs`: «ningún ítem admin-only se le escapa a un tenant_user»
+ * es una propiedad del NAV entero, no de una barra.
  */
-export const NAV_GROUPS: NavGroup[] = [
-  {
-    id: "trabajo",
-    labelKey: "groupTrabajo",
-    Icon: Briefcase,
-    items: [
-      { href: "/admin/dashboard", labelKey: "dashboard", Icon: LayoutDashboard },
-      { href: "/admin/inbox", labelKey: "inbox", Icon: ListChecks },
-      // ADR 0123: todo lo que espera decisión humana, por antigüedad.
-      { href: "/admin/human-queue", labelKey: "humanQueue", Icon: DoorOpen },
-      // MFA (tanda 2026-07-19): ajuste PERSONAL (cualquier usuario) — la
-      // verificación en dos pasos de la propia cuenta, no del tenant.
-      { href: "/admin/settings/security", labelKey: "security", Icon: ShieldCheck },
-      { href: "/admin/board", labelKey: "board", Icon: LayoutGrid },
-      // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
-      { href: "/admin/office", labelKey: "office", Icon: Building2 },
-      { href: "/admin/runs", labelKey: "runs", Icon: Activity },
-      // ADR 0121: ranking modelo×agente con la carga real del tenant.
-      { href: "/admin/leaderboard", labelKey: "leaderboard", Icon: Trophy },
-      { href: "/admin/approvals", labelKey: "approvals", Icon: BellRing },
-      { href: "/admin/notifications/inbox", labelKey: "notificationsInbox", Icon: Inbox },
-      { href: "/admin/assistant", labelKey: "assistant", Icon: Bot, adminOnly: true },
-    ],
-  },
-  {
-    id: "recursos",
-    labelKey: "groupRecursos",
-    Icon: Library,
-    adminOnly: true,
-    items: [
-      { href: "/admin/agents", labelKey: "agents", Icon: Bot },
-      { href: "/admin/tools", labelKey: "tools", Icon: Wrench },
-      { href: "/admin/human-agents", labelKey: "humanAgents", Icon: UserRound, adminOnly: true },
-      { href: "/admin/teams", labelKey: "teams", Icon: Users },
-      { href: "/admin/projects", labelKey: "projects", Icon: FolderKanban },
-      { href: "/admin/knowledge-bases", labelKey: "knowledgeBases", Icon: Library },
-      { href: "/admin/memories", labelKey: "memories", Icon: Brain },
-      { href: "/admin/documents", labelKey: "documents", Icon: FileText },
-    ],
-  },
-  {
-    id: "config-tenant",
-    labelKey: "groupConfigTenant",
-    Icon: SlidersHorizontal,
-    adminOnly: true,
-    items: [
-      { href: "/admin/guardrails", labelKey: "guardrails", Icon: ShieldAlert, adminOnly: true },
-      {
-        href: "/admin/approval-policy",
-        labelKey: "approvalPolicy",
-        Icon: ShieldCheck,
-        adminOnly: true,
-      },
-      { href: "/admin/notifications", labelKey: "notifications", Icon: Bell, adminOnly: true },
-      { href: "/admin/eval-quality", labelKey: "evalQuality", Icon: Gauge, adminOnly: true },
-      { href: "/admin/tenant-stats", labelKey: "tenantStats", Icon: BarChart3, adminOnly: true },
-      { href: "/admin/marketplace", labelKey: "marketplace", Icon: Store, adminOnly: true },
-      { href: "/admin/settings", labelKey: "settings", Icon: Settings, adminOnly: true },
-    ],
-  },
-  {
-    id: "plataforma",
-    labelKey: "groupPlataforma",
-    Icon: Server,
-    systemAdminOnly: true,
-    items: [
-      // Administración de usuarios global (ADR 0047): listar usuarios y
-      // gestionar sus memberships (usuario↔tenant + rol). Solo System Admin.
-      { href: "/admin/users", labelKey: "users", Icon: Users, systemAdminOnly: true },
-      // ADR 0134: con el registro público cerrado, ésta es la ÚNICA vía de
-      // producto para dar de alta a alguien nuevo. Sin entrada en el menú, la
-      // pantalla existiría y nadie la encontraría.
-      { href: "/admin/invitations", labelKey: "invitations", Icon: Ticket, systemAdminOnly: true },
-      // `task_mk_13` (UI-05): la cola de revisión del marketplace (ADR 0142 D6) es
-      // del System Admin. Sin entrada aquí, publicar dejaba el listing en
-      // `pending` y nadie sabía dónde se aprobaba.
-      {
-        href: "/admin/marketplace/review",
-        labelKey: "marketplaceReview",
-        Icon: ClipboardCheck,
-        systemAdminOnly: true,
-      },
-      { href: "/admin/llm-providers", labelKey: "llmProviders", Icon: Cpu, systemAdminOnly: true },
-      {
-        href: "/admin/ollama",
-        labelKey: "ollama",
-        Icon: Sparkles,
-        systemAdminOnly: true,
-      },
-      {
-        href: "/admin/settings/platform-defaults",
-        labelKey: "platformDefaults",
-        Icon: SlidersHorizontal,
-        systemAdminOnly: true,
-      },
-      {
-        href: "/admin/model-prices",
-        labelKey: "modelPrices",
-        Icon: Coins,
-        systemAdminOnly: true,
-      },
-      // SSO recolocado de "Ajustes del tenant" → "Plataforma" (ADR 0028).
-      // La ruta NO cambia (/admin/settings/sso); el backend de SSO sigue
-      // siendo per-tenant (ADR 0031) — aquí solo cambia el sitio en el menú.
-      { href: "/admin/settings/sso", labelKey: "sso", Icon: KeyRound, systemAdminOnly: true },
-      { href: "/admin/backup", labelKey: "backup", Icon: DatabaseBackup, systemAdminOnly: true },
-      {
-        href: "/admin/backup/destinations",
-        labelKey: "backupDestinations",
-        Icon: DatabaseBackup,
-        systemAdminOnly: true,
-      },
-      {
-        href: "/admin/backup/restore",
-        labelKey: "backupRestore",
-        Icon: DatabaseBackup,
-        systemAdminOnly: true,
-      },
-    ],
-  },
-  {
-    // Córtex del System Owner (F1, ADR 0074). Grupo separado y reservado al
-    // dueño del despliegue — el backend (require_system_owner, DB-authoritative)
-    // sigue siendo la barrera real; esto es solo UX.
-    id: "cortex",
-    labelKey: "groupCortex",
-    Icon: Brain,
-    systemOwnerOnly: true,
-    items: [
-      { href: "/admin/cortex", labelKey: "cortex", Icon: Brain, systemOwnerOnly: true },
-      // Panel de Mente (Córtex F2, ADR 0075): estado afectivo del córtex en vivo.
-      {
-        href: "/admin/cortex/mind",
-        labelKey: "cortexMind",
-        Icon: Activity,
-        systemOwnerOnly: true,
-      },
-      // Identidad evolutiva (Córtex F3, ADR 0074/0077): onboarding co-diseñado.
-      {
-        href: "/admin/cortex/identity",
-        labelKey: "cortexIdentity",
-        Icon: Sparkles,
-        systemOwnerOnly: true,
-      },
-    ],
-  },
-  {
-    id: "ayuda",
-    labelKey: "groupAyuda",
-    Icon: HelpCircle,
-    items: [{ href: "/admin/docs", labelKey: "docs", Icon: BookOpen }],
-  },
-];
+export const NAV_GROUPS = [...WORK_GROUPS, ...SYSTEM_GROUPS];
 
-const LS_KEY_PREFIX = "agentic.nav.group.";
+/** El destino al pulsar un área en el selector. */
+const AREA_HOME: Record<"work" | "system", string> = {
+  work: "/admin/dashboard",
+  system: "/admin/users",
+};
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { isTenantAdmin, isSystemAdmin, isSystemOwner } = useCurrentUser();
+  const scope: NavScope = { isTenantAdmin, isSystemAdmin, isSystemOwner };
 
+  // El área que exige la ruta, o la última elegida si a la ruta le da igual.
+  //
+  // Y una caída a Trabajo que no es decorativa: quien pega `/admin/users` en la
+  // barra de direcciones sin ser System Admin va a recibir un 403 del backend,
+  // pero de camino no puede quedarse con una barra lateral EN BLANCO —el área
+  // Sistema no le enseña ningún grupo—. Se le da la que sí puede usar.
+  const requested = areaForPath(pathname);
+  const allowed = visibleAreas(scope);
+  const required =
+    requested === "system" && !allowed.includes("system") ? "work" : requested;
+
+  const [sticky, setSticky] = useState<Area>(required ?? "work");
+  useEffect(() => {
+    if (required !== null && required !== "project") setSticky(required);
+  }, [required]);
+  const area: Area = required ?? sticky;
+
+  const projectId = projectIdFromPath(pathname);
   const isActive = (href: string) => pathname === href || pathname?.startsWith(href + "/") === true;
+  const closeMobile = () => setMobileOpen(false);
+
+  const onSelectArea = (next: Area) => {
+    if (next === area) return;
+    setSticky(next === "project" ? "work" : next);
+    router.push(AREA_HOME[next === "project" ? "work" : next]);
+  };
+
+  const sidebar = (showClose: boolean) => {
+    const shared = {
+      onItemClick: closeMobile,
+      showClose,
+      onClose: closeMobile,
+    };
+    if (area === "project" && projectId !== null) {
+      return <SidebarProject projectId={projectId} pathname={pathname} {...shared} />;
+    }
+    if (area === "system") {
+      return <SidebarSystem scope={scope} isActive={isActive} {...shared} />;
+    }
+    return <SidebarWork scope={scope} isActive={isActive} {...shared} />;
+  };
 
   return (
     <div className="bg-background flex min-h-screen">
@@ -305,7 +146,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           "hidden md:flex",
         )}
       >
-        <SidebarContent isActive={isActive} onItemClick={() => setMobileOpen(false)} />
+        {sidebar(false)}
       </aside>
 
       {/* ============================= Sidebar (mobile drawer) ============================= */}
@@ -313,7 +154,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
         <>
           <div
             className="bg-foreground/60 fixed inset-0 z-40 backdrop-blur-sm md:hidden"
-            onClick={() => setMobileOpen(false)}
+            onClick={closeMobile}
             aria-hidden="true"
           />
           <aside
@@ -325,12 +166,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             aria-modal="true"
             data-testid="mobile-nav"
           >
-            <SidebarContent
-              isActive={isActive}
-              onItemClick={() => setMobileOpen(false)}
-              showClose
-              onClose={() => setMobileOpen(false)}
-            />
+            {sidebar(true)}
           </aside>
         </>
       )}
@@ -344,179 +180,13 @@ export function AdminShell({ children }: { children: ReactNode }) {
           propio scroll. Va en el shell (denominador común) para que valga en TODAS
           las páginas, no parcheando cada una. */}
       <div className="flex min-w-0 flex-1 flex-col md:pl-64">
-        <AdminHeader onOpenMobileNav={() => setMobileOpen(true)} />
+        <AdminHeader
+          onOpenMobileNav={() => setMobileOpen(true)}
+          area={area}
+          onSelectArea={onSelectArea}
+        />
         <main className="animate-fade-in min-w-0 flex-1">{children}</main>
       </div>
     </div>
-  );
-}
-
-function SidebarContent({
-  isActive,
-  onItemClick,
-  showClose = false,
-  onClose,
-}: {
-  isActive: (href: string) => boolean;
-  onItemClick: () => void;
-  showClose?: boolean;
-  onClose?: () => void;
-}) {
-  // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
-  // Córtex F1 (ADR 0074): grupo systemOwnerOnly visible solo al System Owner.
-  // El check del backend sigue siendo la fuente de verdad — esto es UX.
-  const t = useT("shell");
-  const { isTenantAdmin, isSystemAdmin, isSystemOwner } = useCurrentUser();
-
-  // Grupos visibles por ámbito, con sus ítems ya filtrados por gating de ítem.
-  const visibleGroups = visibleNavGroups(NAV_GROUPS, {
-    isTenantAdmin,
-    isSystemAdmin,
-    isSystemOwner,
-  });
-
-  return (
-    <>
-      <div className="border-sidebar-border flex h-20 items-center justify-between border-b px-6">
-        <Link
-          href="/admin/dashboard"
-          className="text-sidebar-foreground flex items-center gap-2 font-semibold tracking-tight"
-          onClick={onItemClick}
-        >
-          <span
-            className={cn(
-              "bg-brand-gradient inline-flex h-7 w-7 items-center justify-center rounded-md",
-              "shadow-[0_0_24px_-4px_hsl(var(--gradient-from)/0.7)]",
-            )}
-          >
-            <Sparkles className="h-4 w-4 text-white" />
-          </span>
-          <span>Agentic Platform</span>
-        </Link>
-        {showClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sidebar-muted-foreground hover:bg-sidebar-border hover:text-sidebar-foreground inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-            aria-label={t("closeMenu")}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
-        <ul className="flex flex-col gap-2">
-          {visibleGroups.map((group) => (
-            <NavGroupBlock
-              key={group.id}
-              group={group}
-              isActive={isActive}
-              onItemClick={onItemClick}
-            />
-          ))}
-        </ul>
-      </nav>
-    </>
-  );
-}
-
-function NavGroupBlock({
-  group,
-  isActive,
-  onItemClick,
-}: {
-  group: NavGroup;
-  isActive: (href: string) => boolean;
-  onItemClick: () => void;
-}) {
-  const t = useT("nav");
-  const hasActiveItem = group.items.some((item) => isActive(item.href));
-  // El grupo arranca abierto si contiene la ruta activa; tras montar se
-  // reconcilia con la preferencia persistida en localStorage (si existe).
-  const [open, setOpen] = useState(hasActiveItem);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    // El grupo con la ruta activa siempre se auto-expande al cargar.
-    if (hasActiveItem) {
-      setOpen(true);
-      return;
-    }
-    const stored = window.localStorage.getItem(LS_KEY_PREFIX + group.id);
-    if (stored !== null) setOpen(stored === "1");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [group.id, hasActiveItem]);
-
-  const toggle = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(LS_KEY_PREFIX + group.id, next ? "1" : "0");
-      }
-      return next;
-    });
-  };
-
-  const { Icon } = group;
-
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        data-testid={`nav-group-${group.id}`}
-        className={cn(
-          "text-sidebar-muted-foreground hover:text-sidebar-foreground",
-          "flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-semibold uppercase tracking-wider",
-          "transition-colors",
-        )}
-      >
-        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span className="flex-1 text-left">{t(group.labelKey)}</span>
-        <ChevronDown
-          aria-hidden="true"
-          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open ? "" : "-rotate-90")}
-        />
-      </button>
-
-      {open && (
-        // Hijos indentados + guía vertical de árbol bajo la cabecera del grupo,
-        // para que la jerarquía padre→hijo se distinga de un vistazo.
-        <ul className="ml-3 mt-1 flex flex-col gap-1 border-l border-sidebar-border pl-2">
-          {group.items.map(({ href, labelKey, Icon: ItemIcon }) => {
-            const active = isActive(href);
-            return (
-              <li key={href}>
-                <Link
-                  href={href}
-                  onClick={onItemClick}
-                  className={cn(
-                    "group relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium",
-                    "transition-colors",
-                    active
-                      ? "bg-[hsl(var(--sidebar-active-bg))] text-sidebar-active"
-                      : "text-sidebar-muted-foreground hover:bg-sidebar-border hover:text-sidebar-foreground",
-                  )}
-                  data-testid={`nav-${href.split("/").pop()}`}
-                  aria-current={active ? "page" : undefined}
-                >
-                  {/* Active indicator: thin gradient stripe on the left */}
-                  {active && (
-                    <span
-                      aria-hidden="true"
-                      className="bg-brand-gradient absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r"
-                    />
-                  )}
-                  <ItemIcon className="h-4 w-4 shrink-0" />
-                  <span>{t(labelKey)}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </li>
   );
 }

@@ -9,6 +9,7 @@
 // test también acredite que sigue CABLEADO en la cabecera — el patrón de
 // fallo dominante de esta base es "mecanismo entregado, cero llamantes".
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,9 +72,22 @@ function asRole(role: UserRole | null, isSystemAdmin = false): UseCurrentUserRes
   };
 }
 
+/**
+ * La cabecera necesita un `QueryClient` desde `task_ui_01`: aloja el indicador
+ * de salud, que consulta `/admin/system-health` con TanStack (y sólo para el
+ * System Admin). Se monta un cliente de verdad con `retry: false` —el patrón de
+ * `components/cortex/identity-card.test.tsx`— en vez de mockear `useQuery`: así
+ * este test sigue renderizando la cabecera REAL, que es lo que vino a acreditar.
+ * `apiFetch` está mockeado arriba, así que la query no sale a la red.
+ */
 function renderHeader(state: UseCurrentUserResult) {
   currentUserMock.mockReturnValue(state);
-  return render(<AdminHeader onOpenMobileNav={() => {}} />);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <AdminHeader onOpenMobileNav={() => {}} />
+    </QueryClientProvider>,
+  );
 }
 
 afterEach(() => {

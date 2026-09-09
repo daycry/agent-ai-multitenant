@@ -203,6 +203,29 @@ export const dictionary = {
 
     // --- grupo Ayuda ---
     docs: { es: "Documentación", en: "Documentation" },
+
+    // --- áreas (`task_ui_01`) ---
+    // El selector de área de la cabecera. `areaWork` repite el texto de
+    // `groupTrabajo` a propósito: son dos cosas distintas —un área y un grupo
+    // del menú— y fusionarlas ataría el nombre de una al de la otra el día que
+    // una de las dos cambie.
+    areaWork: { es: "Trabajo", en: "Work" },
+    areaSystem: { es: "Sistema", en: "System" },
+    areaSwitcher: { es: "Área", en: "Area" },
+
+    // --- barra del proyecto (`task_ui_01`; las pestañas nuevas, en task_ui_10..12) ---
+    backToProjects: { es: "← Proyectos", en: "← Projects" },
+    projectOverview: { es: "Resumen", en: "Overview" },
+    projectPlans: { es: "Planes", en: "Plans" },
+    projectTasks: { es: "Tareas", en: "Tasks" },
+    projectChat: { es: "Chat", en: "Chat" },
+    projectCapabilities: { es: "Capacidades (MCP)", en: "Capabilities (MCP)" },
+    projectToolsDiagnostic: { es: "Diagnóstico de tools", en: "Tools diagnostic" },
+    projectCommands: { es: "Comandos", en: "Commands" },
+    projectKnowledge: { es: "Conocimiento", en: "Knowledge" },
+    projectMemories: { es: "Memorias del proyecto", en: "Project memories" },
+    projectWebhooks: { es: "Webhooks entrantes", en: "Incoming webhooks" },
+    projectDepCache: { es: "Caché de dependencias", en: "Dependency cache" },
   },
 
   /**
@@ -223,6 +246,22 @@ export const dictionary = {
     profile: { es: "Perfil", en: "Profile" },
     logout: { es: "Cerrar sesión", en: "Sign out" },
     loggingOut: { es: "Cerrando sesión…", en: "Signing out…" },
+
+    // `task_ui_01`: la MFA de la propia cuenta es un ajuste PERSONAL, no del
+    // tenant, así que sale del menú lateral y entra en el menú de usuario. La
+    // ruta (`/admin/settings/security`) no cambia.
+    accountSecurity: { es: "Seguridad de mi cuenta", en: "My account security" },
+
+    // `task_ui_01`: el indicador de salud sólo aparece si algo está degradado, y
+    // sólo lo consulta el System Admin (`/admin/system-health` es suyo).
+    healthDegraded: {
+      es: "{count} servicio(s) con problemas",
+      en: "{count} service(s) with problems",
+    },
+    healthDegradedTitle: {
+      es: "Estado del stack degradado — pulsa para ver el detalle",
+      en: "Stack health degraded — click for details",
+    },
   },
 
   /** `app/select-tenant/page.tsx`. */

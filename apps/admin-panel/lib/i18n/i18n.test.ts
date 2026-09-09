@@ -51,6 +51,9 @@ describe("dictionary — invariantes", () => {
       "login.emailLabel",
       "nav.dashboard",
       "nav.runs",
+      // `task_ui_01` — «Chat» es la misma palabra en los dos idiomas, y es la
+      // que la UI castellana ya usaba para esa pestaña del proyecto.
+      "nav.projectChat",
       "nav.knowledgeBases",
       "nav.guardrails",
       "nav.marketplace",

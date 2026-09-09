@@ -2,7 +2,7 @@
 
 > **Última actualización: 2026-09-09** · El plan activo es
 > [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
-> (`in_progress` desde el 2026-09-09, rama `plan/ui-reestructuracion-2026-09-09`): `task_ui_04` entregada —la foto de las 81 rutas y el mapa de pantallas, tomados ANTES de mover nada—; **la siguiente es `task_ui_01`**, partir `admin-shell.tsx`. El del marketplace cerró sus **quince casillas** y está en `pending_human_validation` (rama `plan/marketplace-mcp-2026-09-02`, PR #183 **abierto y sin mergear**): `task_mk_30` se cerró **en negativo** porque el operador rechazó el ADR 0167 (opción (b), con reapertura atada al cierre del plan). Esperan al operador: **mergear el PR #183** (la ola 3 del plan de UI reutiliza lo que entrega), validar `human_mk_01..03` y `human_cv_01..04`, y decidir la opción (a) del ADR 0081 reabierto.
+> (`in_progress` desde el 2026-09-09, rama `plan/ui-reestructuracion-2026-09-09`): entregadas `task_ui_04` —la foto de las 81 rutas y el mapa de pantallas, tomados ANTES de mover nada— y **`task_ui_01`** —`admin-shell.tsx` de 522 a 190 líneas, tres áreas (Trabajo · Proyecto · Sistema) y el indicador de salud que sólo aparece si duele—; **la siguiente es `task_ui_02`**, el endpoint agregado y el dashboard tenant-céntrico. El del marketplace cerró sus **quince casillas** y está en `pending_human_validation` (rama `plan/marketplace-mcp-2026-09-02`, PR #183 **abierto y sin mergear**): `task_mk_30` se cerró **en negativo** porque el operador rechazó el ADR 0167 (opción (b), con reapertura atada al cierre del plan). Esperan al operador: **mergear el PR #183** (la ola 3 del plan de UI reutiliza lo que entrega), validar `human_mk_01..03` y `human_cv_01..04`, y decidir la opción (a) del ADR 0081 reabierto.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -31,13 +31,21 @@ rebasar esta rama**, es la trampa que ya conocemos).
   mapa nuevo [`04-reference/mapa-de-pantallas-del-panel.md`](docs/04-reference/mapa-de-pantallas-del-panel.md)
   en las dos direcciones (ruta sin fila y fila sin ruta). Las dos se verificaron
   rompiéndolas a mano, no sólo viéndolas pasar.
-- **La siguiente es `task_ui_01`**: partir `admin-shell.tsx` (522 líneas, el
-  fichero más acoplado del panel) en selector de área + tres barras laterales.
-  Es la casilla que la guarda de rutas viene a vigilar.
-- **Dos preguntas abiertas que el mapa deja escritas y NO inventa**: en qué área
-  cae `/admin/settings/security` (es un ajuste personal, MFA, no del tenant) y
-  dónde vive `/admin/plans/[id]/escalated`. Las deciden `task_ui_01` y
-  `task_ui_03`/`task_ui_11`; están en §Preguntas abiertas del mapa.
+- **`task_ui_01`, entregada**: `admin-shell.tsx` baja de 522 a 190 líneas y lo
+  que hacía se reparte en ocho piezas (`nav-model.ts` con las tres áreas, las
+  tres barras, el marco, el grupo colapsable, el selector de área y el indicador
+  de salud). El shell **re-exporta** el modelo porque cuatro ficheros de test
+  importaban de él. Con cinco decisiones que el enunciado no fijaba, escritas en
+  la casilla del plan — la que más se nota: `/admin/runs` y `/admin/docs` **no**
+  se retiran todavía, para no dejar rutas vivas sin camino a media ola.
+- **La siguiente es `task_ui_02`**: `GET /tenant/dashboard` y el dashboard con
+  las seis secciones. Es la casilla que retira Runs del menú (y la salud del
+  dashboard, que ya está en la cabecera).
+- **Queda UNA pregunta abierta en el mapa**, y no se inventa: dónde vive
+  `/admin/plans[id]/escalated` (Tablero del proyecto o pestaña Revisiones de la
+  bandeja). La deciden `task_ui_03` y `task_ui_11`. La de
+  `/admin/settings/security` la cerró el operador el 2026-09-09: al menú de
+  usuario.
 
 Y el plan que acaba de cerrarse, cuyo PR sigue abierto:
 [`remediacion-marketplace-mcp-2026-09-02`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md)

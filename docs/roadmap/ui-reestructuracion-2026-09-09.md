@@ -137,7 +137,7 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_01` — Selector de área y las dos barras laterales
 
-- [ ] **Título**: `components/layout/admin-shell.tsx` (el fichero más acoplado del panel) se parte en
+- [x] **Título**: `components/layout/admin-shell.tsx` (el fichero más acoplado del panel) se parte en
       `area-switcher.tsx`, `sidebar-work.tsx`, `sidebar-system.tsx` y `sidebar-project.tsx`; el shell elige
       la barra por ruta y por rol (`navGroupVisible` se conserva). El área Sistema sólo aparece para System
       Admin; entrar en una ruta de Sistema desde Trabajo cambia el área. El indicador de salud degradada en
@@ -145,6 +145,36 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Test**: vitest de `visibleNavGroups` por rol y área; vitest del shell (tres barras, cambio por ruta);
       e2e `sidebar-complete.spec.ts` actualizado por `data-testid`; guarda de rutas conservadas.
       **Coste**: 2 d.
+      **Entregada el 2026-09-09.** `admin-shell.tsx` pasa de **522 a 190 líneas** y reparte lo que hacía:
+      `nav-model.ts` (tipos, gating por rol y las tres áreas — puro, sin React, para poder probar la
+      decisión en entorno `node`), `sidebar-work.tsx` (cuatro grupos), `sidebar-system.tsx` (Plataforma,
+      Córtex y la documentación), `sidebar-project.tsx` (once pestañas + «← Proyectos»),
+      `sidebar-frame.tsx` (marca y el `<nav data-testid="sidebar-nav">` común, ahora con `data-area`),
+      `nav-group-block.tsx` (grupo colapsable y enlace), `area-switcher.tsx` y
+      `system-health-indicator.tsx`. El shell **re-exporta** el modelo: cuatro ficheros de test importaban
+      de él y mover su ruta de import no era el objetivo.
+      **Cinco decisiones que el enunciado no fijaba**, tomadas y escritas donde se buscan:
+      (1) `/admin/settings/security` al menú de usuario —decisión del operador del 2026-09-09; es la MFA de
+      la propia cuenta, no del tenant—; (2) `/admin/docs` se queda en Trabajo **y** en Sistema, porque el
+      área Sistema es sólo del System Admin y moverla del todo retiraría la documentación a todos los demás
+      (`SHARED_ROUTES`: no fuerza área, así que entrar en ella no te echa de donde estabas);
+      (3) `/admin/runs` **sigue** en el menú hasta `task_ui_02` —el plan lo retira, pero la pestaña Runs del
+      proyecto es de `task_ui_12` y quitarlo ya dejaría la ruta viva y sin camino media ola—;
+      (4) la barra del proyecto sólo ofrece rutas que existen hoy (Tablero, Equipo y Costes los abren
+      `task_ui_11` y `task_ui_12`: un enlace a una ruta que nadie sirve es un 404 con aspecto de producto);
+      (5) `areaForPath` devuelve `null` para las rutas compartidas, y el emparejamiento es por SEGMENTO
+      —`/admin/settings` es del tenant y `/admin/settings/sso` de plataforma; un `startsWith` se llevaría
+      por delante los ajustes del tenant enteros—.
+      **Un defecto que encontró un test propio**: quien pega `/admin/users` sin ser System Admin recibirá un
+      403 del backend, pero de camino se quedaba con la barra lateral **en blanco**; ahora cae a Trabajo.
+      **Medido**: vitest **1646 en 184 ficheros** (36 nuevos: `nav-model` 15, `admin-shell-areas` 6,
+      `system-health-indicator` 7, `admin-shell-nav-groups` +2, más el ajuste del header), `tsc --noEmit`
+      limpio, `check-i18n` y `check-component-size` sin avisos, **`next build` completo (65 páginas)**, y las
+      dos guardas de `task_ui_04` en verde: ninguna ruta se perdió. E2E: `sidebar-complete.spec.ts` gana
+      cinco casos (áreas, proyecto, portfolio y la seguridad en el menú de usuario) — pendientes de correr
+      con navegador, como el resto del subset.
+      **Excepción declarada**: `nav.projectChat` entra en la lista de «igual en los dos idiomas» de
+      `i18n.test.ts` («Chat»).
 
 ### `task_ui_02` — `GET /tenant/dashboard` y el dashboard tenant-céntrico
 

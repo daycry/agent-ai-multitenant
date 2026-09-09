@@ -31,8 +31,19 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Building2, ChevronDown, LogOut, Menu, Sparkles, UserRound } from "lucide-react";
+import {
+  Building2,
+  ChevronDown,
+  LogOut,
+  Menu,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 
+import { AreaSwitcher } from "@/components/layout/area-switcher";
+import type { Area, NavScope } from "@/components/layout/nav-model";
+import { SystemHealthIndicator } from "@/components/layout/system-health-indicator";
 import { TenantPicker } from "@/components/layout/tenant-picker";
 import { useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
@@ -43,11 +54,28 @@ import { purgeSessionCache } from "@/lib/session-cache";
 import { clearTenantId as clearStoredTenant } from "@/lib/tenant-storage";
 import { useCurrentUser, type CurrentUser } from "@/lib/use-current-user";
 
-export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
+export function AdminHeader({
+  onOpenMobileNav,
+  area = "work",
+  onSelectArea,
+}: {
+  onOpenMobileNav: () => void;
+  /**
+   * El área activa y su selector (`task_ui_01`). Opcionales a propósito: el
+   * shell los pasa siempre, y sin ellos la cabecera sigue siendo renderizable
+   * suelta —que es lo que hace `admin-header-role-badge.test.tsx`—. Sin
+   * `onSelectArea` no se pinta el selector: un selector sin destino sería un
+   * botón que no lleva a ningún sitio.
+   */
+  area?: Area;
+  onSelectArea?: (area: Area) => void;
+}) {
   const t = useT("shell");
   const { lang, setLang } = useLang();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { isTenantAdmin, isSystemAdmin, isSystemOwner } = useCurrentUser();
+  const scope: NavScope = { isTenantAdmin, isSystemAdmin, isSystemOwner };
 
   async function onLogout() {
     try {
@@ -105,10 +133,13 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
         </Link>
       </div>
 
-      {/* Right: tenant actual (picker para superadmin) + lang + menú usuario */}
+      {/* Right: área + tenant actual (picker para superadmin) + salud + lang + usuario */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {onSelectArea && <AreaSwitcher area={area} scope={scope} onSelect={onSelectArea} />}
         <TenantArea />
         <span aria-hidden="true" className="bg-sidebar-border hidden h-6 w-px sm:block" />
+        {/* Sólo aparece si algo está degradado, y sólo lo consulta el System Admin. */}
+        <SystemHealthIndicator isSystemAdmin={isSystemAdmin} />
         <RoleBadge />
         <LangSwitcher lang={lang} onChange={setLang} />
         <UserMenu open={menuOpen} setOpen={setMenuOpen} onLogout={onLogout} />
@@ -342,6 +373,20 @@ function UserMenu({
               >
                 <UserRound className="h-4 w-4" />
                 {t("profile")}
+              </Link>
+              {/* `task_ui_01`: la verificación en dos pasos es un ajuste de la
+                  propia cuenta, no del tenant. Sale del menú lateral (donde
+                  quedaba mezclada con el trabajo del tenant) y entra aquí, que
+                  es donde se busca lo de «mi cuenta». La ruta no cambia. */}
+              <Link
+                href="/admin/settings/security"
+                onClick={() => setOpen(false)}
+                data-testid="user-menu-security"
+                className="hover:bg-muted focus-visible:bg-muted flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm outline-none"
+                role="menuitem"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                {t("accountSecurity")}
               </Link>
               <button
                 type="button"

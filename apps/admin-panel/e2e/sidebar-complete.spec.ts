@@ -51,6 +51,12 @@ const TENANT_ADMIN = {
   active_tenant_id: TENANT_ID,
 };
 
+/** El mismo, con la bandera de System Admin: es quien tiene DOS áreas. */
+const SYSTEM_ADMIN = { ...TENANT_ADMIN, is_system_admin: true };
+
+/** Un proyecto cualquiera: la barra contextual sólo necesita su id. */
+const PROJECT_ID = "8f14e45f-ceea-467a-9f0a-1a2b3c4d5e6f";
+
 /** Las 10 entradas históricas, con el grupo del menú en el que viven hoy. */
 const EXPECTED_ENTRIES: { label: string; group: string }[] = [
   { label: "Dashboard", group: "trabajo" },
@@ -70,7 +76,10 @@ const GROUPS_WITH_ENTRIES = [...new Set(EXPECTED_ENTRIES.map((e) => e.group))];
 /** Prefijo de la clave de localStorage que persiste abierto/cerrado. */
 const NAV_GROUP_LS_PREFIX = "agentic.nav.group.";
 
-async function setup(page: Page, opts: { openGroups?: string[] } = {}): Promise<void> {
+async function setup(
+  page: Page,
+  opts: { openGroups?: string[]; me?: typeof TENANT_ADMIN } = {},
+): Promise<void> {
   await seedSession(page, { tenantId: TENANT_ID });
   await page.addInitScript(
     (seed: { prefix: string; openGroups: string[] }) => {
@@ -89,7 +98,7 @@ async function setup(page: Page, opts: { openGroups?: string[] } = {}): Promise<
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(TENANT_ADMIN),
+      body: JSON.stringify(opts.me ?? TENANT_ADMIN),
     }),
   );
 }
@@ -142,4 +151,77 @@ test("un tenant_admin no ve el grupo Plataforma (ADR 0028)", async ({ page }) =>
   // Ni la cabecera del grupo ni su entrada de SSO, ni forzando el abierto.
   await expect(page.getByTestId("nav-group-plataforma")).toHaveCount(0);
   await expect(page.getByTestId("nav-sso")).toHaveCount(0);
+});
+
+// ===========================================================================
+// Las tres áreas (`task_ui_01`, plan ui-reestructuracion-2026-09-09)
+// ===========================================================================
+
+test("un tenant_admin no tiene selector de área: sólo tiene Trabajo", async ({ page }) => {
+  await setup(page);
+  await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("sidebar-nav")).toHaveAttribute("data-area", "work");
+  // Un selector de una sola opción no informa de nada: no se pinta.
+  await expect(page.getByTestId("area-switcher")).toHaveCount(0);
+});
+
+test("el System Admin cambia de área y la barra cambia con él", async ({ page }) => {
+  await setup(page, { me: SYSTEM_ADMIN, openGroups: ["plataforma"] });
+  await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+
+  const nav = page.getByTestId("sidebar-nav");
+  await expect(nav).toHaveAttribute("data-area", "work");
+  await expect(page.getByTestId("area-switcher")).toBeVisible();
+  // En Trabajo, Plataforma NO está: es lo que este plan viene a separar.
+  await expect(page.getByTestId("nav-group-plataforma")).toHaveCount(0);
+
+  await page.getByTestId("area-system").click();
+
+  await expect(nav).toHaveAttribute("data-area", "system");
+  await expect(page.getByTestId("nav-group-plataforma")).toBeVisible();
+  await expect(nav.getByTestId("nav-sso")).toBeVisible();
+  // Y al revés: el trabajo del tenant no se cuela en la barra de plataforma.
+  await expect(page.getByTestId("nav-group-recursos")).toHaveCount(0);
+});
+
+test("dentro de un proyecto la barra es la del proyecto, con su vuelta", async ({ page }) => {
+  await setup(page);
+  await page.goto(`/admin/projects/${PROJECT_ID}/plans`, { waitUntil: "domcontentloaded" });
+
+  const nav = page.getByTestId("sidebar-nav");
+  await expect(nav).toHaveAttribute("data-area", "project");
+  // Las entradas cuelgan de ESTE proyecto y tienen testid estable — el del
+  // resumen no puede derivarse del último segmento, que es el UUID.
+  await expect(nav.getByTestId("nav-project-overview")).toHaveAttribute(
+    "href",
+    `/admin/projects/${PROJECT_ID}`,
+  );
+  await expect(nav.getByTestId("nav-back-to-projects")).toHaveAttribute("href", "/admin/projects");
+  // Y el menú del tenant no está: la barra CAMBIA, no se añade.
+  await expect(page.getByTestId("nav-group-recursos")).toHaveCount(0);
+});
+
+test("el portfolio de proyectos sigue siendo área Trabajo", async ({ page }) => {
+  // El caso que un `startsWith("/admin/projects")` se llevaría por delante: el
+  // listado es del tenant, y sólo entrar en UNO cambia de barra.
+  await setup(page);
+  await page.goto("/admin/projects", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("sidebar-nav")).toHaveAttribute("data-area", "work");
+  await expect(page.getByTestId("nav-back-to-projects")).toHaveCount(0);
+});
+
+test("la seguridad de la cuenta vive en el menú de usuario, no en el lateral", async ({ page }) => {
+  // Decisión del operador del 2026-09-09: es la MFA de la propia cuenta, no un
+  // ajuste del tenant. La ruta no cambió.
+  await setup(page);
+  await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("sidebar-nav").getByTestId("nav-security")).toHaveCount(0);
+  await page.getByTestId("user-menu").click();
+  await expect(page.getByTestId("user-menu-security")).toHaveAttribute(
+    "href",
+    "/admin/settings/security",
+  );
 });

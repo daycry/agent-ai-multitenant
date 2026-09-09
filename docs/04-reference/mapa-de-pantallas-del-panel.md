@@ -21,11 +21,15 @@ Dos cosas que conviene leer antes de usar esta tabla:
   lo comprueba en cada suite con la foto tomada el 2026-09-09, antes de mover la
   primera pantalla.
 - **El rol de esta tabla es el del MENÚ, no el permiso.** La barrera real es el
-  backend (RBAC + RLS); el gating del NAV es UX y el más restrictivo manda. Sale
-  de `NAV_GROUPS` en
-  [`components/layout/admin-shell.tsx`](../../apps/admin-panel/components/layout/admin-shell.tsx)
+  backend (RBAC + RLS); el gating del NAV es UX y el más restrictivo manda
   (`adminOnly` → tenant_admin, `systemAdminOnly` → System Admin, `systemOwnerOnly`
-  → System Owner). Una pantalla **sin entrada de menú** se alcanza navegando o por
+  → System Owner). Desde `task_ui_01` los grupos viven en
+  [`sidebar-work.tsx`](../../apps/admin-panel/components/layout/sidebar-work.tsx) y
+  [`sidebar-system.tsx`](../../apps/admin-panel/components/layout/sidebar-system.tsx),
+  las pestañas del proyecto en
+  [`nav-model.ts`](../../apps/admin-panel/components/layout/nav-model.ts) —que es
+  también donde se decide el área de cada ruta— y `admin-shell.tsx` sólo los
+  re-exporta. Una pantalla **sin entrada de menú** se alcanza navegando o por
   enlace directo, y su columna dice de dónde se llega.
 
 ## Áreas
@@ -139,11 +143,11 @@ Todas cuelgan de `/admin/projects/[id]`; conservan su ruta y pasan a ser pestañ
 
 ## Cabecera
 
-| Ruta                        | Sitio                                    | Rol          | Notas                                                              |
-| --------------------------- | ---------------------------------------- | ------------ | ------------------------------------------------------------------ |
-| `/admin/assistant`          | Asistente (botón flotante)               | tenant_admin | Hoy es entrada del grupo «Trabajo»                                 |
-| `/admin/assistant/settings` | Sin entrada — desde el asistente         | tenant_admin |                                                                    |
-| `/admin/settings/security`  | Menú de usuario · Seguridad de mi cuenta | Cualquiera   | Ajuste **personal** (MFA), no del tenant — ver §Preguntas abiertas |
+| Ruta                        | Sitio                                    | Rol          | Notas                                                                                                                                                                                                                            |
+| --------------------------- | ---------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/admin/assistant`          | Asistente (botón flotante)               | tenant_admin | Hoy es entrada del grupo «Trabajo»                                                                                                                                                                                               |
+| `/admin/assistant/settings` | Sin entrada — desde el asistente         | tenant_admin |                                                                                                                                                                                                                                  |
+| `/admin/settings/security`  | Menú de usuario · Seguridad de mi cuenta | Cualquiera   | Ajuste **personal** (MFA), no del tenant. **Decidido el 2026-09-09** por el operador e implementado en `task_ui_01`: sale del menú lateral y entra en el menú de usuario (`data-testid="user-menu-security"`). La ruta no cambió |
 
 ## Sin área (sesión y portal público)
 
@@ -163,18 +167,19 @@ Todas cuelgan de `/admin/projects/[id]`; conservan su ruta y pasan a ser pestañ
 
 ## Preguntas abiertas
 
-Dos rutas cuya área **el plan no fija**, y que este documento no inventa (criterio
-de cierre 6 del plan: una decisión de producto nueva va a ADR antes de inventarla).
+Rutas cuya área **el plan no fija**, y que este documento no inventa (criterio de
+cierre 6 del plan: una decisión de producto nueva va a ADR antes de inventarla).
 Se anotan aquí para que las cierre la casilla que las toque:
 
-1. **`/admin/settings/security`** — es un ajuste de la propia cuenta (verificación
-   en dos pasos), no del tenant. Hoy cuelga del grupo «Trabajo», donde queda
-   mezclado con el trabajo del tenant. Propuesta de este mapa: menú de usuario en
-   cabecera. La decide `task_ui_01`.
+1. ~~**`/admin/settings/security`**~~ — **decidida el 2026-09-09 por el
+   operador**: al menú de usuario de la cabecera, porque es la verificación en
+   dos pasos de la propia cuenta y no un ajuste del tenant. Implementada en
+   `task_ui_01`; la ruta no cambió. Se deja tachada en vez de borrada para que
+   quien vuelva a hacerse la pregunta encuentre la respuesta y su fecha.
 2. **`/admin/plans/[id]/escalated`** — vista de escalaciones de un plan. Encaja en
    el Tablero del proyecto (contexto del plan) o en la pestaña Revisiones de la
    bandeja humana, según de dónde llegue el usuario. La deciden `task_ui_03` y
-   `task_ui_11`.
+   `task_ui_11`. **Sigue abierta.**
 
 ## Referencias
 
