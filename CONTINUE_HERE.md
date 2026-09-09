@@ -1,6 +1,8 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-09** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida y **el del marketplace** están los dos en `pending_human_validation`. El del marketplace cerró sus **quince casillas** el 2026-09-09 en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): `task_mk_30` se cerró **en negativo** porque el operador rechazó el ADR 0167 (opción (b), con reapertura atada al cierre del plan). **NO hay ningún plan `in_progress`**: la cola está libre y el siguiente por protocolo es [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md) (`approved`). Esperan al operador: validar `human_mk_01..03` y `human_cv_01..04`, y decidir la opción (a) del ADR 0081 reabierto.
+> **Última actualización: 2026-09-09** · El plan activo es
+> [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
+> (`in_progress` desde el 2026-09-09, rama `plan/ui-reestructuracion-2026-09-09`): `task_ui_04` entregada —la foto de las 81 rutas y el mapa de pantallas, tomados ANTES de mover nada—; **la siguiente es `task_ui_01`**, partir `admin-shell.tsx`. El del marketplace cerró sus **quince casillas** y está en `pending_human_validation` (rama `plan/marketplace-mcp-2026-09-02`, PR #183 **abierto y sin mergear**): `task_mk_30` se cerró **en negativo** porque el operador rechazó el ADR 0167 (opción (b), con reapertura atada al cierre del plan). Esperan al operador: **mergear el PR #183** (la ola 3 del plan de UI reutiliza lo que entrega), validar `human_mk_01..03` y `human_cv_01..04`, y decidir la opción (a) del ADR 0081 reabierto.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -12,9 +14,32 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
-## 0. Ahora mismo (2026-09-09): el plan del marketplace, entregado; la cola, libre
+## 0. Ahora mismo (2026-09-09): arrancó la reestructuración de la UI
 
-Plan
+Plan **activo**:
+[`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
+(`in_progress` desde el 2026-09-09, rama `plan/ui-reestructuracion-2026-09-09`,
+creada sobre la cabeza de la rama del marketplace porque su contenido es el que
+tendrá `master` al mergear el PR #183 — **cuando se mergee con squash hay que
+rebasar esta rama**, es la trampa que ya conocemos).
+
+- **`task_ui_04`, entregada** (y adelantada a propósito: el plan la lista al final
+  de la ola 1, pero una guarda de conservación tomada DESPUÉS de mover pantallas
+  fija el resultado en vez de protegerlo). Dos guardas nuevas:
+  `tests/unit/test_admin_panel_routes_preserved.py` con la foto de las **81
+  rutas** del panel, y `tests/docs/test_panel_screen_map.py`, que comprueba el
+  mapa nuevo [`04-reference/mapa-de-pantallas-del-panel.md`](docs/04-reference/mapa-de-pantallas-del-panel.md)
+  en las dos direcciones (ruta sin fila y fila sin ruta). Las dos se verificaron
+  rompiéndolas a mano, no sólo viéndolas pasar.
+- **La siguiente es `task_ui_01`**: partir `admin-shell.tsx` (522 líneas, el
+  fichero más acoplado del panel) en selector de área + tres barras laterales.
+  Es la casilla que la guarda de rutas viene a vigilar.
+- **Dos preguntas abiertas que el mapa deja escritas y NO inventa**: en qué área
+  cae `/admin/settings/security` (es un ajuste personal, MFA, no del tenant) y
+  dónde vive `/admin/plans/[id]/escalated`. Las deciden `task_ui_01` y
+  `task_ui_03`/`task_ui_11`; están en §Preguntas abiertas del mapa.
+
+Y el plan que acaba de cerrarse, cuyo PR sigue abierto:
 [`remediacion-marketplace-mcp-2026-09-02`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md)
 (`status: pending_human_validation` desde el 2026-09-09; empezó el 2026-09-03 en la
 rama `plan/marketplace-mcp-2026-09-02`, PR #183). **Las quince casillas están
@@ -69,14 +94,11 @@ abajo.
   #179 y #182 con su changelog y las addenda de los ADR 0060, 0071, 0072, 0102,
   0129, 0148 y 0163— y `human_mk_01..03` del marketplace. Hasta que el operador
   los valide, ninguno de los dos pasa a `completed`.
-- **La cola, ya libre y aprobada por el operador el 2026-09-09**: no hay ningún
-  plan `in_progress`, así que por protocolo el siguiente es
-  [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
-  (`approved`, 24 días-persona: el proyecto como hub, el Sistema aparte) y detrás
+- **La cola, después del de UI**:
   [`memoria-agentes-2026-09-09`](docs/roadmap/memoria-agentes-2026-09-09.md)
-  (`approved`, 12 días-persona: memoria por capas con citas y uso). Ojo a lo que
-  el propio plan de UI pide en su cabecera: **rama nueva sobre `master` una vez
-  mergeado el PR #183**, porque su ola 3 reutiliza lo que ese PR entrega.
+  (`approved`, 12 días-persona: memoria por capas con citas y uso; su UI la pinta
+  `task_ui_31`) y `gov-01`. No pueden empezar mientras el de UI esté
+  `in_progress`: el protocolo admite uno.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
   así que un push que toque `.github/workflows/` por HTTPS se rechaza. Se
   empuja por SSH: `git push git@github.com:daycry/agent-ai-multitenant.git HEAD:refs/heads/<rama>`
@@ -248,8 +270,8 @@ subieron: son cinco semanas de planes nuevos, no un cambio de criterio).
 | `pending_human_validation` |           40           |    51    | código entregado; esperan tests humanos                                                                                                                                          |
 | `completed`                |           19           |    25    | cerradas del todo                                                                                                                                                                |
 | `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**                                                                                                                         |
-| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…`                                                                                                                  |
-| `in_progress`              |         **0**          |    0     | **ninguno**: la cola está libre para el siguiente `approved`                                                                                                                     |
+| `approved`                 |           2            |    2     | `gov-01` y `memoria-agentes-2026-09-09` (el de UI ya arrancó)                                                                                                                    |
+| `in_progress`              |           1            |    1     | `ui-reestructuracion-2026-09-09` (el protocolo, uno)                                                                                                                             |
 | `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e                                                                                                                             |
 | **Total con `plan_id`**    |         **76**         |  116\*   | \*los 116 son TODOS los `.md` con `status:`, incluidos los 23 de estados que no son de plan (`published`, `informe`, `archived`, `open`, `delivered`, `remediation_implemented`) |
 
@@ -288,10 +310,11 @@ misma propuesta vuelva dentro de tres meses sin la medición que le falta.
 
 ## Qué necesita al operador (por orden de coste)
 
-0. ~~**Decidir el ADR 0167 (a/b)**.~~ **HECHO el 2026-09-09**: (b), rechazado,
-   con la reapertura atada al cierre del plan del marketplace. Eso liberó
-   `in_progress`, así que arrancar `ui-reestructuracion-2026-09-09` ya sólo
-   depende de que lo digas (y de mergear el PR #183, que su ola 3 reutiliza).
+0. **Mergear el PR #183.** Es lo más barato y lo que más destraba: la rama del
+   plan de UI se creó sobre su cabeza (no sobre `master`), y su ola 3 reutiliza
+   lo que ese PR entrega. Con squash-merge, después hay que **rebasar**
+   `plan/ui-reestructuracion-2026-09-09`. El ADR 0167 ya está decidido —(b),
+   rechazado el 2026-09-09 con reapertura mecanizada—, así que nada más bloquea.
 1. **Validar las 40 fases en `pending_human_validation`.** Sigue siendo el cuello
    de botella real: mientras ninguna llegue a `completed`, toda fase que dependa
    de ellas lee su gate como incumplido (es la causa de fondo que mide el ADR

@@ -1,9 +1,9 @@
 ---
 plan_id: ui-reestructuracion-2026-09-09
 title: Reestructuración de la UI del panel — el proyecto como hub, el Sistema aparte, y recursos con procedencia
-status: approved
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-09-09
 completed_at: null
 estimated_duration_calendar: 5 semanas
 estimated_effort_person_days: 24
@@ -166,11 +166,24 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_04` — Guarda de rutas y mapa de pantallas
 
-- [ ] **Título**: `tests/unit/test_admin_panel_routes_preserved.py` fija el conjunto de rutas de
+- [x] **Título**: `tests/unit/test_admin_panel_routes_preserved.py` fija el conjunto de rutas de
       `app/admin/**/page.tsx` al arrancar el plan y falla si alguna desaparece; `docs/04-reference/` gana el
       mapa de pantallas por área (qué ruta, en qué área, para qué rol).
       **Test**: la propia guarda; docs guard.
       **Coste**: 0,5 d.
+      **Entregada el 2026-09-09, y PRIMERA de la ola a propósito**: el plan la lista al final, pero una
+      guarda de conservación capturada después de mover pantallas fija el resultado —incluido lo que se
+      perdiera por el camino—, así que su valor depende de tomarse antes de `task_ui_01`. Entregado:
+      `tests/unit/test_admin_panel_routes_preserved.py` con la foto de las **81 rutas** del 2026-09-09
+      (generada con su propio descubrimiento, no a mano) y el autotest que demuestra que la comparación
+      muerde; y `docs/04-reference/mapa-de-pantallas-del-panel.md` con las 81 filas (área + rol sacados de
+      `NAV_GROUPS`, no inventados) más su docs guard
+      `tests/docs/test_panel_screen_map.py`, que comprueba las **dos** direcciones: ruta sin fila y fila sin
+      ruta. Verificado quitando `/admin/office` del árbol (rojo con esa ruta), quitando su fila del mapa
+      (rojo) y añadiendo una fila inventada (rojo). El mapa deja **dos preguntas abiertas** que el plan no
+      fija y que no se inventan aquí (criterio de cierre 6): el área de `/admin/settings/security` —ajuste
+      personal, no del tenant— la decide `task_ui_01`, y la de `/admin/plans/[id]/escalated`, `task_ui_03`
+      con `task_ui_11`.
 
 ## Ola 2 — El proyecto como hub (P1 · ~7 d)
 
