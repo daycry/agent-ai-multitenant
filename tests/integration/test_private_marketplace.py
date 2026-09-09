@@ -77,6 +77,20 @@ input_schema:
   required: [target]
 """
 
+# El MISMO documento declarando `kind: mcp_server`, que es lo que publican los dos
+# tests de abajo.
+#
+# Por qué existe (2026-09-09): `task_mk_10` (ADR 0081 B/C, opción b) prohibió
+# publicar un manifiesto de tool que ejecuta código —y `_TOOL_YAML` trae
+# `implementation.runtime: python`—, así que esos dos tests pasaron a publicar
+# `kind: mcp_server`… sin cambiar el manifiesto, que seguía diciendo `kind: tool`.
+# La comprobación de coherencia manifiesto↔kind declarado es de plan-09 y los
+# rechazaba con 422. Estuvo rojo en CI dos días porque **integración no corre en
+# local**: es el modo de fallo de
+# `docs/03-guides/gotchas/cambio-de-contrato-deja-tests-rezagados.md`, y el arreglo
+# no es relajar la comprobación, es declarar lo que se publica.
+_MCP_SERVER_YAML = _TOOL_YAML.replace("kind: tool", "kind: mcp_server")
+
 # Malformed: missing the required ``version`` field -> the parser rejects it.
 _BAD_SKILL_MD = """\
 ---
@@ -276,7 +290,7 @@ async def test_publish_mcp_server_creates_private_listing(
     async with _client(configured_app) as client:
         resp = await client.post(
             "/marketplace/private/listings",
-            json={"kind": "mcp_server", "manifest": _TOOL_YAML},
+            json={"kind": "mcp_server", "manifest": _MCP_SERVER_YAML},
             headers=headers,
         )
         assert resp.status_code == 201, resp.text
@@ -319,7 +333,7 @@ async def test_browse_shows_own_private_and_global_not_other_tenants(
 
         pub_b = await client.post(
             "/marketplace/private/listings",
-            json={"kind": "mcp_server", "manifest": _TOOL_YAML},
+            json={"kind": "mcp_server", "manifest": _MCP_SERVER_YAML},
             headers={"Authorization": f"Bearer {token_b}"},
         )
         assert pub_b.status_code == 201, pub_b.text

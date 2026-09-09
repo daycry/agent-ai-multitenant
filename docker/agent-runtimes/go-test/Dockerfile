@@ -72,6 +72,24 @@ ENV GOFLAGS="-mod=mod" \
 # Entra por la base (`buildpack-deps` -> `libcurl4` -> `libssh2-1`), no por
 # nosotros; Trivy lo cazo en el PR #183 sin que este fichero hubiera cambiado.
 #
+# `linux-libc-dev` (2026-09-09): el cuarto, y el mas ruidoso de los cuatro —
+# **63 HIGH de una sola vez** (CVE-2025-22104, CVE-2025-38117 y sesenta y una
+# mas), instalado 6.1.180-1 y con fix publicado en 6.1.187-1. Son CVE del
+# KERNEL que Trivy atribuye al paquete de cabeceras porque su version mapea a
+# una version de fuentes del kernel; el contenedor no arranca ningun kernel, usa
+# el del host. Aun asi se parchea en vez de ignorarse, por dos razones: hay fix
+# publicado (o sea que es la rueda de CVE de siempre, no un falso positivo
+# estructural) y `.trivyignore` es una puerta que, una vez abierta para «las de
+# kernel», tapa tambien la que si importe. Entra por la base
+# (`buildpack-deps` -> `build-essential` -> `libc6-dev` -> `linux-libc-dev`), la
+# necesita cgo en tiempo de build, y refrescar el digest tampoco sirve: la
+# imagen upstream no se ha reconstruido desde que Debian publico el parche.
+#
+# **No verificado en local**: comprobarlo exige construir la imagen y correr
+# Trivy, y esta maquina de desarrollo no tiene ninguno de los dos (16 GB, sin
+# Trivy instalado). Lo verifica CI en el push siguiente, que es quien cazo las
+# cuatro entradas de esta lista.
+#
 # La lista crece DE UNO EN UNO a proposito. Un `apt-get -y upgrade` general
 # parchearia este y los que vengan, pero mueve todo lo demas con el, y entonces
 # el pineado por digest de la linea `FROM` deja de significar gran cosa: la base
@@ -83,7 +101,8 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends --only-upgrade \
         libaprutil1 \
         libexpat1 \
-        libssh2-1; \
+        libssh2-1 \
+        linux-libc-dev; \
     rm -rf /var/lib/apt/lists/*
 
 # go test is built in. gotestsum produces structured JSON for the
