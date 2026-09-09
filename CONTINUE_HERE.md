@@ -85,7 +85,29 @@ abajo.
   automático de un despliegue ocurra (sin ella la tarjeta dice «sin importar» y
   el botón manual basta, ADR 0166 D4); y la primera «Probar conexión» contra un
   MCP remoto **con OAuth** sigue siendo `human_mk_02`.
-- **HAY RUNS en esta máquina desde el 2026-09-09**, y es nuevo:
+- **LA APLICACIÓN ENTERA CORRE EN DOCKER en esta máquina desde el 2026-09-09
+  (tarde)**, que es el camino del producto y el que vale para validar: overlay
+  `docker/docker-compose.manuals.yml` sobre base+dev, con las cinco imágenes
+  construidas en local (`api-server:manuals`, `admin-panel:manuals`,
+  `orchestrator:manuals`, `notification-dispatcher:manuals`, `workers:ci`).
+  **Panel: http://localhost:8081/login** (API en `/api`, vía caddy; el 8080 lo
+  ocupa `MTAgentService` de MiniTool y se remapea con un override local fuera del
+  repo). Tres trampas que costaron una vuelta cada una: el volumen externo
+  `agentic-platform-agent-data` hay que crearlo una vez a mano (lo dice el propio
+  overlay); el build del panel **desde Git Bash** hornea `C:/laragon/bin/git/api`
+  en vez de `/api` (`MSYS_NO_PATHCONV=1`, y el gotcha ya no busca sólo
+  `Program Files`); y el proveedor Ollama en Docker apunta a `http://ollama:11434/v1`
+  (host interno permitido en el egress-proxy), no a `host.docker.internal`.
+  **Un run real recorrió el bucle completo bajo el aislamiento de producto** — 14
+  pasos, `qwen2.5:3b`, parada en `ask_human`— y con él queda **acreditado el
+  primer run bajo el perfil seccomp estricto**: el sandbox vivo llevaba
+  `seccomp={default-deny}`, `CapDrop=ALL`, rootfs read-only, uid 1000, y un bridge
+  por run `Internal=true` con exactamente dos peers (api-server y egress-proxy).
+  Ollama recibió las `/v1/chat/completions` desde la IP del proxy. Para no pasar
+  de 16 GB: parar `tts stt docling-serve clamav searxng` antes y levantar la app
+  **por nombre de servicio** (el `up` a secas despierta los trece).
+- **HAY RUNS también en el stack de dev desde el 2026-09-09** (para depurar, no
+  para validar):
   `scripts\dev\up.ps1 -Runs` levanta además worker (celery, seis lanes) y
   orchestrator (:8002), y la imagen `agent-runtime:v1` está construida. Un run
   real recorre el bucle entero — `perceive → recall → plan → act → observe →
