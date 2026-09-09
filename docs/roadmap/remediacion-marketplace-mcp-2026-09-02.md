@@ -376,7 +376,7 @@ bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       desplegar sin pasos imposibles); el test citado se actualiza con su motivo escrito.
       **Coste**: 0,5 d.
       _Cerrada el 2026-09-09 con la opción (a)_: `marketplace/consent.py::needs_consent(trust,
-  requested_permissions)` en los dos llamantes. Dos cosas que el mapeo añadió: (1) `finalize`
+requested_permissions)` en los dos llamantes. Dos cosas que el mapeo añadió: (1) `finalize`
       (camino asíncrono) decidía por la lista **del llamante**, no por la del listing, así que con la
       regla nueva un listing que declara permisos se habría habilitado sin consentir si el llamante no
       pedía ninguno — ahora los dos deciden por `listing.requested_permissions`; (2) cuando el listing
@@ -439,7 +439,7 @@ que alguien lo escriba en cada plan.
 
 ### `task_mk_20` — `project.integrations` (MK-05)
 
-- [ ] **Título**: nueva clave JSONB validada `integrations` en `Project`
+- [x] **Título**: nueva clave JSONB validada `integrations` en `Project`
       (`db/domain/projects.py`, migración reversible, RLS heredado de la tabla) con un esquema
       por proveedor (`schemas/projects.py`): `jira: {project_key, parent_issue_key}`,
       `confluence: {space_key, root_page_id}`, extensible; endpoint `PATCH /projects/{id}`
@@ -448,6 +448,19 @@ que alguien lo escriba en cada plan.
       **Test**: unit del esquema (claves desconocidas → 422; formato de `parent_issue_key`
       `ABC-123`); integración del PATCH; vitest del formulario.
       **Coste**: 1,5 d.
+      **Cierre (2026-09-09)**: migración `0149_project_integrations` (JSONB NOT NULL `{}`,
+      reversible; `test_migrations` verde); columna `Project.integrations`; esquema cerrado
+      por proveedor en `schemas/integrations.py` (`extra="forbid"` en todos los niveles,
+      patrones `PLAT` / `PLAT-120` / id numérico de página; `validate_integrations_payload`
+      normaliza sin `None`) enganchado a `ProjectCreateRequest`, `ProjectUpdateRequest`
+      (None = sin cambio, `{}` borra) y `ProjectResponse`. El endpoint es el `PUT
+    /projects/{id}` existente (semántica PATCH por `exclude_unset`). Panel: sección
+      «Integraciones» (`components/projects/integrations-section.tsx` + módulo puro
+      `lib/project-integrations.ts`, mismos patrones que el backend, problemas redactados
+      ES/EN antes de guardar) en la ficha del proyecto. Tests:
+      `tests/unit/test_project_integrations_schema.py`,
+      `tests/integration/test_project_integrations.py` (guardar → GET → PATCH no borra → 422
+      no toca lo guardado → `{}` borra), `integrations-section.test.tsx`.
 
 ### `task_mk_21` — El run recibe las anclas y las skills las usan (MK-05)
 

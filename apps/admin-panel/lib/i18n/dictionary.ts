@@ -4804,6 +4804,81 @@ export const dictionary = {
     diffUnchanged: { es: "No hay diferencias entre", en: "There are no differences between" },
   },
   /**
+   * «Integraciones» del proyecto (`task_mk_20`, MK-05): anclas Jira/Confluence que
+   * el run recibe en su preámbulo. Comparten namespace la sección
+   * (`components/projects/integrations-section.tsx`) y su módulo puro
+   * (`lib/project-integrations.ts`), que redacta los problemas con `translate(lang, …)`.
+   */
+  projectIntegrations: {
+    title: { es: "Integraciones", en: "Integrations" },
+    description: {
+      es:
+        "Las anclas bajo las que trabaja este proyecto en Jira y Confluence. Los agentes las " +
+        "reciben en cada run y las skills de Atlassian las usan sin que nadie las repita en " +
+        "cada plan.",
+      en:
+        "The anchors this project works under in Jira and Confluence. Agents receive them on " +
+        "every run and the Atlassian skills use them without anyone repeating them per plan.",
+    },
+    jiraHeading: { es: "Jira", en: "Jira" },
+    jiraDescription: {
+      es: "El proyecto de Jira y, si lo hay, el epic o issue padre bajo el que van las tareas.",
+      en: "The Jira project and, if any, the parent epic or issue the tasks go under.",
+    },
+    jiraProjectKeyLabel: { es: "Clave del proyecto", en: "Project key" },
+    jiraParentIssueKeyLabel: { es: "Issue padre (epic)", en: "Parent issue (epic)" },
+    jiraParentIssueKeyHelp: {
+      es: "Con el formato CLAVE-123. Vacío = las tareas se crean sueltas en el proyecto.",
+      en: "In the form KEY-123. Empty = tasks are created loose in the project.",
+    },
+    confluenceHeading: { es: "Confluence", en: "Confluence" },
+    confluenceDescription: {
+      es: "El espacio y, si la hay, la página raíz bajo la que se documenta.",
+      en: "The space and, if any, the root page documentation goes under.",
+    },
+    confluenceSpaceKeyLabel: { es: "Clave del espacio", en: "Space key" },
+    confluenceRootPageIdLabel: { es: "Página raíz (id)", en: "Root page (id)" },
+    confluenceRootPageIdHelp: {
+      es: "El número que aparece en la URL de la página (/pages/123456/). Vacío = raíz del espacio.",
+      en: "The number in the page URL (/pages/123456/). Empty = the space root.",
+    },
+    noSecretsNote: {
+      es:
+        "Aquí no van credenciales: viven en el servidor MCP de Atlassian del proyecto " +
+        "(Vault u OAuth), que se configura en «MCP servers».",
+      en:
+        "No credentials here: they live in the project's Atlassian MCP server (Vault or " +
+        "OAuth), configured under “MCP servers”.",
+    },
+    problemJiraProjectKey: {
+      es: "La clave del proyecto Jira va en mayúsculas y empieza por letra (p. ej. PLAT).",
+      en: "The Jira project key is uppercase and starts with a letter (e.g. PLAT).",
+    },
+    problemJiraParentWithoutProject: {
+      es: "Un issue padre necesita la clave del proyecto Jira.",
+      en: "A parent issue needs the Jira project key.",
+    },
+    problemJiraParentIssueKey: {
+      es: "El issue padre tiene el formato CLAVE-123 (p. ej. PLAT-120).",
+      en: "The parent issue has the form KEY-123 (e.g. PLAT-120).",
+    },
+    problemConfluenceSpaceKey: {
+      es: "La clave del espacio Confluence es alfanumérica (p. ej. ENG).",
+      en: "The Confluence space key is alphanumeric (e.g. ENG).",
+    },
+    problemConfluenceRootWithoutSpace: {
+      es: "Una página raíz necesita la clave del espacio Confluence.",
+      en: "A root page needs the Confluence space key.",
+    },
+    problemConfluenceRootPageId: {
+      es: "El id de la página raíz es numérico (el de la URL /pages/123456/).",
+      en: "The root page id is numeric (the one in the URL /pages/123456/).",
+    },
+    save: { es: "Guardar integraciones", en: "Save integrations" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saved: { es: "Integraciones guardadas.", en: "Integrations saved." },
+  },
+  /**
    * Catálogo de categorías y tipos de documento (`lib/docs-filters.ts`).
    *
    * Namespace propio y COMPARTIDO: lo consumen el panel de facetas y la lista de

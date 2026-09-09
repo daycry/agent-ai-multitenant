@@ -119,6 +119,9 @@ describe("dictionary — invariantes", () => {
       "agents.readOnlyBadge",
       // `task_mk_13`: la insignia de procedencia es el nombre propio del producto.
       "agents.capabilityFromMarketplaceBadge",
+      // `task_mk_20`: nombres propios de producto en las cabeceras de la sección.
+      "projectIntegrations.jiraHeading",
+      "projectIntegrations.confluenceHeading",
       "agents.memoryScope",
       "agents.maxConcurrent",
       "agents.deleteWarningStrong",

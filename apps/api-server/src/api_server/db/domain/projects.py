@@ -127,6 +127,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     worker_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # `task_mk_20` (MK-05): anclas de integración por proveedor —
+    # `{"jira": {project_key, parent_issue_key}, "confluence": {space_key,
+    # root_page_id}}`— validadas por `schemas/integrations.py`. `{}` = sin
+    # anclas (el preámbulo del run las omite). Sin secretos: viven en el MCP.
+    integrations: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     # Default de modelo del PROYECTO (Ola A / ADR 0055): nivel de la cadena de
     # herencia plataforma → proyecto → equipo → agente. JSONB ``{}`` = no fija
     # modelo. Distinto de ``worker_config`` (assignment_policy, etc.).
