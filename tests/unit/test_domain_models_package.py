@@ -277,6 +277,13 @@ PUBLIC_API_BEFORE_THE_SPLIT: tuple[str, ...] = (
 #: unicidad del par no se ha perdido: la sigue garantizando la PK, que es a la
 #: que ya apuntaba el mapa de conflictos de `routers/_integrity.py`.
 #:
+#: **Y `projects` otra vez el 2026-09-09**, esta vez porque GANÓ una columna:
+#: `integrations` (JSONB, `NOT NULL DEFAULT '{}'`), las anclas Jira/Confluence del
+#: proyecto que trae `task_mk_20` del plan `remediacion-marketplace-mcp-2026-09-02`
+#: con la migración `0149`. Es el caso que este fichero SÍ debe dejar pasar —una
+#: columna nueva declarada y migrada— y por eso se re-captura en vez de silenciarse:
+#: la lista de nombres crece con ella, así que una pérdida futura sigue siendo roja.
+#:
 #: Si vuelve a fallar sin que nadie haya tocado esas declaraciones a mano, es un
 #: hallazgo de verdad: el modelo se movió solo.
 DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -461,7 +468,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "projects": (
-        "12c86d26cf01198c",
+        "fe87455ee33e0330",
         (
             "allowed_commands",
             "allowed_domains",
@@ -483,6 +490,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
             "human_approval_policy",
             "human_task_review_mode",
             "id",
+            "integrations",
             "is_template",
             "mcp_servers",
             "mcp_tool_roles",
