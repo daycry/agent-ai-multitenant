@@ -80,20 +80,37 @@ cola de revisión a un clic, i18n donde faltaba.
   buscador de tenant al compartir (`GET /marketplace/shares/tenant-directory`),
   i18n de la sección de skills; la pestaña de compartir partida a `shares-tab.tsx`.
 
-### Ola 3 — condicionada a ADR
+### Ola 3 — condicionada a ADR, y el ADR salió «no»
 
-- **`task_mk_30`** — [ADR 0167](../05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
-  (`proposed`): `jira_children_of_parent` y `confluence_page_under_root` como
-  tools de plataforma que envuelven al MCP con las anclas puestas, más la
-  ingesta opcional del subárbol de Confluence. **Sólo se implementa si el
-  operador lo acepta.**
+- **`task_mk_30`, cerrada en negativo** el 2026-09-09. El
+  [ADR 0167](../05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
+  proponía `jira_children_of_parent` y `confluence_page_under_root` como tools de
+  plataforma que envuelven al MCP con las anclas puestas, más la ingesta opcional
+  del subárbol de Confluence; el operador eligió **(b) rechazar**, así que
+  **nada de eso se implementa**: el «cómo» sigue siendo del modelo, con las
+  anclas llegándole por el preámbulo de `task_mk_21`.
+
+  El motivo, escrito en el ADR, es de evidencia: los tres modos de fallo que
+  justificaban las tools se midieron **antes** de la ola 2, y los tests humanos
+  que dirían si siguen ocurriendo (`human_mk_02`, `human_mk_03`) todavía no se
+  han ejecutado. Y **no es un descarte definitivo**: el ADR lleva
+  `reopen_when: [remediacion-marketplace-mcp-2026-09-02]`, de modo que cuando
+  este plan llegue a `completed` —lo que exige esos tests humanos— la guarda
+  `test_a_fired_trigger_is_declared_and_not_silent` se pondrá roja y obligará a
+  volver a decidir con la medición delante. La guía `configurar-mcp-server.md`
+  §Trampas gana, mientras tanto, la tabla de los tres síntomas del parentesco
+  Jira y dónde se mira cada uno.
 
 ## Decisiones que esperan al operador
 
 - ADR 0081 §«Reapertura de la Fase B/C»: opción (a) —materializar
   `python_function`/`docker_command` en el sandbox— propuesta; (b) aplicada.
-- ADR 0167: aceptar o rechazar las tools de plataforma de la ola 3.
-- Tests humanos `human_mk_01..03` (plan §Tests humanos).
+- Tests humanos `human_mk_01..03` (plan §Tests humanos). Son lo único que le
+  queda al plan: las quince casillas están cerradas y el estado pasó a
+  `pending_human_validation` el 2026-09-09.
+
+Ya decidido: el **ADR 0167**, rechazado el 2026-09-09 (opción (b)) con reapertura
+atada al cierre de este plan.
 
 ## Lo que apareció al verificar el cierre (2026-09-09)
 

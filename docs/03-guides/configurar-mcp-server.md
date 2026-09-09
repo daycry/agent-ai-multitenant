@@ -321,6 +321,25 @@ Hay dos sitios, según lo que quieras:
   conectó (y qué tools registró) o por qué falló. Sin ese step, el spec
   del run no llevaba `mcp_servers` (¿proyecto sin el server declarado en
   el momento del despacho?).
+- **El parentesco Jira lo compone el MODELO, no la plataforma** (decidido el
+  2026-09-09 en el
+  [ADR 0167](../05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md),
+  opción (b)). Las anclas del proyecto —epic padre y página raíz— le llegan al
+  agente en el preámbulo del run, pero **el JQL y el campo `parent` los escribe
+  él** llamando a las tools genéricas del MCP. Hay tres formas típicas de que
+  salga mal, y las tres se revisan mirando el mismo sitio:
+
+  | Síntoma en el run                                       | Qué pasó                                                                              | Qué mirar                                                                       |
+  | ------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+  | «no hay hijos» en un epic que sí los tiene              | El JQL usó `parent = KEY` donde ese sitio indexa `"Epic Link" = KEY`, o al revés      | El step `act` con la llamada a `jira_search`: el JQL va literal en los args     |
+  | La issue se creó en el proyecto pero **fuera** del epic  | Se omitió `parent` en `jira_create_issue` (o `parent_id` en `confluence_create_page`) | Los args de esa llamada; y en Jira, el campo «Parent» de la issue creada        |
+  | El agente se queda sin iteraciones antes del trabajo     | Reintentos de descubrimiento del parentesco, uno por llamada de modelo                | El contador de iteraciones del run frente a `max_iterations` del agente         |
+
+  Cuando ocurra, **anótalo en el ADR 0167**: su reapertura está atada a este
+  plan y esa evidencia es exactamente la que decide si las dos tools de
+  plataforma (`jira_children_of_parent`, `confluence_page_under_root`) valen los
+  dos días que cuestan. El atajo mientras tanto es de prompt: decirle en la
+  descripción del plan qué forma de parentesco usa ese sitio de Jira.
 
 ---
 

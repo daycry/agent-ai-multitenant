@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-09** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace sigue `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto, todo empujado): **olas 0, 1 y 2 completas** (catorce casillas, de `task_mk_0a` a `task_mk_23`) y el changelog del plan ya escrito. **Queda una sola casilla, `task_mk_30`, y no se puede tocar sin ti**: su ADR 0167 está `proposed`. **Tres cosas esperan al operador**: decidir el ADR 0167 (a/b), decidir la opción (a) del ADR 0081 reabierto y validar `human_mk_01..03`. Detrás hay dos planes ya `approved` que el protocolo no deja empezar mientras este siga `in_progress`.
+> **Última actualización: 2026-09-09** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida y **el del marketplace** están los dos en `pending_human_validation`. El del marketplace cerró sus **quince casillas** el 2026-09-09 en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): `task_mk_30` se cerró **en negativo** porque el operador rechazó el ADR 0167 (opción (b), con reapertura atada al cierre del plan). **NO hay ningún plan `in_progress`**: la cola está libre y el siguiente por protocolo es [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md) (`approved`). Esperan al operador: validar `human_mk_01..03` y `human_cv_01..04`, y decidir la opción (a) del ADR 0081 reabierto.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -12,13 +12,14 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
-## 0. Ahora mismo (2026-09-09): el plan del marketplace, a una decisión de cerrarse
+## 0. Ahora mismo (2026-09-09): el plan del marketplace, entregado; la cola, libre
 
 Plan
 [`remediacion-marketplace-mcp-2026-09-02`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md)
-(`status: in_progress` desde el 2026-09-03, rama `plan/marketplace-mcp-2026-09-02`,
-PR #183, nada sin empujar). **Catorce de las quince casillas están `[x]`** con su
-test en verde; la que falta, `task_mk_30`, no espera código: espera una decisión.
+(`status: pending_human_validation` desde el 2026-09-09; empezó el 2026-09-03 en la
+rama `plan/marketplace-mcp-2026-09-02`, PR #183). **Las quince casillas están
+`[x]`** con su test en verde. Lo que le falta para `completed` es humano y está
+abajo.
 
 - **Olas 0, 1 y 2 entregadas**: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`),
   instalar desde el catálogo (`00`), el egress de los MCP remotos (`02`) y las
@@ -32,16 +33,19 @@ test en verde; la que falta, `task_mk_30`, no espera código: espera una decisi�
   e i18n de skills (`23`). Tarea por tarea, en el changelog del plan:
   [`07-changelog/remediacion-marketplace-mcp-2026-09-02.md`](docs/07-changelog/remediacion-marketplace-mcp-2026-09-02.md)
   (criterio de cierre 4; su `completed_at` sigue `null` a propósito).
-- **La casilla abierta es `task_mk_30`** (ola 3, P2, condicionada a ADR): el
+- **La ola 3 se cerró EN NEGATIVO, y conviene saber leerlo**: el
   [ADR 0167](docs/05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
-  está escrito y `proposed`. Propone `jira_children_of_parent` y
-  `confluence_page_under_root` como **tools de plataforma** que envuelven a las
-  del MCP de Atlassian con las anclas de `project.integrations` ya puestas, más
-  la ingesta opcional del subárbol de Confluence a la KB. **(a) aceptarlo** son
-  ~2 días de código nuevo antes de que el plan pueda cerrarse; **(b) rechazarlo**
-  cierra la casilla en negativo el mismo día y deja el «cómo» donde está hoy: el
-  modelo componiendo el JQL con las anclas del preámbulo. No se decidió por ti
-  porque estrena superficie de producto (dos builtins y un botón nuevos).
+  proponía `jira_children_of_parent` y `confluence_page_under_root` como tools de
+  plataforma, y el operador eligió **(b) rechazar** el 2026-09-09. Así que
+  `task_mk_30` está `[x]` **sin que exista ese código**: lo entregado es el ADR y
+  la nota de la guía. El motivo es de evidencia —los tres modos de fallo se
+  midieron antes de la ola 2 y `human_mk_02`/`human_mk_03` aún no han corrido—, y
+  la reapertura está **mecanizada**: el ADR lleva
+  `reopen_when: [remediacion-marketplace-mcp-2026-09-02]`, así que el día que este
+  plan pase a `completed` la guarda
+  `test_a_fired_trigger_is_declared_and_not_silent` se pondrá **roja** hasta que
+  alguien anote `reopen_triggered_on:` y vuelva a decidir. Si te encuentras ese
+  rojo, no es una regresión: es esta nota cobrando.
 - **Al desplegar esta rama**: el api-server necesita
   `API_SERVER_EGRESS_PROXY_URL` (el compose manual y el generador ya lo emiten);
   el worker tiene que arrancar con la lane `marketplace` para que el import
@@ -65,13 +69,14 @@ test en verde; la que falta, `task_mk_30`, no espera código: espera una decisi�
   #179 y #182 con su changelog y las addenda de los ADR 0060, 0071, 0072, 0102,
   0129, 0148 y 0163— y `human_mk_01..03` del marketplace. Hasta que el operador
   los valide, ninguno de los dos pasa a `completed`.
-- **La cola detrás, aprobada por el operador el 2026-09-09**:
+- **La cola, ya libre y aprobada por el operador el 2026-09-09**: no hay ningún
+  plan `in_progress`, así que por protocolo el siguiente es
   [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
-  (`approved`, 24 días-persona: el proyecto como hub, el Sistema aparte) y
+  (`approved`, 24 días-persona: el proyecto como hub, el Sistema aparte) y detrás
   [`memoria-agentes-2026-09-09`](docs/roadmap/memoria-agentes-2026-09-09.md)
-  (`approved`, 12 días-persona: memoria por capas con citas y uso). **Ninguno
-  puede pasar a `in_progress` mientras el del marketplace lo esté**: el protocolo
-  admite uno, así que cerrar `task_mk_30` es lo que abre la cola.
+  (`approved`, 12 días-persona: memoria por capas con citas y uso). Ojo a lo que
+  el propio plan de UI pide en su cabecera: **rama nueva sobre `master` una vez
+  mergeado el PR #183**, porque su ola 3 reutiliza lo que ese PR entrega.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
   así que un push que toque `.github/workflows/` por HTTPS se rechaza. Se
   empuja por SSH: `git push git@github.com:daycry/agent-ai-multitenant.git HEAD:refs/heads/<rama>`
@@ -79,9 +84,9 @@ test en verde; la que falta, `task_mk_30`, no espera código: espera una decisi�
 
 Comprobar antes de fiarse: `gh pr list`, `git log --oneline -5`,
 `./.venv/Scripts/python.exe -m pytest tests/unit -q` y
-`grep -c "\[x\]" docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md` (14 el
-2026-09-09, de 15 casillas). Las cifras de las suites, medidas hoy, están en
-§«Verificación local».
+`grep -c "\[x\]" docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md` (**15 el
+2026-09-09**, las quince, una de ellas en negativo). Las cifras de las suites,
+medidas hoy, están en §«Verificación local».
 
 **Y los tests de integración ya NO son sólo de CI en esta máquina**, que es lo que
 decía esta línea hasta hoy: con el stack de dev levantado hay Postgres en
@@ -238,14 +243,14 @@ ficheros con `plan_id`**.
 Recontado el **2026-09-09** con el script del §«Comprobar» (y por eso las cifras
 subieron: son cinco semanas de planes nuevos, no un cambio de criterio).
 
-| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                              |
-| -------------------------- | :--------------------: | :------: | --------------------------------------------------------------- |
-| `pending_human_validation` |           39           |    50    | código entregado; esperan tests humanos                         |
-| `completed`                |           19           |    25    | cerradas del todo                                               |
-| `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**        |
-| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…` |
-| `in_progress`              |           1            |    1     | `remediacion-marketplace-mcp-2026-09-02` (el protocolo, una)     |
-| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e            |
+| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                                  |
+| -------------------------- | :--------------------: | :------: | ------------------------------------------------------------------- |
+| `pending_human_validation` |           40           |    51    | código entregado; esperan tests humanos                             |
+| `completed`                |           19           |    25    | cerradas del todo                                                   |
+| `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**            |
+| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…`     |
+| `in_progress`              |         **0**          |    0     | **ninguno**: la cola está libre para el siguiente `approved`        |
+| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e                |
 | **Total con `plan_id`**    |         **76**         | 116\*    | \*los 116 son TODOS los `.md` con `status:`, incluidos los 23 de estados que no son de plan (`published`, `informe`, `archived`, `open`, `delivered`, `remediation_implemented`) |
 
 Los 11 ficheros de diferencia en `pending_human_validation` **no llevan
@@ -273,20 +278,21 @@ aparezca el número dieciocho.
 > guarda para que no crezca:
 > `test_no_new_plan_is_delivered_while_still_labelled_unstarted`.
 
-**ADR en `proposed`: uno solo**, y es el
-[0167](docs/05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
-del §0 (las tools de plataforma del árbol Jira/Confluence). El
-`0152-recall-vectorial-multitenant-hnsw`, que era el único pendiente cuando se
-escribió esto, quedó `accepted`. Comprobado el 2026-09-09 con
-`grep -l '^status: proposed' docs/05-architecture-decisions/*.md`.
+**ADR en `proposed`: ninguno.** El `0152-recall-vectorial-multitenant-hnsw` —el
+único pendiente cuando se escribió esto— quedó `accepted`, y el 0167 se decidió el
+2026-09-09 (`rejected`, opción (b), con `reopen_when:`). Comprobado ese día con
+`grep -l '^status: proposed' docs/05-architecture-decisions/*.md`, que no devuelve
+nada. **El 0167 es además el primer `rejected` del corpus**: no está borrado ni
+vacío a propósito — un rechazo con su razonamiento dentro es lo que impide que la
+misma propuesta vuelva dentro de tres meses sin la medición que le falta.
 
 ## Qué necesita al operador (por orden de coste)
 
-0. **Decidir el ADR 0167 (a/b)**, que es lo más barato de esta lista y lo que
-   destraba más: es la única casilla que le queda al plan `in_progress`, y
-   mientras ese plan no salga de `in_progress` los dos planes `approved` del
-   2026-09-09 no pueden empezar. Está en el §0 con las dos salidas escritas.
-1. **Validar las 39 fases en `pending_human_validation`.** Sigue siendo el cuello
+0. ~~**Decidir el ADR 0167 (a/b)**.~~ **HECHO el 2026-09-09**: (b), rechazado,
+   con la reapertura atada al cierre del plan del marketplace. Eso liberó
+   `in_progress`, así que arrancar `ui-reestructuracion-2026-09-09` ya sólo
+   depende de que lo digas (y de mergear el PR #183, que su ola 3 reutiliza).
+1. **Validar las 40 fases en `pending_human_validation`.** Sigue siendo el cuello
    de botella real: mientras ninguna llegue a `completed`, toda fase que dependa
    de ellas lee su gate como incumplido (es la causa de fondo que mide el ADR
    0138). Procedimiento:

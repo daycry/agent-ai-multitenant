@@ -1,7 +1,7 @@
 ---
 plan_id: remediacion-marketplace-mcp-2026-09-02
 title: Remediación del marketplace y de los MCP por proyecto — de la instalación al run, con anclas Jira/Confluence
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-09-03
 completed_at: null
@@ -528,17 +528,29 @@ que alguien lo escriba en cada plan.
       categorías bilingües). Tests: `tenant-picker.test.tsx`, casos nuevos en
       `page.test.tsx`, `i18n.test.tsx` y el e2e `marketplace-admin` adaptado al buscador.
 
-## Ola 3 — La plataforma trabaja el árbol, no el modelo (P2 · condicionada a ADR · ~2 d)
+## Ola 3 — La plataforma trabaja el árbol, no el modelo (P2 · **NO se hizo**: ADR 0167 rechazado el 2026-09-09)
 
 ### `task_mk_30` — Hijos del epic y creación bajo el padre como tools de plataforma
 
-- [ ] **Título**: hoy leer los hijos del epic y crear sub-issues o páginas bajo el padre depende
+- [x] **Título**: hoy leer los hijos del epic y crear sub-issues o páginas bajo el padre depende
       al 100 % del LLM llamando tools MCP genéricas. Proponer en un ADR dos tools de plataforma
       (`jira_children_of_parent`, `confluence_page_under_root`) que envuelvan las del MCP con
       las anclas de `project.integrations` ya puestas, más una ingesta opcional del subárbol de
       Confluence a la KB del proyecto. Sólo se implementa si el ADR se acepta.
       **Test**: los del ADR.
       **Coste**: 2 d (si se acepta).
+      **Cerrada EN NEGATIVO el 2026-09-09**: el ADR se escribió y el operador eligió la opción
+      **(b), rechazar** —
+      [ADR 0167](../05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md),
+      `status: rejected`, con `rejects: [task_mk_30]`—. Las dos tools **no se implementan**: los
+      tres modos de fallo que las justificaban se midieron ANTES de la ola 2, y los tests humanos
+      que dirían si siguen ocurriendo (`human_mk_02`, `human_mk_03`) aún no se han ejecutado. El
+      «cómo» sigue siendo del modelo, con las anclas llegándole por el preámbulo (`task_mk_21`).
+      **No es un descarte definitivo**: el ADR lleva `reopen_when:` apuntando a este plan, así que
+      el día que llegue a `completed` —o sea, cuando los tests humanos pasen— la guarda
+      `test_a_fired_trigger_is_declared_and_not_silent` se pone roja y obliga a volver a decidir
+      con la evidencia delante. Lo entregado por la casilla: el ADR y la nota de la guía
+      `configurar-mcp-server.md` §Trampas sobre el parentesco Jira.
 
 ---
 

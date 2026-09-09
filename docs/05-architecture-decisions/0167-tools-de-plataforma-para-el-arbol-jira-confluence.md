@@ -1,21 +1,30 @@
 ---
 adr_id: "0167"
-title: "Hijos del epic y creación bajo el padre como tools de plataforma (propuesta)"
-status: proposed
+title: "Hijos del epic y creación bajo el padre como tools de plataforma (rechazado, con reapertura condicionada)"
+status: rejected
 date: 2026-09-09
-authors: [claude-fable-5-1, operador]
+decided_on: 2026-09-09
+authors: [claude-fable-5-1, claude-opus-5, operador]
 plan_referenced: remediacion-marketplace-mcp-2026-09-02
+rejects: [task_mk_30]
+reopen_when: [remediacion-marketplace-mcp-2026-09-02]
 related: ["0052", "0127", "0128", "0142", "0165", "0166"]
 docs_language: es
 ---
 
 # ADR 0167 — Hijos del epic y creación bajo el padre como tools de plataforma
 
-> **Estado: `proposed`.** Lo escribe `task_mk_30` del plan
-> `remediacion-marketplace-mcp-2026-09-02` (ola 3) para que el operador decida.
-> **No se implementa nada hasta que pase a `accepted`**; si se rechaza, la ola 3
-> queda cerrada en negativo y las anclas de `project.integrations` siguen
-> haciendo su trabajo por la vía del preámbulo (`task_mk_21`).
+> **Estado: `rejected` (2026-09-09), con condición de reapertura.** Lo escribió
+> `task_mk_30` del plan `remediacion-marketplace-mcp-2026-09-02` (ola 3) para que
+> el operador decidiera, y el operador eligió la opción **(b)**: no se
+> implementan las dos tools. La ola 3 queda cerrada en negativo y el «cómo» sigue
+> siendo del modelo, con las anclas de `project.integrations` llegándole por el
+> preámbulo (`task_mk_21`). El razonamiento y la condición de reapertura, en
+> §«Decisión del operador».
+>
+> **Rechazado NO es descartado**: el diseño de abajo se conserva entero a
+> propósito, porque la reapertura está mecanizada (`reopen_when:`) y el día que
+> salte hará falta el documento, no un recuerdo de él.
 
 ## Contexto
 
@@ -45,7 +54,7 @@ JQL correcto, `jira_create_issue` con el campo `parent` bien puesto,
 Los tres son **determinables**: dadas las anclas, hay una forma correcta de
 preguntar y de crear, y no depende de la creatividad del modelo.
 
-## Decisión propuesta
+## Decisión propuesta (la que se rechazó)
 
 Añadir **dos tools de plataforma** (`builtin`, cableadas en el runtime como las
 demás familias, ADR 0049) que envuelvan a las del MCP de Atlassian del proyecto
@@ -112,15 +121,60 @@ Reglas de la propuesta:
   runtime boot (`tool_specs` + anclas → cableada); e2e humano `human_mk_02`
   ampliado con «la sub-issue aparece bajo el epic».
 
-**Si se rechaza (b):**
+**Si se rechaza (b)** — es lo que pasó, y las dos consecuencias están **hechas el
+2026-09-09**:
 
-- Se cierra `task_mk_30` en negativo con este ADR como referencia; el plan
-  queda completo con la ola 2 y las anclas en el preámbulo.
-- Se anota en la guía `configurar-mcp-server.md` §Trampas que el parentesco
-  Jira depende del modelo y cómo revisarlo.
+- ✅ `task_mk_30` cerrada en negativo con este ADR como referencia; el plan queda
+  completo con la ola 2 y las anclas en el preámbulo, y pasa a
+  `pending_human_validation`.
+- ✅ Anotado en la guía `configurar-mcp-server.md` §Trampas que el parentesco
+  Jira lo compone el modelo, con los tres síntomas y dónde se mira cada uno.
 
 ## Decisión del operador
 
-_Pendiente._ Marcar aquí **(a) aceptar** o **(b) rechazar**, con fecha, y cambiar
-`status` a `accepted` o `rejected`. Si (a), la implementación abre sus casillas
-bajo `task_mk_30` en el plan (coste estimado 2 d) o en un plan siguiente.
+**(b) Rechazar, el 2026-09-09.** No se implementan `jira_children_of_parent` ni
+`confluence_page_under_root`, ni la ingesta del subárbol.
+
+**El motivo es de evidencia, no de coste.** Los tres modos de fallo del §Contexto
+se midieron **antes** de la ola 2 de este plan, o sea antes de que las anclas de
+`project.integrations` llegaran al preámbulo del run (`task_mk_21`) y antes de que
+las cuatro skills `atlassian-*` las leyeran primero. Los dos tests humanos que
+dirían si esos fallos siguen ocurriendo —`human_mk_02` (crear una sub-issue bajo
+el epic del proyecto) y `human_mk_03` (el preámbulo con anclas y la skill
+usándolas)— **no se han ejecutado todavía**. Aceptar hoy sería construir
+determinismo contra un fallo que puede que la ola 2 ya haya mitigado: dos días de
+código y dos builtins que mantener, decididos sin la medición que los justifica.
+
+Y hay un coste de oportunidad que no es de este ADR pero pesa: mientras el plan
+siga `in_progress`, el protocolo de `CLAUDE.md` no deja empezar los dos planes que
+el operador aprobó el mismo 2026-09-09 (`ui-reestructuracion-2026-09-09`, 24
+días-persona, y `memoria-agentes-2026-09-09`).
+
+### La condición de reapertura, y por qué está en el frontmatter
+
+```yaml
+reopen_when: [remediacion-marketplace-mcp-2026-09-02]
+```
+
+La reapertura se ata al **cierre del plan**, que es el momento exacto en que
+`human_mk_02` y `human_mk_03` han pasado: un plan sólo llega a `status: completed`
+con sus tests humanos validados (§Criterios de cierre). Cuando eso ocurra,
+`tests/docs/test_adr_deferrals.py::test_a_fired_trigger_is_declared_and_not_silent`
+se pondrá **rojo** hasta que alguien anote `reopen_triggered_on: AAAA-MM-DD` y
+vuelva a mirar esta decisión con la evidencia en la mano. Si en esas dos pruebas
+el agente compone bien el parentesco, este ADR se queda rechazado y se anota; si
+se equivoca —JQL inventado, `parent` omitido, iteraciones quemadas—, hay un
+diseño completo esperando y el argumento para aceptarlo ya está medido.
+
+Está escrito así, y no en prosa, por lo que dice el propio
+`tests/docs/test_adr_deferrals.py`: un aplazamiento cuya condición vive sólo en el
+texto sobrevive a su propia condición, porque quien la cumple no sabe que la está
+cumpliendo.
+
+### Lo que sí se hace al rechazarlo
+
+1. `task_mk_30` se cierra **en negativo** en el plan, citando este ADR (lo exige
+   `tests/docs/test_adr_precedence.py` a través del `rejects:` de arriba).
+2. La guía [`configurar-mcp-server.md`](../03-guides/configurar-mcp-server.md)
+   §Trampas gana la nota de que el parentesco Jira lo compone el modelo, con qué
+   revisar cuando salga mal.
