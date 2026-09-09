@@ -85,6 +85,22 @@ abajo.
   automático de un despliegue ocurra (sin ella la tarjeta dice «sin importar» y
   el botón manual basta, ADR 0166 D4); y la primera «Probar conexión» contra un
   MCP remoto **con OAuth** sigue siendo `human_mk_02`.
+- **HAY RUNS en esta máquina desde el 2026-09-09**, y es nuevo:
+  `scripts\dev\up.ps1 -Runs` levanta además worker (celery, seis lanes) y
+  orchestrator (:8002), y la imagen `agent-runtime:v1` está construida. Un run
+  real recorre el bucle entero — `perceive → recall → plan → act → observe →
+reflect` (×2) → puerta de validación humana, 14 pasos, `qwen2.5:3b`, 6208
+  tokens—. Cuatro cosas que hacen falta y no son obvias: **(1)** el modelo tiene
+  que soportar **tool-calling** (`orca-mini` responde `does not support tools` y
+  el run muere en `plan`; `qwen2.5:3b` sí); **(2)** el `base_url` de un proveedor
+  Ollama **incluye `/v1`** (sin él, `404 page not found` dentro del run, porque
+  el cliente hace `POST {base_url}/chat/completions`); **(3)** los agentes
+  sembrados piden kind `claude_sdk`, así que para usar Ollama hay que apuntar su
+  `model_config` a un proveedor de kind `ollama`; y **(4)** el sandbox necesita
+  ruta al api-server —`up.ps1 -Runs` ata uvicorn a `0.0.0.0` y apaga
+  `WORKERS_AGENT_NETWORK_INTERNAL` por eso—. Cuando un run acabe `failed` con
+  `steps_log` vacío, el motivo está en la columna **`output`** de `executions`,
+  no en ningún log.
 - **Verificado en vivo el 2026-09-08** en esta máquina (nueva, sin Docker de la
   plataforma) con el **stack de dev** —`scripts/dev/up.ps1`: infra en Docker,
   api-server y panel en el host— y el MCP público `mcp.context7.com`: guardado

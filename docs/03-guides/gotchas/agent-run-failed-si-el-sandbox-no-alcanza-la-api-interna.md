@@ -56,6 +56,29 @@ porque el job agotaba su reloj de 45 min y GitHub lo marcaba `cancelled` — ni
 verde ni rojo. Al partirlo en cuatro shards (2026-08-19) salieron los cuatro rojos
 de golpe, la primera vez que ese job daba veredicto.
 
+## Reaparición del 2026-09-09, con otra causa y el mismo síntoma
+
+El mismo `failed` sin pasos volvió en el **stack de dev** (api-server y worker en
+el host de Windows, infra en Docker), y su causa era distinta y peor: el bridge
+POR EJECUCIÓN (`task_cv_25`) creaba la red con `internal=True` **hardcodeado**,
+ignorando `agent_network_internal`. Como los bridges por ejecución son el camino
+por defecto, esa palanca del operador **no surtía efecto en ninguna instalación
+real**. Con el api-server fuera de Docker no hay peer que conectar al bridge, así
+que el sandbox quedaba en una red sin gateway ni DNS: `host.docker.internal` no
+resolvía y `ensure_reachable()` hacía su trabajo.
+
+Arreglado en `container.py::_create_run_bridge` (`internal=self._settings.agent_network_internal`,
+default `True` sin cambios) con
+`test_the_per_run_bridge_honours_the_operator_knob`. Y una lección de
+diagnóstico: **el motivo estaba en la columna `output` de `executions`** —
+`"agent-runtime error: InternalAPIUnreachableError: … The sandbox needs a network
+route to api-server"`—, no en ningún log. Si vuelves a ver `failed` con
+`steps_log` vacío, ése es el primer sitio donde mirar:
+
+```sql
+SELECT status, abort_code, left(output, 300) FROM executions ORDER BY created_at DESC LIMIT 1;
+```
+
 ## Fix
 
 **No** se tocó `ensure_reachable`: la guarda estaba haciendo su trabajo.
