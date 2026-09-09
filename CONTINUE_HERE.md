@@ -363,25 +363,23 @@ fijar`. El ADR 0138 las deja fuera de su alcance por escrito porque
 
 ## Deuda conocida que NO bloquea el despliegue
 
-- 🔴 **El subset e2e del panel lleva semanas ROJO y CI no podía decirlo**
-  (descubierto el 2026-08-19). El job «Frontend e2e (Playwright, mocked subset)»
-  acumula **106+ tests en rojo**; cada uno agota su timeout de 30 s, así que sólo
-  en esperas se iban ~53 de los 60 minutos del job y GitHub lo marcaba
-  `cancelled` — que no es ni verde ni rojo. Un job que no termina no informa de
-  nada, y por eso nadie lo vio.
-  - **Ya arreglado**: el job falla rápido (`--max-failures=15 --timeout=15000`),
-    así que a partir de ahora da veredicto en minutos. Y una causa raíz cerrada:
-    `sidebar-complete.spec.ts` seleccionaba por nombre accesible
-    (`{ name: "Agentes" }`), que dejó de ser único el día que entró «Agentes
-    humanos» en la nav — `strict mode violation`, no un fallo de producto.
-    Ahora selecciona por `data-testid`, que es lo que esta casa usa.
-  - **Lo que queda**: los ~100 rojos restantes, sin agrupar por causa. Muestra de
-    3 specs: 5 fallos, de los que 1 era el selector de arriba. `settings-memories`
-    falla en el número de PUT y en un `data-testid` que no aparece; hay que
-    mirarlos uno a uno y separar **deuda del arnés** (selector movido, testid
-    renombrado) de **defecto real del panel**. Lo segundo NO se maquilla.
-  - Ni un `test.skip` para poner el marcador en verde: si algo no se arregla, se
-    queda rojo y se explica.
+- ~~🔴 **El subset e2e del panel lleva semanas ROJO y CI no podía decirlo**~~ —
+  **CERRADO, medido el 2026-09-09**: el job «Frontend e2e (Playwright, mocked
+  subset)» da **421 passed en 3,5 min** sobre 107 specs (run `34325423184`, job
+  `102381452781`, y otra vez en el run de la PR). Cero rojos, cero `test.skip`.
+  - El diagnóstico del 2026-08-19 era correcto y su arreglo funcionó: los ~100
+    rojos eran mayoritariamente **deuda del arnés** —selectores por nombre
+    accesible que dejaron de ser únicos, `data-testid` renombrados— y se fueron
+    cayendo con las olas de estas tres semanas. Lo que hizo visible el progreso
+    fue el `--max-failures=15 --timeout=15000`: un job que terminaba en minutos
+    en vez de agotar 60 y salir `cancelled`.
+  - **Se deja tachado y con su fecha, no borrado**, por lo mismo que la línea 9
+    de §«Qué necesita al operador»: una nota de estado que sobrevive a su causa
+    se convierte en fuente de verdad falsa. Esta llevaba tres semanas diciendo
+    «hay ~100 rojos» cuando ya no los había, y el plan de UI —que rehace los e2e
+    del tablero— se habría escrito asumiendo un arnés roto.
+  - Lo que sigue valiendo del párrafo original: **ni un `test.skip` para poner el
+    marcador en verde**. Si algo no se arregla, se queda rojo y se explica.
 
 - ~~**`routers/backup.py` importa `workers`**~~ — **cerrado el 2026-08-19**
   (prod-15 `task_gov_app_boundary_11`, hallazgo api-9 / decisión D5). Las dos
