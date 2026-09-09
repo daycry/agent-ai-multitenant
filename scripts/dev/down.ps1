@@ -7,7 +7,8 @@
 # children die with their parents.
 #
 # Usage:
-#   .\scripts\dev\down.ps1            # stops api-server + admin-panel
+#   .\scripts\dev\down.ps1            # stops api-server + admin-panel (+ worker
+#                                     #   y orchestrator si up.ps1 -Runs los dejó)
 #   .\scripts\dev\down.ps1 -Docker    # also `docker compose down` the stack
 # -----------------------------------------------------------------------------
 
@@ -24,6 +25,8 @@ Set-Location $RepoRoot
 $DevDir       = Join-Path $RepoRoot ".dev"
 $ApiPidFile   = Join-Path $DevDir "api-server.pid"
 $AdminPidFile = Join-Path $DevDir "admin-panel.pid"
+$WorkerPidFile = Join-Path $DevDir "worker.pid"
+$OrchPidFile   = Join-Path $DevDir "orchestrator.pid"
 
 function Stop-FromPidFile {
     param([string]$PidFile, [string]$Name)
@@ -48,6 +51,11 @@ function Stop-FromPidFile {
 }
 
 Stop-FromPidFile -PidFile $AdminPidFile -Name "admin-panel"
+# El orchestrator antes que el worker: si se para el worker primero, el
+# orchestrator sigue despachando a una cola que nadie drena y deja mensajes
+# huérfanos en Redis que el worker siguiente recogerá al arrancar.
+Stop-FromPidFile -PidFile $OrchPidFile  -Name "orchestrator"
+Stop-FromPidFile -PidFile $WorkerPidFile -Name "worker"
 Stop-FromPidFile -PidFile $ApiPidFile   -Name "api-server"
 
 if ($Docker) {

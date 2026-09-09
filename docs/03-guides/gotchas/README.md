@@ -321,6 +321,13 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
   el conftest construía su URL de Redis a mano y sin credencial. La aplicación,
   en cambio, funciona. Al endurecer una credencial, busca quién más la construye
   a mano.
+- [powershell-stderr-nativo-con-erroractionpreference-stop.md](./powershell-stderr-nativo-con-erroractionpreference-stop.md)
+  — con `$ErrorActionPreference = "Stop"`, el **stderr de un `.exe`** se
+  convierte en error TERMINANTE: un bucle de reintentos alrededor de
+  `celery inspect ping` (que escribe «No nodes replied» mientras el worker
+  arranca) no llega a reintentar NUNCA, y el síntoma es un script que termina
+  antes de tiempo sin decir nada — clavado a un cuelgue. Con el deadline y el
+  `--timeout` que hacen falta en Windows.
 - [joserfc-decode-no-valida-exp.md](./joserfc-decode-no-valida-exp.md)
   — `joserfc.jwt.decode` verifica la FIRMA y nada más: acepta tokens caducados
   sin un solo error (la validación de `exp` es una llamada aparte a
