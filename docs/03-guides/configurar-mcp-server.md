@@ -257,15 +257,30 @@ Configurar el server (arriba) es solo la mitad. Para que un agente llame
 una tool MCP durante un run tienen que cumplirse **tres capas**, cada una
 en su sitio:
 
-| Capa                    | Dónde se configura                                                | Qué hace                                                                                                     |
-| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Servidor** → proyecto | `/admin/projects/{id}/mcp-servers` (esta guía)                    | Declara la conexión. Al despachar un run, el orchestrator inyecta `mcp_servers` y el runtime abre la sesión. |
-| **Tools** → catálogo    | Botón **"Importar tools"** en la card del server                  | Descubre las tools del server y las materializa en el catálogo del tenant como `<server>.<tool>`.            |
-| **Tools** → agente      | `/admin/agents/{id}` → pestaña Tools (o `PUT /agents/{id}/tools`) | Solo los agentes con la tool asignada la ven: la allowlist del run es la **intersección** agente ∩ modo.     |
+| Capa                         | Dónde se configura                                                                                                                   | Qué hace                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Egress** → plataforma      | Sistema → **Ajustes por defecto → Egress MCP** (`egress.mcp_allowed_hosts`, ADR 0165)                                                | Abre el host del servidor remoto en el proxy de salida de los sandboxes. Sin esto, «Probar» y el run fallan con `EGRESS_BLOCKED`.                    |
+| **Servidor** → proyecto      | `/admin/projects/{id}/mcp-servers` (esta guía)                                                                                       | Declara la conexión. Al despachar un run, el orchestrator inyecta `mcp_servers` y el runtime abre la sesión.                                         |
+| **Tools** → catálogo y roles | La propia card del server: **Importar** (o solo, al guardar / al conectar por OAuth, ADR 0166) y la **política de roles** (ADR 0128) | Materializa las tools como `<server>.<tool>` en el catálogo del tenant y decide qué **roles** las reciben en el run. Sin política = todos los roles. |
 
-Si te saltas la tercera capa, el server conecta pero el agente **no ve**
-las tools (la allowlist las filtra). Verás el step `mcp_wire` en el visor
-del run con las tools registradas, y aun así el modelo no las tendrá.
+Las tools MCP **no se asignan por agente** (ADR 0128, fase 3): son del
+proyecto y las reparte su política de roles. La pestaña Tools de la ficha del
+agente no las ofrece, y un fork del agente tampoco se las lleva (`task_mk_13`).
+Si un agente no las ve, mira la política de roles de la card y el step
+`mcp_wire` del visor del run: ahí aparecen las tools registradas y, si el
+servidor no estaba disponible, el motivo.
+
+### La allowlist de egress (ADR 0165)
+
+Los sandboxes salen a Internet por el egress-proxy, que niega por defecto.
+Un servidor MCP remoto necesita su host **exacto** (sin comodines) en el ajuste
+de plataforma `egress.mcp_allowed_hosts`; el System Admin lo edita en
+**Sistema → Ajustes por defecto → Egress MCP**, el renderizador reescribe el
+filtro del proxy y el botón **Probar** confirma que el host ya sale. Mientras
+no esté, la card del server enseña el aviso tipado `EGRESS_BLOCKED` y el
+guardado sigue funcionando (fail-open con aviso, D11): declarar el server no
+depende de la allowlist, usarlo sí. Los hosts internos siguen prohibidos aunque
+alguien los escriba.
 
 ### Dónde indicar el prompt
 

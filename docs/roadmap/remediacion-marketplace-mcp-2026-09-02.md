@@ -454,7 +454,7 @@ que alguien lo escriba en cada plan.
       patrones `PLAT` / `PLAT-120` / id numérico de página; `validate_integrations_payload`
       normaliza sin `None`) enganchado a `ProjectCreateRequest`, `ProjectUpdateRequest`
       (None = sin cambio, `{}` borra) y `ProjectResponse`. El endpoint es el `PUT
-  /projects/{id}` existente (semántica PATCH por `exclude_unset`). Panel: sección
+/projects/{id}` existente (semántica PATCH por `exclude_unset`). Panel: sección
       «Integraciones» (`components/projects/integrations-section.tsx` + módulo puro
       `lib/project-integrations.ts`, mismos patrones que el backend, problemas redactados
       ES/EN antes de guardar) en la ficha del proyecto. Tests:
@@ -488,13 +488,24 @@ que alguien lo escriba en cada plan.
 
 ### `task_mk_22` — El catálogo distribuye MCP y la doc dice la verdad (MK-04, MK-07)
 
-- [ ] **Título**: `marketplace/seed.py` siembra listings `mcp_server` para `atlassian-remote` y
+- [x] **Título**: `marketplace/seed.py` siembra listings `mcp_server` para `atlassian-remote` y
       `github-remote` (las plantillas `stdio` quedan fuera por transporte, como en
       `routers/mcp_catalog.py:87-108`); `docs/03-guides/configurar-mcp-server.md:263-270` deja
       de pedir la asignación por agente (ADR 0128 fase 3) y documenta la allowlist de
       `task_mk_02`.
       **Test**: `test_marketplace_seed.py` (dos listings nuevos, idempotentes); docs guard.
       **Coste**: 0,5 d.
+      **Cierre (2026-09-09)**: `_OFFICIAL_MCP_SERVERS` deriva los dos listings de las
+      plantillas del catálogo MCP (`shared_mcp.catalog.ATLASSIAN_REMOTE_MCP` /
+      `GITHUB_REMOTE_MCP`: una sola fuente para URL, transporte y timeout); manifest
+      `mcp_tool` + bloque `mcp_server` + `targets` (D5) + `config_schema` (D8: vacío para
+      Atlassian —OAuth—, `auth_ref` obligatorio para GitHub). Upsert por `(source, NULL,
+    name, version)` como las skills, sin artefacto en disco, VERIFIED + PUBLISHED.
+      `test_seed_publishes_the_remote_mcp_servers` fija forma y que ninguna plantilla
+      `stdio` se publique; la idempotencia la cubre el test existente. Guía: la tabla de
+      capas gana la fila «Egress → plataforma», la tercera capa pasa de «asignar por
+      agente» a «Importar + política de roles» (ADR 0128 fase 3) y nace el apartado «La
+      allowlist de egress (ADR 0165)».
 
 ### `task_mk_23` — i18n y nombres (UI-06)
 
