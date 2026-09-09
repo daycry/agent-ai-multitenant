@@ -73,9 +73,21 @@ Windows con Git Bash.
 
 ## Cómo verificar el fix
 
+> **La ruta mangleada es la del root de TU Git, no siempre `C:/Program Files/Git`.**
+> El 2026-09-09 esta comprobación pasó **en vacío** en una máquina con Git en
+> `C:/laragon/bin/git`: el bundle llevaba horneado `"C:/laragon/bin/git/api"` y el
+> grep literal no lo veía. Busca cualquier ruta Windows delante de `/api`, y
+> hazlo sobre la IMAGEN recién construida, antes de levantar nada:
+
 ```bash
-# 1) El bundle ya NO contiene la ruta mangleada (salida vacía = bien):
-docker exec <admin-panel> sh -c 'grep -rhoE "C:/Program Files/Git/api" .next/'
+# 1) El bundle ya NO contiene una ruta Windows delante de /api (salida vacía = bien).
+#    `MSYS_NO_PATHCONV=1` también aquí: `--entrypoint sh` y el `.next/` pasan
+#    por la misma conversión.
+MSYS_NO_PATHCONV=1 docker run --rm --entrypoint sh agentic-platform/admin-panel:manuals \
+  -c 'grep -rhoE "[A-Za-z]:/[^\"]*/api\"" .next/ | sort -u'
+
+# 1-bis) Sobre un contenedor ya levantado, lo mismo:
+docker exec <admin-panel> sh -c 'grep -rhoE "[A-Za-z]:/[^\"]*/api\"" .next/'
 
 # 2) El endpoint público responde y la página de login carga los SSO providers:
 curl -s http://localhost:8080/api/auth/sso/providers   # → 200 + JSON
