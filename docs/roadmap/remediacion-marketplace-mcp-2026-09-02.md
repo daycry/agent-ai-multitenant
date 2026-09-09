@@ -454,7 +454,7 @@ que alguien lo escriba en cada plan.
       patrones `PLAT` / `PLAT-120` / id numérico de página; `validate_integrations_payload`
       normaliza sin `None`) enganchado a `ProjectCreateRequest`, `ProjectUpdateRequest`
       (None = sin cambio, `{}` borra) y `ProjectResponse`. El endpoint es el `PUT
-    /projects/{id}` existente (semántica PATCH por `exclude_unset`). Panel: sección
+  /projects/{id}` existente (semántica PATCH por `exclude_unset`). Panel: sección
       «Integraciones» (`components/projects/integrations-section.tsx` + módulo puro
       `lib/project-integrations.ts`, mismos patrones que el backend, problemas redactados
       ES/EN antes de guardar) en la ficha del proyecto. Tests:
@@ -464,7 +464,7 @@ que alguien lo escriba en cada plan.
 
 ### `task_mk_21` — El run recibe las anclas y las skills las usan (MK-05)
 
-- [ ] **Título**: `dispatch._build_common_request` añade `integrations` al request y el runtime
+- [x] **Título**: `dispatch._build_common_request` añade `integrations` al request y el runtime
       lo pliega como bloque de preámbulo junto a la persona del agente
       (`assemble_system_preamble`); las skills builtin `atlassian-*`
       (`seeds/builtin_skills.py:563-640`) se reescriben para leer el epic padre y la página
@@ -473,6 +473,18 @@ que alguien lo escriba en cada plan.
       **Test**: unit del dispatch (el request lleva `integrations`); runtime (preámbulo con
       las anclas); docs guard del seed de skills.
       **Coste**: 1 d.
+      **Cierre (2026-09-09)**: `_build_common_request` emite `request["integrations"]`
+      cuando el proyecto tiene anclas; `ExecutionRequest.integrations` (ida y vuelta por
+      `as_dict`/`from_dict`) y `_agent_spec` lo pasan al spec; el runtime gana
+      `build_integrations_preamble` (bloque «PROJECT INTEGRATION ANCHORS», una línea por
+      ancla con etiqueta humana, proveedores desconocidos en genérico, valores acotados) que
+      `assemble_system_preamble` coloca justo tras la persona y antes del estado MCP. Las
+      cuatro skills `atlassian-*` leen las anclas del preámbulo PRIMERO («mandan sobre el
+      plan») y sólo caen a la descripción del plan si faltan; el guard
+      `test_builtin_skills_atlassian.py` lo fija. Guía: «Ejemplo 3 — Atlassian completo» en
+      `configurar-mcp-server.md`. Tests: `tests/unit/test_agent_spec_integrations.py`
+      (worker + pin del dispatch), `agent-runtime/tests/test_integrations_preamble.py`
+      (orden persona → anclas → comentarios → skills; sin anclas el preámbulo no cambia).
 
 ### `task_mk_22` — El catálogo distribuye MCP y la doc dice la verdad (MK-04, MK-07)
 

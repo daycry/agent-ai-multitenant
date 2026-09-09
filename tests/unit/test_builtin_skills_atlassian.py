@@ -81,3 +81,22 @@ def test_prompt_fragments_degrade_gracefully() -> None:
             or "no está" in low
             or "no fallas" in low
         ), f"{s.slug}: no describe la degradación con gracia si Atlassian no está"
+
+
+def test_prompt_fragments_read_the_project_anchors_first() -> None:
+    """`task_mk_21` (MK-05): las cuatro skills toman los identificadores de las
+    anclas de integración del proyecto que llegan en el preámbulo del run
+    (`project.integrations`) y sólo caen a la descripción del plan si faltan.
+    Guardia contra volver a «adivinar el epic en el texto del plan»."""
+    for s in BUILTIN_SKILLS:
+        if s.category != "atlassian":
+            continue
+        low = s.prompt_fragment.lower()
+        assert "anclas de integración del proyecto" in low, (
+            f"{s.slug}: no lee las anclas de integración del proyecto"
+        )
+        assert "preámbulo" in low, f"{s.slug}: no dice que las anclas vienen en el preámbulo"
+        assert "mandan sobre" in low, f"{s.slug}: no dice que las anclas mandan sobre el plan"
+        assert "descripción" in low, (
+            f"{s.slug}: sin la caída a la descripción del plan cuando falta el ancla"
+        )

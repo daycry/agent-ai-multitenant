@@ -1807,6 +1807,13 @@ class TaskDispatcher:
         project_runtime = getattr(project, "default_runtime_template", None) if project else None
         if project_runtime:
             request["default_runtime_template"] = str(project_runtime)
+        # `task_mk_21` (MK-05): las anclas de integración del proyecto (epic padre
+        # de Jira, página raíz de Confluence) viajan al run; el runtime las pliega
+        # como bloque del preámbulo y las skills `atlassian-*` las leen de ahí en
+        # vez de adivinarlas en la descripción del plan. Vacío = sin clave.
+        project_integrations = getattr(project, "integrations", None) if project else None
+        if isinstance(project_integrations, dict) and project_integrations:
+            request["integrations"] = dict(project_integrations)
         project_mcp_servers = getattr(project, "mcp_servers", None) if project else None
         if project_mcp_servers and project is not None:
             # task_wf_12 (B-03): añade `oauth_ref` a los servidores OAuth. El

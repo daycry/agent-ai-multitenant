@@ -360,3 +360,68 @@ al humano. El sistema no se cae ni filtra credenciales.
 - **ADR del modelo de tools / MCP**:
   [docs/05-architecture-decisions/0025-mcp-tools-y-ejecutores.md](../05-architecture-decisions/0025-mcp-tools-y-ejecutores.md)
 - **Plan de fase**: `docs/roadmap/05-mcp-tools-avanzadas.md`
+
+## Ejemplo 3 — Atlassian completo: MCP remoto + anclas del proyecto
+
+Plan `remediacion-marketplace-mcp-2026-09-02` (`task_mk_21`, MK-05). Es el
+recorrido entero para que un proyecto trabaje contra **su** epic de Jira y
+**su** página raíz de Confluence sin que nadie repita los identificadores en
+cada plan.
+
+### Paso 1 · Declarar el MCP remoto de Atlassian en el proyecto
+
+En `/admin/projects/{id}/mcp-servers` → **Añadir MCP server** → plantilla
+**Atlassian (remoto, OAuth)**. Deja el nombre por defecto (`atlassian`) o el
+que prefieras: las skills no cablean el nombre, hablan de «tus herramientas de
+Jira/Confluence». Guarda.
+
+Si el host del servidor (`mcp.atlassian.com`) no está en la allowlist de
+egress de la plataforma, la tarjeta lo avisa (ADR 0165): el System Admin lo
+añade en **Plataforma → Ajustes por defecto → Egress MCP** y pulsa **Probar**.
+
+### Paso 2 · Conectar por OAuth e importar
+
+Pulsa **Conectar** en la tarjeta y completa el consentimiento de Atlassian. Al
+volver, las tools se importan **solas** (ADR 0166): la insignia pasa a «N tools
+importadas». No hay que asignarlas por agente — las MCP del proyecto las
+reparte la política de roles de la tarjeta (ADR 0128).
+
+### Paso 3 · Poner las anclas del proyecto
+
+En la ficha del proyecto, sección **Integraciones**:
+
+| Campo                          | Ejemplo    | Qué hace en el run                                       |
+| ------------------------------ | ---------- | -------------------------------------------------------- |
+| Jira · Clave del proyecto      | `PLAT`     | Acota búsquedas y creación de issues a ese proyecto      |
+| Jira · Issue padre (epic)      | `PLAT-120` | Las tareas se crean como hijas de ese epic               |
+| Confluence · Clave del espacio | `ENG`      | Acota la búsqueda y publicación de páginas a ese espacio |
+| Confluence · Página raíz (id)  | `123456`   | Las páginas se crean como hijas de esa página            |
+
+Sin secretos aquí: las credenciales viven en el MCP (OAuth del paso 2). El
+backend valida el formato (`PLAT`, `PLAT-120`, id numérico) y rechaza claves
+desconocidas con un 422.
+
+### Paso 4 · Qué recibe el run
+
+El orchestrator añade `integrations` al `ExecutionRequest`; el worker lo pasa
+al spec y el runtime lo pliega como el bloque **«PROJECT INTEGRATION
+ANCHORS»** del preámbulo, justo detrás de la persona del agente:
+
+```text
+PROJECT INTEGRATION ANCHORS. This project works under the anchors below …
+- Jira project: PLAT
+- Jira parent issue (epic): PLAT-120
+- Confluence space: ENG
+- Confluence root page id: 123456
+```
+
+Las skills builtin `atlassian-jira-task-tracking`, `atlassian-jira-review-notes`,
+`atlassian-confluence-docs` y `atlassian-jira-planning-context` leen esas
+anclas **primero** y sólo caen a la descripción del plan si falta alguna. Un
+proyecto sin anclas no lleva el bloque y las skills se comportan como antes.
+
+### Paso 5 · Verificar
+
+Lanza una tarea con un agente que tenga una skill `atlassian-*`. En el visor
+del run, el preámbulo enseña el bloque de anclas y la sub-issue aparece bajo
+`PLAT-120` (test humano `human_mk_03` del plan).
