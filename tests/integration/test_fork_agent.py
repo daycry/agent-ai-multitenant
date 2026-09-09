@@ -293,3 +293,94 @@ async def test_editing_fork_does_not_mutate_source(configured_app, migrations_pg
         assert source.status_code == 200
         assert source.json()["name"] == "Built-in PM"
         assert source.json()["system_prompt"] == "You are a project manager."
+
+
+# ---------------------------------------------------------------------------
+# task_mk_13 (MK-06): las tools MCP son del proyecto y NO viajan con el fork
+# ---------------------------------------------------------------------------
+async def _seed_source_with_tools(dsn: str, seeded: dict[str, UUID]) -> dict[str, UUID]:
+    """Un agente del tenant A con una tool HTTP propia y una tool MCP asignadas."""
+    ids = {"source": uuid4(), "http_tool": uuid4(), "mcp_tool": uuid4()}
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, model_config,"
+            " scope, project_id)"
+            " VALUES ($1, $2, 'Con tools', 'backend_dev', 'x', '{}'::jsonb,"
+            " 'global_tenant_template', NULL)",
+            ids["source"],
+            seeded["tenant_a"],
+        )
+        await conn.execute(
+            "INSERT INTO tools (id, tenant_id, name, description, category,"
+            " implementation_type, implementation_ref, security_level, is_builtin) VALUES"
+            " ($1, $3, 'acme_status', 'status', 'custom', 'http_endpoint',"
+            "  'https://acme.test/status', 'sandboxed', false),"
+            " ($2, $3, 'jira.search', 'search', 'mcp', 'mcp_tool',"
+            "  'jira.search', 'sandboxed', false)",
+            ids["http_tool"],
+            ids["mcp_tool"],
+            seeded["tenant_a"],
+        )
+        await conn.execute(
+            "INSERT INTO agent_tools (agent_id, tool_id) VALUES ($1, $2), ($1, $3)",
+            ids["source"],
+            ids["http_tool"],
+            ids["mcp_tool"],
+        )
+    finally:
+        await conn.close()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_fork_leaves_mcp_tools_behind_and_says_so(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """La tool HTTP viaja con el fork; la MCP se queda y la respuesta la nombra."""
+    seeded = await _seed(migrations_pg_dsn)
+    ids = await _seed_source_with_tools(migrations_pg_dsn, seeded)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/agents/{ids['source']}/fork",
+            json={"project_id": str(seeded["project_a"])},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mcp_tools_not_copied"] == ["jira.search"]
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT t.name FROM agent_tools at JOIN tools t ON t.id = at.tool_id"
+            " WHERE at.agent_id = $1 ORDER BY t.name",
+            UUID(body["id"]),
+        )
+    finally:
+        await conn.close()
+    assert [r["name"] for r in rows] == ["acme_status"], (
+        "la concesión MCP viajó con el fork (o la HTTP no lo hizo)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fork_without_mcp_tools_reports_an_empty_list(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/agents/{seeded['builtin_agent']}/fork",
+            json={"project_id": str(seeded["project_a"])},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["mcp_tools_not_copied"] == []

@@ -112,7 +112,7 @@ const SECTION_MAX_LINES = 500;
  *   que nadie dijera por qué, que es exactamente lo que esta guarda impide.
  */
 const SECTION_ALLOWLIST = {
-  "app/admin/agents/[id]/agent-tools-section.tsx": 693,
+  "app/admin/agents/[id]/agent-tools-section.tsx": 592,
 };
 
 /**

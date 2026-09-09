@@ -11,6 +11,7 @@ reexporta, así que renombrarlo aquí sería un cambio de API encubierto.
 
 from __future__ import annotations
 
+from typing import Any, Final
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -18,10 +19,56 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal
-from api_server.db.domain import Agent, AgentScope, AgentSkill, AgentTool, Team, TeamMember
+from api_server.db.domain import (
+    Agent,
+    AgentScope,
+    AgentSkill,
+    AgentTool,
+    Skill,
+    Team,
+    TeamMember,
+    Tool,
+)
 from api_server.db.knowledge import AgentKnowledgeBase
+from api_server.db.marketplace import MarketplaceListing
 from api_server.routers._helpers import get_writable_or_404
 from api_server.schemas.agents import AgentCapabilitiesDiff
+
+# El `implementation_type` de las tools importadas de un servidor MCP (ADR 0052).
+MCP_TOOL_IMPLEMENTATION_TYPE: Final = "mcp_tool"
+
+
+async def marketplace_provenance(
+    session: AsyncSession, rows: list[Tool] | list[Skill]
+) -> dict[UUID, dict[str, Any]]:
+    """`{row.id: {source_installation_id, source_listing_name, source_version}}`.
+
+    `task_mk_13` (UI-04): la ficha del agente enseña de dónde viene cada
+    capacidad. Las columnas de procedencia (ADR 0100) llevan el `listing_id`;
+    el NOMBRE del listing se resuelve aquí en UNA consulta para todas las filas,
+    porque es lo que un humano reconoce (nadie recuerda un UUID de listing).
+    Las filas nativas del tenant reciben las tres claves a ``None``.
+    """
+    listing_ids = {row.source_listing_id for row in rows if row.source_listing_id is not None}
+    names: dict[UUID, str] = {}
+    if listing_ids:
+        found = await session.execute(
+            select(MarketplaceListing.id, MarketplaceListing.name).where(
+                MarketplaceListing.id.in_(listing_ids)
+            )
+        )
+        for listing_id, listing_name in found.all():
+            names[listing_id] = listing_name
+    return {
+        row.id: {
+            "source_installation_id": row.source_installation_id,
+            "source_listing_name": (
+                names.get(row.source_listing_id) if row.source_listing_id is not None else None
+            ),
+            "source_version": row.source_version,
+        }
+        for row in rows
+    }
 
 
 async def _teams_by_agent(
@@ -97,8 +144,10 @@ async def _clone_agent_capabilities(
     fork_id: UUID,
     tenant_id: UUID,
     granted_by: UUID | None,
-) -> None:
+) -> list[str]:
     """Clona KBs/tools/skills del agente origen al fork (Plan 06.17 task_06_17_12).
+
+    Devuelve los nombres de las tools MCP que NO se copiaron (`task_mk_13`).
 
     Idempotencia no aplica: el fork es una fila recién creada sin junctions
     previas. Solo se copian las filas que RLS hace visibles al que forkea, de
@@ -121,10 +170,24 @@ async def _clone_agent_capabilities(
         )
 
     # HACER — tools asignadas, preservando el config_override por agente.
+    #
+    # `task_mk_13` (MK-06): las tools MCP (`<server>.<tool>`, ADR 0052) NO
+    # viajan con el agente. Son del PROYECTO: sólo funcionan donde el proyecto
+    # declara ese servidor y la política de roles (ADR 0128) las reparte. Copiar
+    # la fila `agent_tools` a un fork que aterriza en otro proyecto dejaría una
+    # concesión muerta que el runtime no puede honrar. Se omiten y se devuelven
+    # sus nombres para que la respuesta del fork lo diga en vez de callarlo.
     tool_rows = await session.execute(
-        select(AgentTool.tool_id, AgentTool.config_override).where(AgentTool.agent_id == source_id)
+        select(AgentTool.tool_id, AgentTool.config_override, Tool.name, Tool.implementation_type)
+        .join(Tool, Tool.id == AgentTool.tool_id)
+        .where(AgentTool.agent_id == source_id)
+        .order_by(Tool.name)
     )
-    for tool_id, config_override in tool_rows.all():
+    mcp_tools_not_copied: list[str] = []
+    for tool_id, config_override, tool_name, implementation_type in tool_rows.all():
+        if implementation_type == MCP_TOOL_IMPLEMENTATION_TYPE:
+            mcp_tools_not_copied.append(tool_name)
+            continue
         session.add(
             AgentTool(
                 agent_id=fork_id,
@@ -149,6 +212,7 @@ async def _clone_agent_capabilities(
         )
 
     await session.flush()
+    return mcp_tools_not_copied
 
 
 async def _agent_capability_ids(

@@ -15,6 +15,7 @@ import {
   Brain,
   Briefcase,
   ChevronDown,
+  ClipboardCheck,
   Coins,
   Cpu,
   DatabaseBackup,
@@ -204,6 +205,15 @@ export const NAV_GROUPS: NavGroup[] = [
       // producto para dar de alta a alguien nuevo. Sin entrada en el menú, la
       // pantalla existiría y nadie la encontraría.
       { href: "/admin/invitations", labelKey: "invitations", Icon: Ticket, systemAdminOnly: true },
+      // `task_mk_13` (UI-05): la cola de revisión del marketplace (ADR 0142 D6) es
+      // del System Admin. Sin entrada aquí, publicar dejaba el listing en
+      // `pending` y nadie sabía dónde se aprobaba.
+      {
+        href: "/admin/marketplace/review",
+        labelKey: "marketplaceReview",
+        Icon: ClipboardCheck,
+        systemAdminOnly: true,
+      },
       { href: "/admin/llm-providers", labelKey: "llmProviders", Icon: Cpu, systemAdminOnly: true },
       {
         href: "/admin/ollama",

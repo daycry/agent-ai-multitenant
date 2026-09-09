@@ -411,6 +411,19 @@ class SetAgentToolsRequest(BaseModel):
         return self
 
 
+class AgentForkResponse(AgentResponse):
+    """La respuesta de ``POST /agents/{id}/fork``: el agente creado MÁS lo que
+    el fork no pudo llevarse.
+
+    `task_mk_13` (MK-06): las tools MCP son del proyecto (ADR 0052/0128) y no
+    viajan con el agente. En vez de copiarlas y que mueran en silencio en el
+    proyecto destino, el fork las omite y las nombra aquí para que la UI lo
+    diga. Vacía = el fork se llevó todas sus tools.
+    """
+
+    mcp_tools_not_copied: list[str] = Field(default_factory=list)
+
+
 class AgentToolResponse(BaseModel):
     """One assigned Tool, projected to what the assignment UI needs.
 
@@ -429,6 +442,13 @@ class AgentToolResponse(BaseModel):
     security_level: str
     is_builtin: bool
     config_override: dict[str, Any] | None = None
+    # `task_mk_13` (UI-04): procedencia del marketplace (ADR 0100). ``None`` en
+    # las tres = fila nativa del tenant; pobladas = materializada desde una
+    # instalación, con el nombre del listing y la versión instalada para que la
+    # ficha del agente diga DE DÓNDE viene la capacidad, no sólo que la tiene.
+    source_installation_id: UUID | None = None
+    source_listing_name: str | None = None
+    source_version: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +499,10 @@ class AgentSkillResponse(BaseModel):
     description: str | None = None
     prompt_fragment: str
     is_builtin: bool
+    # `task_mk_13` (UI-04): procedencia del marketplace — ver AgentToolResponse.
+    source_installation_id: UUID | None = None
+    source_listing_name: str | None = None
+    source_version: str | None = None
 
 
 def to_agent_response(a: Agent, teams: list[tuple[UUID, str]] | None = None) -> AgentResponse:

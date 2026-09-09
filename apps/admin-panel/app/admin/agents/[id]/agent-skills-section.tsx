@@ -28,6 +28,7 @@ import {
   Microscope,
   Search,
   Server,
+  Store,
   Ticket,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { apiFetch } from "@/lib/api";
+import { type CapabilityProvenance, provenanceIndex } from "@/lib/agents/capability-provenance";
 import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
@@ -62,6 +64,10 @@ interface AgentSkillRow {
   description: string | null;
   prompt_fragment: string;
   is_builtin: boolean;
+  // `task_mk_13` (UI-04): procedencia del marketplace (ADR 0100); null = nativa.
+  source_installation_id?: string | null;
+  source_listing_name?: string | null;
+  source_version?: string | null;
 }
 
 interface AgentSkillsSectionProps {
@@ -134,6 +140,10 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
 
   const assignedIds = useMemo(
     () => (assignedQuery.data ?? []).map((r) => r.skill_id).sort(),
+    [assignedQuery.data],
+  );
+  const provenanceById = useMemo(
+    () => provenanceIndex(assignedQuery.data, (r) => r.skill_id),
     [assignedQuery.data],
   );
 
@@ -295,6 +305,7 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
               canEdit={canEdit}
               onToggle={toggle}
               onToggleMany={toggleMany}
+              provenance={provenanceById}
               emptyMessage={
                 q
                   ? "Ninguna skill coincide con la búsqueda."
@@ -317,6 +328,7 @@ function GroupedSkillList({
   canEdit,
   onToggle,
   onToggleMany,
+  provenance,
   emptyMessage,
 }: {
   skills: CatalogSkill[];
@@ -324,6 +336,7 @@ function GroupedSkillList({
   canEdit: boolean;
   onToggle: (skillId: string) => void;
   onToggleMany: (skillIds: string[], on: boolean) => void;
+  provenance: Map<string, CapabilityProvenance>;
   emptyMessage: string;
 }) {
   const groups = useMemo(() => {
@@ -385,6 +398,7 @@ function GroupedSkillList({
                   checked={selected.has(skill.id)}
                   canEdit={canEdit}
                   onToggle={onToggle}
+                  provenance={provenance.get(skill.id) ?? null}
                 />
               ))}
             </ul>
@@ -400,12 +414,15 @@ function SkillRow({
   checked,
   canEdit,
   onToggle,
+  provenance,
 }: {
   skill: CatalogSkill;
   checked: boolean;
   canEdit: boolean;
   onToggle: (skillId: string) => void;
+  provenance: CapabilityProvenance | null;
 }) {
+  const t = useT("agents");
   const inputId = `agent-skill-${skill.id}`;
   return (
     <li
@@ -432,6 +449,17 @@ function SkillRow({
           <Badge variant={skill.is_builtin ? "info" : "muted"}>
             {skill.is_builtin ? "Catálogo" : "Custom"}
           </Badge>
+          {provenance && (
+            <Badge
+              variant="info"
+              className="gap-1"
+              title={t("capabilityFromMarketplaceTooltip", provenance)}
+              data-testid={`agent-skill-provenance-badge-${skill.id}`}
+            >
+              <Store aria-hidden="true" className="h-3 w-3" />
+              {t("capabilityFromMarketplaceBadge")} · {provenance.listing} v{provenance.version}
+            </Badge>
+          )}
         </div>
         {skill.description && (
           <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{skill.description}</p>

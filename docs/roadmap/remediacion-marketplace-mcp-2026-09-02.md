@@ -376,7 +376,7 @@ bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       desplegar sin pasos imposibles); el test citado se actualiza con su motivo escrito.
       **Coste**: 0,5 d.
       _Cerrada el 2026-09-09 con la opción (a)_: `marketplace/consent.py::needs_consent(trust,
-    requested_permissions)` en los dos llamantes. Dos cosas que el mapeo añadió: (1) `finalize`
+  requested_permissions)` en los dos llamantes. Dos cosas que el mapeo añadió: (1) `finalize`
       (camino asíncrono) decidía por la lista **del llamante**, no por la del listing, así que con la
       regla nueva un listing que declara permisos se habría habilitado sin consentir si el llamante no
       pedía ninguno — ahora los dos deciden por `listing.requested_permissions`; (2) cuando el listing
@@ -388,16 +388,29 @@ bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
 
 ### `task_mk_12` — Un test que llama la tool de verdad (MK-08, UI-07)
 
-- [ ] **Título**: `tests/integration/test_marketplace_v2_chain.py` gana un tramo que despacha
+- [x] **Título**: `tests/integration/test_marketplace_v2_chain.py` gana un tramo que despacha
       la tarea con `ScriptedModelClient` y comprueba que la tool desplegada **se invoca** en el
       run (spec con `tool_specs` + paso `act` con esa tool); Playwright gana `mcp-import-tools`
       y `agent-skills-assign` (subset mockeado).
       **Test**: los propios.
       **Coste**: 1 d.
+      **Cierre (2026-09-09)**: `test_deployed_tool_is_invoked_in_the_run` instala y despliega
+      el listing `tool` por HTTP, siembra una tarea `ready` preasignada al agente QA (modelo
+      `scripted` que decide `act status_checker`), la despacha con el `TaskDispatcher` REAL y
+      lee del broker el `request` que recibiría el worker: `tool_specs` lleva
+      `status_checker` como `http_endpoint` con su `url_template`. Con ese spec,
+      `agent_runtime.run_task` produce UN paso `act` con `tool == "status_checker"` cuyo
+      resultado es `domain not allowed` — el mensaje sólo lo emite el executor
+      `http_endpoint`, así que prueba que la tool desplegada llegó cableada a la llamada (ni
+      «unknown tool» ni «not allowed»). Playwright: `e2e/mcp-import-tools.spec.ts` (importar
+      todo sin `tool_names`, insignia «N tools importadas», `TOO_MANY_TOOLS` en humano) y
+      `e2e/agent-skills-assign.spec.ts` (agrupación, pre-marcado, PUT declarativo, buscador,
+      sólo lectura). Verificados en local contra el panel sin backend (6/6) igual que el
+      subset de CI.
 
 ### `task_mk_13` — Procedencia, cola de revisión y fork (UI-04, UI-05, MK-06)
 
-- [ ] **Título**: el sidebar (`components/layout/admin-shell.tsx:190`, `system_admin`) y la
+- [x] **Título**: el sidebar (`components/layout/admin-shell.tsx:190`, `system_admin`) y la
       cabecera del marketplace enlazan `/admin/marketplace/review`; `agent-tools-section.tsx` y
       `agent-skills-section.tsx` muestran listing y versión cuando la fila viene del
       marketplace (`source_installation_id`); `agent-fork-dialog.tsx` avisa de que las tools
@@ -405,6 +418,19 @@ bool(requested_permissions)` en sus dos llamantes (`marketplace/finalize.py:80`,
       registra en la respuesta del fork).
       **Test**: vitest de las tres pantallas; e2e de la cola de revisión.
       **Coste**: 1 d.
+      **Cierre (2026-09-09)**: API — `AgentToolResponse`/`AgentSkillResponse` ganan
+      `source_installation_id`, `source_listing_name`, `source_version` (resueltos en una
+      consulta por `marketplace_provenance`, `routers/agents/common.py`); el fork deja de
+      copiar las filas `agent_tools` de tipo `mcp_tool` (son del proyecto, ADR 0052/0128) y
+      responde `AgentForkResponse.mcp_tools_not_copied` con sus nombres
+      (`test_fork_leaves_mcp_tools_behind_and_says_so`,
+      `test_assigned_tool_carries_marketplace_provenance`). UI — entrada «Revisión del
+      marketplace» en el grupo Plataforma del sidebar y botón «Cola de revisión» en la
+      cabecera del marketplace (sólo System Admin); insignia «Marketplace · listing vX» en
+      las filas de tools y skills (`lib/agents/capability-provenance.ts`; `ToolRow` partida a
+      `agent-tool-row.tsx` para no crecer la deuda de tamaño); aviso en el diálogo de fork.
+      Tests: vitest de tools/skills/fork/marketplace; `e2e/marketplace-review.spec.ts`
+      (cabecera → cola → aprobar → cola vacía; entrada del sidebar).
 
 ## Ola 2 — Anclas de integración por proyecto (P1 · ~3,5 d)
 

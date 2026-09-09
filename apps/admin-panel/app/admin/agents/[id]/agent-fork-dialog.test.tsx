@@ -197,3 +197,12 @@ describe("colisión de nombre (409)", () => {
     expect(shown.textContent).toBe(translate("es", "errors", "server"));
   });
 });
+
+// task_mk_13 (MK-06): las tools MCP son del proyecto y NO viajan con la copia.
+describe("aviso sobre las tools MCP", () => {
+  it("dice, antes de crear la copia, que las tools MCP no viajan con ella", async () => {
+    renderDialog();
+    const notice = await screen.findByTestId("fork-agent-mcp-notice");
+    expect(notice.textContent).toBe(translate("es", "agents", "forkMcpNotice"));
+  });
+});

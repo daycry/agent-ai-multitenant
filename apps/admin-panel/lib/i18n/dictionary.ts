@@ -181,6 +181,7 @@ export const dictionary = {
     evalQuality: { es: "Calidad (Evals)", en: "Quality (Evals)" },
     tenantStats: { es: "Estadísticas", en: "Statistics" },
     marketplace: { es: "Marketplace", en: "Marketplace" },
+    marketplaceReview: { es: "Revisión del marketplace", en: "Marketplace review" },
     settings: { es: "Settings", en: "Settings" },
 
     // --- grupo Plataforma ---
@@ -955,6 +956,16 @@ export const dictionary = {
       es: "el conocimiento, las tools y las skills del original y es independiente: editarla no afecta al agente de origen.",
       en: "the original's knowledge, tools and skills, and it is independent: editing it does not affect the source agent.",
     },
+    // `task_mk_13` (MK-06): las tools MCP son del proyecto (ADR 0052/0128) y el
+    // fork no se las lleva; la API las nombra en `mcp_tools_not_copied`.
+    forkMcpNotice: {
+      es: "Las tools MCP no viajan con la copia: son del proyecto y las reparte su política de roles. La copia usará las del proyecto destino.",
+      en: "MCP tools do not travel with the copy: they belong to the project and its role policy hands them out. The copy will use the target project's.",
+    },
+    forkMcpSkipped: {
+      es: "Copia creada sin estas tools MCP: {tools}",
+      en: "Copy created without these MCP tools: {tools}",
+    },
     forkNameLabel: { es: "Nombre de la copia", en: "Name of the copy" },
     // Las dos plantillas de la sugerencia de `lib/agents/fork-name.ts`. La
     // numerada existe porque hay un índice único (tenant, proyecto, nombre)
@@ -1070,6 +1081,16 @@ export const dictionary = {
     },
     toolNotWiredAria: { es: "No ejecutable en runtime", en: "Not runtime-wired" },
     toolNotWiredBadge: { es: "No ejecutable", en: "Not wired" },
+    // `task_mk_13` (UI-04): de dónde viene una capacidad materializada (ADR 0100).
+    capabilityFromMarketplaceBadge: { es: "Marketplace", en: "Marketplace" },
+    capabilityFromMarketplaceTooltip: {
+      es: "Instalada desde el marketplace: {listing} v{version}",
+      en: "Installed from the marketplace: {listing} v{version}",
+    },
+    capabilityFromMarketplaceAria: {
+      es: "Del marketplace: {listing} v{version}",
+      en: "From the marketplace: {listing} v{version}",
+    },
 
     // --- sección "Skills del agente" (`agent-skills-section.tsx`) ---
     skillsSearchPlaceholder: {
@@ -4819,6 +4840,7 @@ export const dictionary = {
       en: "Browse the catalog, manage what is installed, your private listings and what is shared across tenants.",
     },
     privateLink: { es: "Privadas", en: "Private" },
+    reviewLink: { es: "Cola de revisión", en: "Review queue" },
     publish: { es: "Publicar", en: "Publish" },
     tabCatalog: { es: "Catálogo", en: "Catalog" },
     tabInstalled: { es: "Instaladas", en: "Installed" },

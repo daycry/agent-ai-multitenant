@@ -52,7 +52,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+import { Ban, ClipboardCheck, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
 
 import { CatalogInstallButton } from "./catalog-install";
 import {
@@ -189,6 +189,14 @@ export default function MarketplaceAdminPage() {
                 {t("privateLink")}
               </Link>
             </Button>
+            <RoleGuard min="system_admin">
+              <Button asChild variant="outline" size="sm" data-testid="marketplace-review-link">
+                <Link href="/admin/marketplace/review">
+                  <ClipboardCheck className="mr-1 h-3.5 w-3.5" />
+                  {t("reviewLink")}
+                </Link>
+              </Button>
+            </RoleGuard>
             <RoleGuard min="tenant_admin">
               <Button asChild size="sm" data-testid="marketplace-publish-cta">
                 <Link href="/admin/marketplace/private">

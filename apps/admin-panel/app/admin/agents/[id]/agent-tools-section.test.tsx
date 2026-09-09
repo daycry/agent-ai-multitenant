@@ -124,3 +124,56 @@ describe("AgentToolsSection — MCP no asignable por-agente (ADR 0128)", () => {
     expect(screen.getByTestId("agent-tools-tab-basic").textContent).toContain("(1)");
   });
 });
+
+// ---------------------------------------------------------------------------
+// task_mk_13 (UI-04): la fila dice DE DÓNDE viene una tool del marketplace
+// ---------------------------------------------------------------------------
+describe("AgentToolsSection — procedencia del marketplace (task_mk_13)", () => {
+  it("shows listing + version on a materialised tool and nothing on a native one", async () => {
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === "/tools?limit=500") return Promise.resolve(CATALOG);
+      if (path === "/agents/agent-1/tools")
+        return Promise.resolve([
+          {
+            tool_id: "c1",
+            name: "my_webhook",
+            description: "Llama a un webhook",
+            category: "custom",
+            implementation_type: "http_endpoint",
+            security_level: "safe",
+            is_builtin: false,
+            config_override: null,
+            source_installation_id: "inst-1",
+            source_listing_name: "acme-checker",
+            source_version: "1.3.0",
+          },
+          {
+            tool_id: "b1",
+            name: "read_file",
+            description: "Lee un fichero",
+            category: "file",
+            implementation_type: "builtin",
+            security_level: "safe",
+            is_builtin: true,
+            config_override: null,
+            source_installation_id: null,
+            source_listing_name: null,
+            source_version: null,
+          },
+        ]);
+      return Promise.resolve([]);
+    });
+    mount();
+    await waitFor(() => expect(screen.getByTestId("agent-tools-tab-advanced")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("agent-tools-tab-advanced"));
+
+    const badge = await screen.findByTestId("agent-tool-provenance-badge-c1");
+    expect(badge.textContent).toContain("Marketplace");
+    expect(badge.textContent).toContain("acme-checker");
+    expect(badge.textContent).toContain("v1.3.0");
+
+    fireEvent.click(screen.getByTestId("agent-tools-tab-basic"));
+    await waitFor(() => expect(screen.getByTestId("agent-tool-row-b1")).toBeTruthy());
+    expect(screen.queryByTestId("agent-tool-provenance-badge-b1")).toBeNull();
+  });
+});

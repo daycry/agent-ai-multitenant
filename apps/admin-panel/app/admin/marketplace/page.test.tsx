@@ -451,3 +451,24 @@ describe("la pestaña Instaladas y los tipos diferidos", () => {
     expect(screen.queryByTestId("installed-deferred-inst-row")).toBeNull();
   });
 });
+
+// task_mk_13 (UI-05): la cola de revisión (ADR 0142 D6) es del System Admin y
+// tiene que encontrarse desde la cabecera del marketplace, no sólo por URL.
+describe("el enlace a la cola de revisión", () => {
+  it("lo ve el System Admin", async () => {
+    usuario.isSystemAdmin = true;
+    try {
+      montar();
+      const link = await screen.findByTestId("marketplace-review-link");
+      expect(link.getAttribute("href")).toBe("/admin/marketplace/review");
+    } finally {
+      usuario.isSystemAdmin = false;
+    }
+  });
+
+  it("un tenant admin no lo ve: la cola no es suya", async () => {
+    montar();
+    await screen.findByTestId("marketplace-admin-header");
+    expect(screen.queryByTestId("marketplace-review-link")).toBeNull();
+  });
+});

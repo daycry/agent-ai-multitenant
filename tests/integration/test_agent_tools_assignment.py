@@ -554,3 +554,83 @@ async def test_cannot_assign_foreign_tenant_custom_tool(
             f"/agents/{seed['local_agent']}/tools", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.json() == []
+
+
+# ---------------------------------------------------------------------------
+# task_mk_13 (UI-04): la fila dice DE DÓNDE viene cuando la trajo el marketplace
+# ---------------------------------------------------------------------------
+async def _seed_marketplace_tool(dsn: str, seed: dict[str, UUID]) -> dict[str, UUID]:
+    ids = {"source": uuid4(), "listing": uuid4(), "installation": uuid4(), "tool": uuid4()}
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO marketplace_sources (id, name, source_type, is_trusted)"
+            " VALUES ($1,$2,'official',true)",
+            ids["source"],
+            f"oficial-prov-{ids['source'].hex[:8]}",
+        )
+        await conn.execute(
+            "INSERT INTO marketplace_listings"
+            " (id, source_id, tenant_id, kind, name, version, trust_level, manifest,"
+            "  requested_permissions)"
+            " VALUES ($1,$2,NULL,'tool','status-checker','1.4.0','verified',"
+            " '{\"implementation_type\":\"http_endpoint\"}'::jsonb,'[]'::jsonb)",
+            ids["listing"],
+            ids["source"],
+        )
+        await conn.execute(
+            "INSERT INTO marketplace_installations"
+            " (id, tenant_id, listing_id, version, status, installed_by)"
+            " VALUES ($1,$2,$3,'1.4.0','enabled',$4)",
+            ids["installation"],
+            seed["tenant"],
+            ids["listing"],
+            seed["admin_user"],
+        )
+        await conn.execute(
+            "INSERT INTO tools (id, tenant_id, name, description, category,"
+            " implementation_type, implementation_ref, security_level, is_builtin,"
+            " source_listing_id, source_installation_id, source_version)"
+            " VALUES ($1,$2,'status_checker','status','custom','http_endpoint',"
+            " 'https://status.test/api','sandboxed',false,$3,$4,'1.4.0')",
+            ids["tool"],
+            seed["tenant"],
+            ids["listing"],
+            ids["installation"],
+        )
+    finally:
+        await conn.close()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_assigned_tool_carries_marketplace_provenance(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Una tool materializada desde el marketplace vuelve con listing y versión;
+    una nativa vuelve con las tres claves a null (no «ausentes»)."""
+    seed = await _seed(migrations_pg_dsn)
+    mk = await _seed_marketplace_tool(migrations_pg_dsn, seed)
+    headers = {"Authorization": f"Bearer {await _mint(seed['admin_user'], seed['tenant'])}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        put = await client.put(
+            f"/agents/{seed['local_agent']}/tools",
+            json={"tools": [{"tool_id": str(mk["tool"])}, {"tool_id": str(seed["custom_tool"])}]},
+            headers=headers,
+        )
+        assert put.status_code == 200, put.text
+        got = await client.get(f"/agents/{seed['local_agent']}/tools", headers=headers)
+        assert got.status_code == 200, got.text
+
+    for body in (put.json(), got.json()):
+        rows = {row["name"]: row for row in body}
+        assert rows["status_checker"]["source_installation_id"] == str(mk["installation"])
+        assert rows["status_checker"]["source_listing_name"] == "status-checker"
+        assert rows["status_checker"]["source_version"] == "1.4.0"
+        native = rows["acme_deploy"]
+        assert native["source_installation_id"] is None
+        assert native["source_listing_name"] is None
+        assert native["source_version"] is None

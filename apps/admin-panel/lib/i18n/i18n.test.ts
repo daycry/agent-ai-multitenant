@@ -117,6 +117,8 @@ describe("dictionary — invariantes", () => {
       "agents.promptEsLabel",
       "agents.promptEnLabel",
       "agents.readOnlyBadge",
+      // `task_mk_13`: la insignia de procedencia es el nombre propio del producto.
+      "agents.capabilityFromMarketplaceBadge",
       "agents.memoryScope",
       "agents.maxConcurrent",
       "agents.deleteWarningStrong",
