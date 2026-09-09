@@ -509,3 +509,165 @@ async def test_skill_chain_gives_the_targeted_agent_the_skill(
 
     _, skills_final = await _agent_capabilities(migrations_pg_dsn)
     assert skills_final == []
+
+
+# ===========================================================================
+# task_mk_12 — la tool desplegada SE INVOCA en el run
+# ===========================================================================
+_SCRIPTED_QA_MODEL = {
+    "kind": "scripted",
+    "decisions": [
+        {"kind": "act", "tool": "status_checker", "tool_args": {}},
+        {"kind": "finish", "output": "done"},
+    ],
+    "reviews": [{"passed": True}],
+}
+
+
+async def _install_and_deploy_tool(client: AsyncClient, ids: dict[str, UUID], headers: dict) -> str:
+    install = await client.post(
+        "/marketplace/installations",
+        json={"listing_id": str(ids["listing_tool"])},
+        headers=headers,
+    )
+    assert install.status_code == 201, install.text
+    deployed = await client.post(
+        f"/marketplace/installations/{install.json()['id']}/deployments",
+        json={
+            "project_id": str(ids["project"]),
+            "config": {"base_url": "https://app-de-este-proyecto.test"},
+        },
+        headers=headers,
+    )
+    assert deployed.status_code == 201, deployed.text
+    return str(deployed.json()["deployment"]["id"])
+
+
+async def _seed_ready_task_for(dsn: str, ids: dict[str, UUID]) -> UUID:
+    """Una tarea `ready` preasignada al agente QA, que a su vez habla con el
+    modelo scripted: así el despacho es determinista y el run también."""
+    task_id = uuid4()
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "UPDATE agents SET model_config = $2::jsonb, agent_type = 'ai' WHERE id = $1",
+            ids["agent_qa"],
+            json.dumps(_SCRIPTED_QA_MODEL),
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, title, description, status,"
+            " priority, assigned_agent_id)"
+            " VALUES ($1,$2,$3,'Comprueba el estado','usa la tool desplegada','ready',"
+            " 'medium',$4)",
+            task_id,
+            ids["tenant"],
+            ids["project"],
+            ids["agent_qa"],
+        )
+    finally:
+        await conn.close()
+    return task_id
+
+
+async def _dispatch_and_drain(
+    admin_database_url: str, ids: dict[str, UUID], task_id: UUID
+) -> dict[str, Any]:
+    """Despacha la tarea con el orquestador REAL y devuelve el `request` que
+    el worker recibiría por Celery (leído del broker, sin worker)."""
+    import base64
+
+    from orchestrator.config import Settings as OrchestratorSettings
+    from orchestrator.dispatch import TaskDispatcher
+    from orchestrator.events import EVENT_TASK_STATUS_CHANGED, TaskEvent
+    from redis.asyncio import Redis
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from workers.celery_app import build_celery_app
+    from workers.config import Settings as WorkerSettings
+
+    from ._redis_url import TEST_REDIS_URL
+
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    try:
+        await redis.delete("default")
+        dispatcher = TaskDispatcher(
+            sessionmaker=async_sessionmaker(engine, expire_on_commit=False),
+            celery_app=build_celery_app(
+                WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+            ),
+            settings=OrchestratorSettings(redis_url=TEST_REDIS_URL),
+        )
+        await dispatcher.handle(
+            TaskEvent(
+                stream_id="1-0",
+                type=EVENT_TASK_STATUS_CHANGED,
+                tenant_id=str(ids["tenant"]),
+                project_id=str(ids["project"]),
+                task_id=str(task_id),
+                occurred_at="2026-09-09T00:00:00+00:00",
+                payload={"old_status": "backlog", "new_status": "ready"},
+            )
+        )
+        raw = await redis.lrange("default", 0, -1)
+        assert len(raw) == 1, f"el despacho no encoló exactamente un run: {len(raw)}"
+        _args, kwargs, _embed = json.loads(base64.b64decode(json.loads(raw[0])["body"]))
+        return dict(kwargs["request"])
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_deployed_tool_is_invoked_in_the_run(
+    configured_app: Any,
+    migrations_pg_dsn: str,
+    admin_database_url: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`task_mk_12`: instalar → desplegar → despachar → el run LLAMA a la tool.
+
+    Los tres tramos anteriores prueban que el agente «la tiene» (fila en
+    `agent_tools`). Este cierra la promesa del ADR 0142 §1 de punta a punta:
+    el despacho serializa la tool desplegada en `tool_specs` con su executor
+    real (`http_endpoint` + `url_template`), y el runtime, arrancado con ese
+    spec y un modelo scripted que decide llamarla, la ejecuta con el executor
+    HTTP — no la rechaza como «unknown tool» ni como «not allowed».
+
+    La llamada HTTP no sale: el runtime valida el destino contra
+    `allowed_domains` (vacío en este spec) y devuelve `domain not allowed`. Eso
+    es EXACTAMENTE lo que se quiere afirmar: el mensaje sólo lo produce el
+    executor `http_endpoint`, así que prueba que la tool desplegada llegó
+    cableada a la llamada.
+    """
+    from agent_runtime.__main__ import run_task
+    from workers.execution import ExecutionRequest, _agent_spec
+
+    ids = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _mint(ids['admin'], ids['tenant'])}"}
+    async with _client(configured_app) as client:
+        await _install_and_deploy_tool(client, ids, headers)
+    task_id = await _seed_ready_task_for(migrations_pg_dsn, ids)
+
+    request = await _dispatch_and_drain(admin_database_url, ids, task_id)
+
+    # 1. El despacho lleva la tool desplegada con su executor y su URL.
+    assert request["agent_id"] == str(ids["agent_qa"])
+    specs = {spec["name"]: spec for spec in request["tool_specs"]}
+    assert "status_checker" in specs, sorted(specs)
+    assert specs["status_checker"]["implementation_type"] == "http_endpoint"
+    assert specs["status_checker"]["config"]["url_template"] == "https://status.example.test/api"
+    assert "status_checker" in request["allowed_tools"]
+
+    # 2. El runtime, con ese spec, ejecuta la tool en el paso `act`.
+    spec = _agent_spec(ExecutionRequest.from_dict(request), None)
+    assert run_task(spec) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    acts = [
+        e["step"] for e in events if e.get("event") == "step" and e["step"].get("node") == "act"
+    ]
+    assert len(acts) == 1, acts
+    assert acts[0]["tool"] == "status_checker", acts[0]
+    result = acts[0]["result"]
+    assert result["ok"] is False
+    assert str(result.get("error", "")).startswith("domain not allowed"), result
