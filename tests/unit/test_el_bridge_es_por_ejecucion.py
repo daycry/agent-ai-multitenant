@@ -168,6 +168,39 @@ def test_each_run_gets_its_own_internal_bridge_with_only_its_peers() -> None:
     assert connected["agentic-platform-docling-1"] == ["docling"]
 
 
+def test_the_per_run_bridge_honours_the_operator_knob() -> None:
+    """`agent_network_internal` decide TAMBIÉN el bridge por ejecución.
+
+    Encontrado el 2026-09-09 depurando por qué ningún run avanzaba en el stack de
+    dev: `ensure_network()` respeta el ajuste (`container.py`, rama de la red
+    compartida) y `_create_run_bridge` lo tenía **hardcodeado a `True`**. O sea
+    que en el camino POR DEFECTO —`agent_network_per_execution=True`— la palanca
+    documentada del operador no hacía absolutamente nada, y el síntoma no se
+    parecía a su causa: el sandbox nacía sin gateway ni DNS, `ensure_reachable()`
+    del runtime no resolvía `host.docker.internal`, el contenedor moría ANTES de
+    su primer paso y la ejecución quedaba `failed` con `steps_log` vacío,
+    `abort_code` nulo y ni una línea de error en el log del worker.
+
+    El default NO cambia: sigue siendo `True`, que es el aislamiento del
+    principio rector 2. Lo que cambia es que apagarlo a propósito ahora surta
+    efecto — un ajuste que se ignora es peor que no tenerlo, porque quien lo pone
+    cree haber cambiado algo.
+    """
+    # Por defecto, interna: el aislamiento no depende de recordar el flag.
+    por_defecto = _FakeDocker(_peers())
+    AgentContainerRunner(_settings(), client=por_defecto).run(_spec(), timeout=5)
+    assert por_defecto.networks_created[0].kwargs.get("internal") is True
+
+    # Y con la palanca apagada, NO interna.
+    abierta = _FakeDocker(_peers())
+    AgentContainerRunner(_settings(agent_network_internal=False), client=abierta).run(
+        _spec(), timeout=5
+    )
+    assert abierta.networks_created[0].kwargs.get("internal") is False, (
+        "el bridge por ejecución ignora `agent_network_internal`"
+    )
+
+
 def test_the_bridge_is_torn_down_after_the_run_even_if_remove_fails() -> None:
     docker = _FakeDocker(_peers())
     runner = AgentContainerRunner(_settings(), client=docker)

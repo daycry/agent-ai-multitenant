@@ -208,13 +208,28 @@ class AgentContainerRunner:
     # ---- `task_cv_25`: un bridge interno por ejecución -----------------------
 
     def _create_run_bridge(self, spec: ContainerSpec) -> Any:
-        """Bridge `internal` de UN run (patrón de `test_runtime._create_bridge`)."""
+        """Bridge de UN run (patrón de `test_runtime._create_bridge`).
+
+        `internal` sale de `agent_network_internal`, igual que en la red
+        compartida de `ensure_network()`. El default es `True` —el aislamiento
+        del principio rector 2— y ahí no se toca nada.
+
+        Estaba **hardcodeado a `True`** hasta el 2026-09-09, y como este es el
+        camino POR DEFECTO (`agent_network_per_execution=True`), la palanca
+        documentada del operador no surtía efecto en ninguna instalación real:
+        sólo la habría notado quien apagara los bridges por ejecución. Un ajuste
+        que se ignora es peor que no tenerlo, porque quien lo pone cree haber
+        cambiado algo — y el síntoma quedaba lejísimos de la causa (el sandbox
+        sin gateway ni DNS, el runtime muriendo en `ensure_reachable()` antes de
+        su primer paso, y una ejecución `failed` con `steps_log` vacío,
+        `abort_code` nulo y ni una línea de error en el worker).
+        """
         execution_id = spec.labels.get("com.agentic-platform.execution-id") or "run"
         name = f"agent-run-{str(execution_id)[:12]}-{secrets.token_hex(3)}"
         return self.client.networks.create(
             name,
             driver="bridge",
-            internal=True,
+            internal=self._settings.agent_network_internal,
             options={"com.docker.network.bridge.enable_icc": "true"},
             labels={**_BASE_LABELS, _RUN_BRIDGE_LABEL: "true"},
         )
