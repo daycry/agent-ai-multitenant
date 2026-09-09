@@ -580,3 +580,55 @@ async def test_cannot_share_or_revoke_across_ownership(
             headers={"Authorization": f"Bearer {token_b}"},
         )
         assert cross_revoke.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# task_mk_23 (UI-06): nombres junto a los UUID, y el directorio de tenants
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_shares_carry_names_and_the_tenant_directory_finds_targets(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    admin_a = await _mint_token(ids["admin_a"], ids["tenant_a"])
+    member_a = await _mint_token(ids["member_a"], ids["tenant_a"])
+    headers_a = {"Authorization": f"Bearer {admin_a}"}
+
+    async with _client(configured_app) as client:
+        listing_id = await _publish_private_skill(client, admin_a)
+        created = await client.post(
+            "/marketplace/shares",
+            json={"listing_id": listing_id, "target_tenant_id": str(ids["tenant_b"])},
+            headers=headers_a,
+        )
+        assert created.status_code == 201, created.text
+
+        # La lista trae el nombre del listing y el del tenant destino.
+        listed = await client.get("/marketplace/shares", headers=headers_a)
+        assert listed.status_code == 200, listed.text
+        (share,) = listed.json()
+        assert share["listing_id"] == listing_id
+        assert share["listing_name"], "la lista no resolvió el nombre del listing"
+        assert share["target_tenant_name"] == "Tenant B"
+
+        # El directorio: los demás tenants activos, nunca el propio.
+        found = await client.get(
+            "/marketplace/shares/tenant-directory", params={"q": "tenant"}, headers=headers_a
+        )
+        assert found.status_code == 200, found.text
+        names = {row["name"] for row in found.json()}
+        assert {"Tenant B", "Tenant C"} <= names
+        assert "Tenant A" not in names
+        assert all(set(row) == {"id", "name", "slug"} for row in found.json())
+
+        # Mínimo dos caracteres, y sólo tenant_admin.
+        short = await client.get(
+            "/marketplace/shares/tenant-directory", params={"q": "b"}, headers=headers_a
+        )
+        assert short.status_code == 422, short.text
+        forbidden = await client.get(
+            "/marketplace/shares/tenant-directory",
+            params={"q": "tenant"},
+            headers={"Authorization": f"Bearer {member_a}"},
+        )
+        assert forbidden.status_code == 403, forbidden.text

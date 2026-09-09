@@ -85,6 +85,8 @@ const INSTALACION = {
   id: "inst-1",
   tenant_id: "tenant-1",
   listing_id: "listing-1",
+  listing_name: "acme-checker",
+  listing_kind: "tool",
   project_id: null,
   version: "1.2.0",
   status: "enabled",
@@ -129,6 +131,7 @@ const CHECK_AL_DIA = {
 interface Escenario {
   listings?: unknown[];
   installations?: unknown[];
+  shares?: unknown[];
   check?: unknown;
   /** Respuesta del POST de instalación (o rechazo, para los caminos de error). */
   onInstall?: (body: unknown) => Promise<unknown>;
@@ -137,6 +140,7 @@ interface Escenario {
 function montar({
   listings = [LISTING],
   installations = [INSTALACION],
+  shares = [],
   check,
   onInstall,
 }: Escenario = {}) {
@@ -150,7 +154,7 @@ function montar({
     if (url.includes("update-check")) return Promise.resolve(check ?? CHECK_AL_DIA);
     if (url.startsWith("/marketplace/installations")) return Promise.resolve(installations);
     if (url.startsWith("/marketplace/listings")) return Promise.resolve(listings);
-    if (url.startsWith("/marketplace/shares")) return Promise.resolve([]);
+    if (url.startsWith("/marketplace/shares")) return Promise.resolve(shares);
     return Promise.resolve([]);
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -470,5 +474,56 @@ describe("el enlace a la cola de revisión", () => {
     montar();
     await screen.findByTestId("marketplace-admin-header");
     expect(screen.queryByTestId("marketplace-review-link")).toBeNull();
+  });
+});
+
+// task_mk_23 (UI-06): nombres en vez de UUIDs en «Instaladas» y en los shares.
+describe("nombres en vez de UUIDs", () => {
+  it("la instalación enseña el nombre del listing (el UUID queda en el title)", async () => {
+    montar();
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const name = await screen.findByTestId("installed-listing-name-inst-1");
+    expect(name.textContent).toBe("acme-checker");
+    expect(name.getAttribute("title")).toBe("listing-1");
+  });
+
+  it("sin nombre resuelto cae al UUID, nunca a un hueco", async () => {
+    montar({ installations: [{ ...INSTALACION, listing_name: null }] });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const name = await screen.findByTestId("installed-listing-name-inst-1");
+    expect(name.textContent).toBe("listing-1");
+  });
+
+  it("el share enseña el listing y el tenant destino por su nombre", async () => {
+    montar({
+      shares: [
+        {
+          id: "share-1",
+          listing_id: "listing-2",
+          owner_tenant_id: "tenant-1",
+          target_tenant_id: "22222222-0000-0000-0000-000000000002",
+          granted_by: null,
+          revoked_at: null,
+          revoked_by: null,
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+          listing_name: "informe-interno",
+          target_tenant_name: "Tenant B",
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    expect((await screen.findByTestId("share-listing-name-share-1")).textContent).toBe(
+      "informe-interno",
+    );
+    expect(screen.getByTestId("share-target-name-share-1").textContent).toContain("Tenant B");
+    expect(screen.getByTestId("share-target-name-share-1").textContent).not.toContain("22222222");
+  });
+
+  it("el diálogo de compartir busca el tenant en vez de pedir su UUID", async () => {
+    montar();
+    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    await screen.findByTestId("share-target-input");
+    expect(screen.queryByPlaceholderText("00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 });

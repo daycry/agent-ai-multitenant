@@ -122,6 +122,8 @@ describe("dictionary — invariantes", () => {
       // `task_mk_20`: nombres propios de producto en las cabeceras de la sección.
       "projectIntegrations.jiraHeading",
       "projectIntegrations.confluenceHeading",
+      // `task_mk_23`: «Listing» es el término del producto en ambos idiomas.
+      "marketplace.shareCardListing",
       "agents.memoryScope",
       "agents.maxConcurrent",
       "agents.deleteWarningStrong",

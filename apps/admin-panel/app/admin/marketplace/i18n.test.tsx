@@ -202,7 +202,7 @@ describe("marketplace en inglés", () => {
       "Sharing is opt-in and explicit",
     );
     expect(screen.getByText("Private listing")).toBeDefined();
-    expect(screen.getByText("Target tenant (UUID)")).toBeDefined();
+    expect(screen.getByText("Target tenant")).toBeDefined();
     expect(screen.getByTestId("share-submit").textContent).toBe("Share");
     expect(screen.getByText("Active grants created by your tenant")).toBeDefined();
     const empty = await screen.findByTestId("shares-empty");

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +24,11 @@ from api_server.auth.deps import (
 from api_server.db.marketplace import (
     MarketplaceAuditAction,
     MarketplaceAuditEntry,
+    MarketplaceListing,
     MarketplaceShare,
 )
+from api_server.db.models import Organization
+from api_server.db.session import get_admin_sessionmaker
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import (
     apply_pagination,
@@ -39,6 +42,7 @@ from api_server.routers.marketplace.common import (
 from api_server.schemas.marketplace import (
     MarketplaceShareResponse,
     ShareCreateRequest,
+    TenantDirectoryEntry,
     to_share_response,
 )
 
@@ -172,8 +176,97 @@ async def list_shares(
         )
     stmt = stmt.order_by(MarketplaceShare.created_at, MarketplaceShare.id)
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
-    result = await session.execute(stmt)
-    return [to_share_response(s) for s in result.scalars().all()]
+    shares = list((await session.execute(stmt)).scalars().all())
+    # `task_mk_23` (UI-06): nombres junto a los UUID. Los listings son los PROPIOS
+    # del tenant (RLS los deja ver); los nombres de los tenants destino NO —
+    # `organizations` sólo enseña la fila propia—, así que se resuelven con la
+    # sesión admin, acotada a los ids que ya están en los grants del llamante.
+    listing_names: dict[UUID, str] = {}
+    if shares:
+        found = await session.execute(
+            select(MarketplaceListing.id, MarketplaceListing.name).where(
+                MarketplaceListing.id.in_({s.listing_id for s in shares})
+            )
+        )
+        for listing_id, listing_name in found.all():
+            listing_names[listing_id] = listing_name
+    tenant_names = await _tenant_names({s.target_tenant_id for s in shares})
+    return [
+        to_share_response(
+            s,
+            listing_name=listing_names.get(s.listing_id),
+            target_tenant_name=tenant_names.get(s.target_tenant_id),
+        )
+        for s in shares
+    ]
+
+
+async def _tenant_names(tenant_ids: set[UUID]) -> dict[UUID, str]:
+    """`{tenant_id: name}` de los tenants pedidos, leído con la sesión BYPASSRLS.
+
+    Sólo lectura y sólo para ids que el llamante ya conoce (están en SUS grants):
+    no enumera nada que no tuviera ya en pantalla como UUID.
+    """
+    if not tenant_ids:
+        return {}
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        rows = await admin_session.execute(
+            select(Organization.id, Organization.name).where(Organization.id.in_(tenant_ids))
+        )
+        names: dict[UUID, str] = {}
+        for tenant_id, name in rows.all():
+            names[tenant_id] = name
+        return names
+
+
+# ===========================================================================
+# GET /marketplace/shares/tenant-directory — a quién se puede compartir
+# ===========================================================================
+TENANT_DIRECTORY_LIMIT = 20
+
+
+@router.get("/shares/tenant-directory", response_model=list[TenantDirectoryEntry])
+async def tenant_directory(
+    q: str = Query(
+        min_length=2,
+        max_length=64,
+        description="Fragmento del nombre o del slug del tenant (mínimo 2 caracteres).",
+    ),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+) -> list[TenantDirectoryEntry]:
+    """Los tenants ACTIVOS cuyo nombre o slug contiene ``q``, sin el propio.
+
+    `task_mk_23` (UI-06): compartir pedía teclear el UUID del tenant destino, que
+    nadie tiene a mano. Este directorio existe para el buscador del diálogo de
+    compartir y está acotado a lo que ese diálogo necesita: `tenant_admin`, un
+    fragmento de al menos dos caracteres, veinte resultados como mucho, sólo
+    id/nombre/slug. Sustituye la regla anterior de «no revelar qué tenants
+    existen» del POST —que sigue sin revelar nada distinto en su 409—: en una
+    plataforma departamental (no SaaS masivo) el nombre de un departamento no es
+    un secreto, y el operador pidió el buscador en el plan.
+
+    Lee `organizations` con la sesión BYPASSRLS porque RLS sólo enseña la fila
+    propia; el resto de la petición no toca la base.
+    """
+    own = require_tenant_id(principal)
+    needle = f"%{q.strip()}%"
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        rows = await admin_session.execute(
+            select(Organization.id, Organization.name, Organization.slug)
+            .where(
+                Organization.id != own,
+                Organization.is_active.is_(True),
+                or_(Organization.name.ilike(needle), Organization.slug.ilike(needle)),
+            )
+            .order_by(Organization.name, Organization.id)
+            .limit(TENANT_DIRECTORY_LIMIT)
+        )
+        return [
+            TenantDirectoryEntry(id=tenant_id, name=name, slug=slug)
+            for tenant_id, name, slug in rows.all()
+        ]
 
 
 # ===========================================================================

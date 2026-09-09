@@ -169,6 +169,10 @@ class MarketplaceInstallationResponse(BaseModel):
     # autorizada y no produce nada). `None` cuando el endpoint no cargó el listing.
     capability: str | None = None
     capability_reason: str | None = None
+    # `task_mk_23` (UI-06): el nombre y el tipo del listing, para que la pestaña
+    # «Instaladas» no enseñe un UUID. `None` cuando el endpoint no cargó el listing.
+    listing_name: str | None = None
+    listing_kind: str | None = None
 
 
 def to_installation_response(
@@ -180,6 +184,8 @@ def to_installation_response(
     return MarketplaceInstallationResponse(
         capability=capability.kind if capability else None,
         capability_reason=capability.reason if capability else None,
+        listing_name=listing.name if listing is not None else None,
+        listing_kind=listing.kind if listing is not None else None,
         id=installation.id,
         tenant_id=installation.tenant_id,
         listing_id=installation.listing_id,
@@ -428,10 +434,36 @@ class MarketplaceShareResponse(BaseModel):
     revoked_by: UUID | None
     created_at: datetime
     updated_at: datetime
+    # `task_mk_23` (UI-06): nombres humanos junto a los UUID. `None` cuando el
+    # endpoint no los resolvió (el POST devuelve la fila recién creada; la
+    # lista los trae).
+    listing_name: str | None = None
+    target_tenant_name: str | None = None
 
 
-def to_share_response(share: MarketplaceShare) -> MarketplaceShareResponse:
+class TenantDirectoryEntry(BaseModel):
+    """Un tenant al que se puede compartir (`GET /marketplace/shares/tenant-directory`).
+
+    Sólo id, nombre y slug: lo justo para elegirlo en el diálogo de compartir sin
+    teclear un UUID. Nunca el propio tenant del que busca.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    name: str
+    slug: str
+
+
+def to_share_response(
+    share: MarketplaceShare,
+    *,
+    listing_name: str | None = None,
+    target_tenant_name: str | None = None,
+) -> MarketplaceShareResponse:
     return MarketplaceShareResponse(
+        listing_name=listing_name,
+        target_tenant_name=target_tenant_name,
         id=share.id,
         listing_id=share.listing_id,
         owner_tenant_id=share.owner_tenant_id,

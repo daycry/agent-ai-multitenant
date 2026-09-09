@@ -1093,6 +1093,23 @@ export const dictionary = {
     },
 
     // --- sección "Skills del agente" (`agent-skills-section.tsx`) ---
+    // task_mk_23 (UI-06): la sección de skills pasa por el diccionario.
+    skillsSave: { es: "Guardar", en: "Save" },
+    skillsSaving: { es: "Guardando…", en: "Saving…" },
+    skillsLoadError: {
+      es: "No se pudieron cargar las skills: {error}.",
+      en: "The skills could not be loaded: {error}.",
+    },
+    skillsEmptySearch: {
+      es: "Ninguna skill coincide con la búsqueda.",
+      en: "No skill matches the search.",
+    },
+    skillsEmptyCatalog: {
+      es: "No hay skills en el catálogo. Crea una en /skills.",
+      en: "There are no skills in the catalog. Create one under /skills.",
+    },
+    skillsBadgeCatalog: { es: "Catálogo", en: "Catalog" },
+    skillsBadgeCustom: { es: "Personalizada", en: "Custom" },
     skillsSearchPlaceholder: {
       es: "Buscar skill por nombre, descripción o categoría…",
       en: "Search skills by name, description or category…",
@@ -4975,7 +4992,28 @@ export const dictionary = {
       en: "You have no private listings to share. Publish one in",
     },
     shareNoPrivateLink: { es: "Marketplace privado", en: "Private marketplace" },
-    shareTargetLabel: { es: "Tenant destino (UUID)", en: "Target tenant (UUID)" },
+    shareTargetLabel: { es: "Tenant destino", en: "Target tenant" },
+    // task_mk_23 (UI-06): buscador de tenant (`components/marketplace/tenant-picker.tsx`).
+    shareTargetSearchPlaceholder: {
+      es: "Busca el tenant por nombre…",
+      en: "Search the tenant by name…",
+    },
+    shareTargetSearchHint: {
+      es: "Escribe al menos dos letras del nombre o del identificador del tenant.",
+      en: "Type at least two letters of the tenant's name or identifier.",
+    },
+    shareTargetSearching: { es: "Buscando…", en: "Searching…" },
+    shareTargetSearchError: {
+      es: "No se pudo consultar el directorio de tenants.",
+      en: "The tenant directory could not be queried.",
+    },
+    shareTargetNoMatches: {
+      es: "Ningún tenant coincide. Solo aparecen tenants activos distintos del tuyo.",
+      en: "No tenant matches. Only active tenants other than yours are listed.",
+    },
+    shareTargetClear: { es: "Cambiar tenant", en: "Change tenant" },
+    shareCardListing: { es: "Listing", en: "Listing" },
+    shareCardTarget: { es: "Compartido con", en: "Shared with" },
     shareSubmit: { es: "Compartir", en: "Share" },
     shareSubmitting: { es: "Compartiendo…", en: "Sharing…" },
     sharesTitle: {

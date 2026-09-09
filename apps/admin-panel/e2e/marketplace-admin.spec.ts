@@ -356,12 +356,25 @@ test("shares tab creates an explicit cross-tenant share grant", async ({ page })
     });
   });
 
+  // task_mk_23 (UI-06): el tenant destino se ELIGE en el buscador, no se teclea su UUID.
+  await page.route("http://localhost:8001/marketplace/shares/tenant-directory**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        { id: TARGET_TENANT_ID, name: "Tenant Destino", slug: "tenant-destino" },
+      ]),
+    }),
+  );
+
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
   await page.getByTestId("marketplace-tab-shares").click();
 
   await expect(page.getByTestId("share-create-card")).toBeVisible();
   await page.getByTestId("share-listing-select").selectOption(PRIVATE_ID);
-  await page.getByTestId("share-target-input").fill(TARGET_TENANT_ID);
+  await page.getByTestId("share-target-input").fill("destino");
+  await page.getByTestId("share-target-option-tenant-destino").click();
+  await expect(page.getByTestId("share-target-selected")).toContainText("Tenant Destino");
   await page.getByTestId("share-submit").click();
 
   await expect.poll(() => posted.listing_id).toBe(PRIVATE_ID);
