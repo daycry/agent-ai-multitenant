@@ -100,7 +100,7 @@ const SECTION_MAX_LINES = 500;
  *   siguiente que lea esta lista: una entrada bien argumentada tampoco es
  *   permanente — merece que alguien vuelva a mirarla con el corte en la mano.
  *
- * · `agent-tools-section.tsx` (693) sigue igual: el mismo caso del tramo #9,
+ * · `agent-tools-section.tsx` (587) sigue igual: el mismo caso del tramo #9,
  *   pendiente de una pasada propia. Es ya la ÚNICA entrada, así que el día que
  *   caiga esta lista queda vacía y `--strict` deja de tener a quién perdonar.
  *
@@ -110,9 +110,16 @@ const SECTION_MAX_LINES = 500;
  *   Pagar dos líneas de tamaño por dejar de filtrar un traceback a la cara del
  *   operador es un cambio bueno; lo que no valdría es que el número subiera sin
  *   que nadie dijera por qué, que es exactamente lo que esta guarda impide.
+ *
+ *   Y BAJÓ a 587 el 2026-09-09: `task_mk_13` sacó `ToolRow` a su propio fichero
+ *   para pagar con troceo la insignia de procedencia del marketplace, dejó
+ *   anotadas 592 y el aviso de la guarda —«587 < 592, baja el número»— se quedó
+ *   sin atender. La concesión se aprieta hasta el tamaño real: cinco líneas de
+ *   holgura son cinco líneas que vuelven a colarse sin que nadie las vea, y esta
+ *   lista sólo sirve mientras el número diga la verdad de hoy.
  */
 const SECTION_ALLOWLIST = {
-  "app/admin/agents/[id]/agent-tools-section.tsx": 592,
+  "app/admin/agents/[id]/agent-tools-section.tsx": 587,
 };
 
 /**
