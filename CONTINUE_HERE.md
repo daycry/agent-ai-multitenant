@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-09-08** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace está `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto): **ola 0 completa** (`task_mk_0a`, `0b`, `00`, `02`, `01`) y `task_mk_10` de la ola 1 cerrada con la opción (b); **decisión pendiente del operador**: la opción (a) del ADR 0081 reabierto (materializar código arbitrario con el gate de sandbox). Siguiente: `task_mk_11`.
+> **Última actualización: 2026-09-09** · #177, #178, #179 y #182 mergeados; el plan del ciclo de vida está en `pending_human_validation`; el plan del marketplace sigue `in_progress` en la rama `plan/marketplace-mcp-2026-09-02` (PR #183 abierto, todo empujado): **olas 0, 1 y 2 completas** (catorce casillas, de `task_mk_0a` a `task_mk_23`) y el changelog del plan ya escrito. **Queda una sola casilla, `task_mk_30`, y no se puede tocar sin ti**: su ADR 0167 está `proposed`. **Tres cosas esperan al operador**: decidir el ADR 0167 (a/b), decidir la opción (a) del ADR 0081 reabierto y validar `human_mk_01..03`. Detrás hay dos planes ya `approved` que el protocolo no deja empezar mientras este siga `in_progress`.
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -12,28 +12,37 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
-## 0. Ahora mismo (2026-09-02): remediación del ciclo de vida, a falta de validación humana
+## 0. Ahora mismo (2026-09-09): el plan del marketplace, a una decisión de cerrarse
 
 Plan
-[`docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md)
-(`status: pending_human_validation`), nacido del informe
-[`auditoria-ciclo-vida-proyecto-2026-09-01.md`](docs/roadmap/auditoria-ciclo-vida-proyecto-2026-09-01.md).
-Las 36 casillas están `[x]` con su test en verde.
+[`remediacion-marketplace-mcp-2026-09-02`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md)
+(`status: in_progress` desde el 2026-09-03, rama `plan/marketplace-mcp-2026-09-02`,
+PR #183, nada sin empujar). **Catorce de las quince casillas están `[x]`** con su
+test en verde; la que falta, `task_mk_30`, no espera código: espera una decisión.
 
-- **Mergeado en `master`**: PR #177 (auditoría git/dependencias + olas 0 y 1),
-  #178 (ola 2 menos `task_cv_25`) y #179 (ola 3 menos `task_cv_33` y `36`).
-- **Mergeado también (PR #182)**: `task_cv_25`, `33`, `36` y la ola 4 entera
-  (`task_cv_40…45`), más los criterios de cierre: changelog
-  [`docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md`](docs/07-changelog/remediacion-ciclo-vida-proyecto-2026-09-01.md)
-  y addenda en los ADR 0060, 0071, 0072, 0102, 0129, 0148 y 0163.
-- **Plan del marketplace, `in_progress` desde el 2026-09-03 (PR #183, rama
-  `plan/marketplace-mcp-2026-09-02`)**:
-  [`remediacion-marketplace-mcp-2026-09-02.md`](docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md).
-  **Ola 0 completa**: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`), instalar
-  desde el catálogo (`task_mk_00`), el egress de los MCP remotos (`task_mk_02`) y
-  las tools MCP al catálogo sin paso manual (`task_mk_01`). **La siguiente es la
-  ola 1**, empezando por `task_mk_10` (los tipos diferidos dejan de venderse:
-  reabrir el ADR 0081 B/C). Al desplegar esta rama: el api-server necesita
+- **Olas 0, 1 y 2 entregadas**: ADR 0165 y 0166 `accepted` (`task_mk_0a`, `0b`),
+  instalar desde el catálogo (`00`), el egress de los MCP remotos (`02`) y las
+  tools MCP al catálogo sin paso manual (`01`); los tipos diferidos dejan de
+  venderse (`10`, opción (b)), la puerta de despliegue enseña lo que pasó (`11`),
+  `needs_consent` mira también los permisos declarados (`14`), un test que llama
+  la tool de verdad dentro de un run (`12`), procedencia + cola de revisión +
+  fork sin tools MCP (`13`); `project.integrations` (`20`), las anclas en el
+  preámbulo del run y las skills Atlassian leyéndolas (`21`), el catálogo
+  distribuyendo MCP y la guía diciendo la verdad (`22`), nombres en vez de UUIDs
+  e i18n de skills (`23`). Tarea por tarea, en el changelog del plan:
+  [`07-changelog/remediacion-marketplace-mcp-2026-09-02.md`](docs/07-changelog/remediacion-marketplace-mcp-2026-09-02.md)
+  (criterio de cierre 4; su `completed_at` sigue `null` a propósito).
+- **La casilla abierta es `task_mk_30`** (ola 3, P2, condicionada a ADR): el
+  [ADR 0167](docs/05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
+  está escrito y `proposed`. Propone `jira_children_of_parent` y
+  `confluence_page_under_root` como **tools de plataforma** que envuelven a las
+  del MCP de Atlassian con las anclas de `project.integrations` ya puestas, más
+  la ingesta opcional del subárbol de Confluence a la KB. **(a) aceptarlo** son
+  ~2 días de código nuevo antes de que el plan pueda cerrarse; **(b) rechazarlo**
+  cierra la casilla en negativo el mismo día y deja el «cómo» donde está hoy: el
+  modelo componiendo el JQL con las anclas del preámbulo. No se decidió por ti
+  porque estrena superficie de producto (dos builtins y un botón nuevos).
+- **Al desplegar esta rama**: el api-server necesita
   `API_SERVER_EGRESS_PROXY_URL` (el compose manual y el generador ya lo emiten);
   el worker tiene que arrancar con la lane `marketplace` para que el import
   automático de un despliegue ocurra (sin ella la tarjeta dice «sin importar» y
@@ -50,18 +59,38 @@ Las 36 casillas están `[x]` con su test en verde.
   llevaban la URL de Redis **sin contraseña** (arreglado; gotcha
   `redis-con-contrasena-rompe-la-integracion.md`). El stack sigue levantado:
   `scripts/dev/down.ps1` lo para.
-- **Lo que queda es humano**: `human_cv_01..04` (§Tests humanos del plan).
-  Hasta que el operador los valide, el plan NO pasa a `completed`.
+- **Lo que queda es humano, en los dos planes**: `human_cv_01..04` del plan del
+  ciclo de vida —`remediacion-ciclo-vida-proyecto-2026-09-01`,
+  `pending_human_validation`, todo mergeado en `master` por los PR #177, #178,
+  #179 y #182 con su changelog y las addenda de los ADR 0060, 0071, 0072, 0102,
+  0129, 0148 y 0163— y `human_mk_01..03` del marketplace. Hasta que el operador
+  los valide, ninguno de los dos pasa a `completed`.
+- **La cola detrás, aprobada por el operador el 2026-09-09**:
+  [`ui-reestructuracion-2026-09-09`](docs/roadmap/ui-reestructuracion-2026-09-09.md)
+  (`approved`, 24 días-persona: el proyecto como hub, el Sistema aparte) y
+  [`memoria-agentes-2026-09-09`](docs/roadmap/memoria-agentes-2026-09-09.md)
+  (`approved`, 12 días-persona: memoria por capas con citas y uso). **Ninguno
+  puede pasar a `in_progress` mientras el del marketplace lo esté**: el protocolo
+  admite uno, así que cerrar `task_mk_30` es lo que abre la cola.
 - **Trampa de esta máquina**: el token de `gh` no tiene el scope `workflow`,
   así que un push que toque `.github/workflows/` por HTTPS se rechaza. Se
   empuja por SSH: `git push git@github.com:daycry/agent-ai-multitenant.git HEAD:refs/heads/<rama>`
   (o `gh auth refresh -h github.com -s workflow` una vez).
 
 Comprobar antes de fiarse: `gh pr list`, `git log --oneline -5`,
-`./.venv/Scripts/python.exe -m pytest tests/unit -q` (5.980 en verde el
-2026-09-02, 3 min) y
-`grep -c "\[x\]" docs/roadmap/remediacion-ciclo-vida-proyecto-2026-09-01.md`.
-Los tests de integración (BD) sólo corren en CI. **Orden de despliegue**: imagen
+`./.venv/Scripts/python.exe -m pytest tests/unit -q` y
+`grep -c "\[x\]" docs/roadmap/remediacion-marketplace-mcp-2026-09-02.md` (14 el
+2026-09-09, de 15 casillas). Las cifras de las suites, medidas hoy, están en
+§«Verificación local».
+
+**Y los tests de integración ya NO son sólo de CI en esta máquina**, que es lo que
+decía esta línea hasta hoy: con el stack de dev levantado hay Postgres en
+`127.0.0.1:15432` y la Redis con contraseña, y `tests/integration/` corre en local
+contra ellos —los cuatro ficheros que verifican este plan, **19 tests en 88 s el
+2026-09-09**—. De uno en uno, eso sí: el conftest hace `DROP DATABASE` sobre un
+nombre único para todo el repo (§gotcha de la BD compartida).
+
+**Orden de despliegue**: imagen
 del `agent-runtime` y worker antes que orquestador (`claim_id`, spec y token por
 fichero, `ask_human_remaining`); los proyectos con
 `push_policy=direct_to_default_allowed` deben pasar a `branch_only_pr_required`.
@@ -206,14 +235,18 @@ cada commit. Mídelo. Lo que sí es estable y sí importa:
 Dos recuentos, y la diferencia entre ellos importa: **los guardas sólo ven los
 ficheros con `plan_id`**.
 
-| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                       |
-| -------------------------- | :--------------------: | :------: | -------------------------------------------------------- |
-| `pending_human_validation` |           36           |    47    | código entregado; esperan tests humanos                  |
-| `completed`                |           19           |    25    | cerradas del todo                                        |
-| `pending_approval`         |           14           |    14    | ver el aviso de abajo: **ya no significa «sin empezar»** |
-| `in_progress`              |           1            |    1     | `marketplace-v2-despliegue` (el protocolo permite una)   |
-| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e     |
-| **Total con `plan_id`**    |         **71**         |          |                                                          |
+Recontado el **2026-09-09** con el script del §«Comprobar» (y por eso las cifras
+subieron: son cinco semanas de planes nuevos, no un cambio de criterio).
+
+| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                              |
+| -------------------------- | :--------------------: | :------: | --------------------------------------------------------------- |
+| `pending_human_validation` |           39           |    50    | código entregado; esperan tests humanos                         |
+| `completed`                |           19           |    25    | cerradas del todo                                               |
+| `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**        |
+| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…` |
+| `in_progress`              |           1            |    1     | `remediacion-marketplace-mcp-2026-09-02` (el protocolo, una)     |
+| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e            |
+| **Total con `plan_id`**    |         **76**         | 116\*    | \*los 116 son TODOS los `.md` con `status:`, incluidos los 23 de estados que no son de plan (`published`, `informe`, `archived`, `open`, `delivered`, `remediation_implemented`) |
 
 Los 11 ficheros de diferencia en `pending_human_validation` **no llevan
 `plan_id`** —ocho son las fases del córtex, con casillas y `blocking_plan`
@@ -224,11 +257,14 @@ aparezca el número dieciocho.
 
 > ### ⚠️ `pending_approval` ya no quiere decir «nunca empezado»
 >
-> Medido el 2026-08-12: **los catorce** planes en ese estado tienen casillas
-> marcadas, y **seis no tienen ninguna abierta** — `cadena-pr-plan`, `prod-03`,
-> `prod-04`, `prod-05`, `prod-07` y `prod-09` están **entregados** con la
-> etiqueta de «definido pero no empezado». Es incoherencia nueva, creada por las
-> olas de estas dos semanas.
+> Re-medido el **2026-09-09**: **los trece** planes en ese estado tienen casillas
+> marcadas, ninguno está sin empezar de verdad, y **ocho no tienen ninguna
+> abierta** — `cadena-pr-plan`, `prod-03`, `prod-04`, `prod-05`, `prod-07`,
+> `prod-09`, `prod-13` y `prod-14` están **entregados** con la etiqueta de
+> «definido pero no empezado». Eran seis el 2026-08-12: `prod-13` y `prod-14`
+> cerraron su última casilla desde entonces, así que la incoherencia **creció**
+> mientras esperaba decisión. Los otros cinco tienen entre 1 y 4 casillas
+> abiertas (`prod-16`, cuatro).
 >
 > No se les ha cambiado el estado a propósito, por dos razones: pasar a
 > `pending_human_validation` exige su entrada en `docs/07-changelog/` (sólo
@@ -237,19 +273,26 @@ aparezca el número dieciocho.
 > guarda para que no crezca:
 > `test_no_new_plan_is_delivered_while_still_labelled_unstarted`.
 
-**ADR en `proposed`: uno solo**, `0152-recall-vectorial-multitenant-hnsw`. Los
-ocho que estaban pendientes se firmaron el 2026-08-01 (`95fc7fbc`) y lo que
-desbloqueaban está implementado.
+**ADR en `proposed`: uno solo**, y es el
+[0167](docs/05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md)
+del §0 (las tools de plataforma del árbol Jira/Confluence). El
+`0152-recall-vectorial-multitenant-hnsw`, que era el único pendiente cuando se
+escribió esto, quedó `accepted`. Comprobado el 2026-09-09 con
+`grep -l '^status: proposed' docs/05-architecture-decisions/*.md`.
 
 ## Qué necesita al operador (por orden de coste)
 
-1. **Validar las 36 fases en `pending_human_validation`.** Sigue siendo el cuello
+0. **Decidir el ADR 0167 (a/b)**, que es lo más barato de esta lista y lo que
+   destraba más: es la única casilla que le queda al plan `in_progress`, y
+   mientras ese plan no salga de `in_progress` los dos planes `approved` del
+   2026-09-09 no pueden empezar. Está en el §0 con las dos salidas escritas.
+1. **Validar las 39 fases en `pending_human_validation`.** Sigue siendo el cuello
    de botella real: mientras ninguna llegue a `completed`, toda fase que dependa
    de ellas lee su gate como incumplido (es la causa de fondo que mide el ADR
    0138). Procedimiento:
    [06-runbooks/03-system-upgrade.md](docs/06-runbooks/03-system-upgrade.md).
-2. **Decidir qué pasa con los 14 `pending_approval`**, y en particular con los
-   seis que ya están entregados (ver el aviso de arriba). Aprobarlos a posteriori
+2. **Decidir qué pasa con los 13 `pending_approval`**, y en particular con los
+   ocho que ya están entregados (ver el aviso de arriba). Aprobarlos a posteriori
    o rechazar el trabajo son las dos salidas honestas; dejarlos como están hace
    que el roadmap mienta a quien lo lea.
 3. **Rellenar dos columnas.** `docs/roadmap/README.md` §«Cola de validación
@@ -373,38 +416,44 @@ Y antes de implementar cualquier tarea de un plan antiguo, lee el §1 de
 de las últimas 21 tareas «pendientes» que se revisaron, la mayoría estaban hechas
 y dos estaban **rechazadas** por un ADR posterior.
 
-## Verificación local (con CI caído)
+## Verificación local (CI ya funciona; esto sigue siendo lo barato)
 
-Cifras **medidas el 2026-08-12** en esta rama, en el mismo orden que los pasos de
+Cifras **medidas el 2026-09-09** en esta rama, en el mismo orden que los pasos de
 `.github/workflows/ci.yml`:
 
 ```bash
-# Los tres primeros van juntos: 4773 tests en ~7,3 min, y es lo más barato que hay
+# Los tres primeros van juntos: es lo más barato que hay
 .venv/Scripts/python.exe -m pytest tests/unit/ tests/security/ tests/docs/ -q
-#   → 4770 passed, 2 failed, 1 skipped en 437 s   ← los 2 rojos, abajo
+#   → 6735 passed, 9 skipped, 0 fallos en 238 s
 
 .venv/Scripts/python.exe -m pytest packages/shared-llm/tests -q          # 191 (+1 skip sin claude_agent_sdk)
-cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 501
+cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 745
 PYTHONPATH=docker/agent-runtimes/browser-runtime \
   .venv/Scripts/python.exe -m pytest docker/agent-runtimes/browser-runtime/tests -q               # 19
 
-.venv/Scripts/python.exe -m mypy apps/ packages/    # Success: 659 ficheros, limpio
+.venv/Scripts/python.exe -m mypy apps/ packages/    # Success: 743 ficheros, limpio
 ```
 
-> **Los 2 rojos del 2026-08-12, y de dónde salen**:
-> `tests/unit/test_model_options_deprecation.py::test_the_by_kind_endpoint_is_gone`
-> y `::test_the_replacement_is_still_there` mueren con
-> `FileNotFoundError: routers/agents.py`. No es una regresión funcional: otro
-> carril partió ese router en el paquete `routers/agents/`
-> (`crud.py` / `tools.py` / `skills.py` / …) y el test lee el fichero **por
-> ruta**. El arreglo es actualizar su constante `_AGENTS`; lo debe hacer el
-> carril que movió el router.
+> **Había seis rojos esa mañana y se arreglaron el mismo día**, y merecen quedar
+> escritos porque los seis eran **guardas haciendo su trabajo** sobre cambios
+> deliberados que nadie acompañó: `test_marketplace_router_package` (la ruta nueva
+> del buscador de tenant, `task_mk_23`), `test_agents_router_package`
+> (`AgentForkResponse`, `task_mk_13`), `test_domain_models_package`
+> (`projects.integrations`, `task_mk_20`) y las tres aserciones de
+> `test_readme_badges_do_not_lie` (168 ADR y 149 migraciones, en los DOS README).
+> La regla que se saltó es la de siempre: **la guarda se actualiza en el commit
+> que mueve lo que vigila**, y si no, el rojo espera en `tests/unit` —que CI corre
+> y nadie mira entero— a que alguien lo lea.
+>
+> Y los 2 rojos del 2026-08-12 (`test_model_options_deprecation` leyendo
+> `routers/agents.py` por ruta) **ya no están**: el carril que partió el router
+> actualizó su constante, que es exactamente lo que aquí se pedía.
 
-**Del panel (`apps/admin-panel`) no hay cifras nuevas en esta pasada**, y decirlo
-es más útil que copiar las viejas: durante la medición había otro carril con
-cambios sin comitear en `app/admin/tools/page.tsx` y `lib/i18n/dictionary.ts`, así
-que cualquier número habría descrito un árbol a medio escribir. Los cuatro pasos
-que hay que correr antes de dar el panel por bueno:
+**Del panel (`apps/admin-panel`), medido también el 2026-09-09** y con el árbol
+limpio esta vez: `vitest` **1616 tests en 181 ficheros**, `tsc --noEmit` limpio,
+`check-i18n` y `check-component-size` sin avisos (la concesión de
+`agent-tools-section.tsx` bajó a sus 587 líneas reales) y `next build` **completo**
+—el paso que ninguno de los anteriores cubre y el que se cayó el 2026-08-10—:
 
 ```bash
 cd apps/admin-panel

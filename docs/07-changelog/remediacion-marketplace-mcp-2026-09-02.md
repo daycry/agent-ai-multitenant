@@ -95,7 +95,37 @@ cola de revisión a un clic, i18n donde faltaba.
 - ADR 0167: aceptar o rechazar las tools de plataforma de la ola 3.
 - Tests humanos `human_mk_01..03` (plan §Tests humanos).
 
+## Lo que apareció al verificar el cierre (2026-09-09)
+
+Correr las suites enteras antes de dar el plan por entregado sacó **seis rojos en
+`tests/unit`**, y los seis eran del mismo tipo: **guardas de invariancia sobre
+cambios deliberados que nadie acompañó en el commit que los hizo**.
+
+- `test_marketplace_router_package` — la ruta nueva `GET /marketplace/shares/tenant-directory`
+  (`task_mk_23`) no estaba declarada en `ROUTES_ADDED_AFTER_THE_SPLIT`.
+- `test_agents_router_package` — `fork_agent` devuelve `AgentForkResponse` desde
+  `task_mk_13` y el guarda seguía exigiendo `AgentResponse`.
+- `test_domain_models_package` — `projects` ganó `integrations` (`task_mk_20`,
+  migración `0149`) y el digest DDL era el de antes.
+- `test_readme_badges_do_not_lie` (×3) — los contadores de los dos README seguían
+  en 167 ADR y 148 migraciones.
+
+Arreglados el mismo día, cada uno con su motivo escrito junto al guarda. Merece
+quedar anotado porque la regla que se saltó es la baratísima: **el guarda se
+actualiza en el mismo commit que mueve lo que vigila**. Si no, el rojo se queda
+esperando en `tests/unit` —que CI corre y nadie lee entera— y el siguiente que
+mire la suite no sabrá si es una regresión o una casilla mal cerrada.
+
+De paso, la concesión de tamaño de `agent-tools-section.tsx` bajó a sus 587
+líneas reales (el troceo de `task_mk_13` dejó anotadas 592 y el aviso de la
+guarda sobrevivió al commit).
+
 ## Cómo verificarlo
+
+Medido en esta rama el **2026-09-09**, todo en verde: `pytest tests/unit tests/security tests/docs`
+**6735 passed / 9 skipped**, `mypy apps/ packages/` limpio en 743 ficheros,
+`shared-llm` 191, `agent-runtime` 745, `browser-runtime` 19, panel `vitest` 1616
+en 181 ficheros + `tsc` + `check-i18n` + `check-component-size` + `next build`.
 
 - `pytest tests/integration/test_marketplace_v2_chain.py` — la cadena entera,
   incluido el run que invoca la tool desplegada.
@@ -103,6 +133,9 @@ cola de revisión a un clic, i18n donde faltaba.
   y `docker/agent-runtimes/agent-runtime/tests/test_integrations_preamble.py` —
   las anclas de punta a punta.
 - `pytest tests/integration/test_marketplace_seed.py tests/integration/test_cross_tenant_sharing.py`.
+- Los cuatro ficheros de integración de esta lista corrieron **en local** contra
+  el stack de dev (Postgres en `127.0.0.1:15432`): **19 tests en 88 s**. No hacen
+  falta ni CI ni el stack completo, sólo la infra de `scripts/dev/up.ps1`.
 - Panel: `npm run test`, `npm run check:i18n`, `npm run check:size`; e2e
   mockeados `mcp-import-tools`, `agent-skills-assign`, `marketplace-review`,
   `marketplace-admin`.
