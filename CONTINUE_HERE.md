@@ -243,15 +243,15 @@ ficheros con `plan_id`**.
 Recontado el **2026-09-09** con el script del §«Comprobar» (y por eso las cifras
 subieron: son cinco semanas de planes nuevos, no un cambio de criterio).
 
-| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                                  |
-| -------------------------- | :--------------------: | :------: | ------------------------------------------------------------------- |
-| `pending_human_validation` |           40           |    51    | código entregado; esperan tests humanos                             |
-| `completed`                |           19           |    25    | cerradas del todo                                                   |
-| `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**            |
-| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…`     |
-| `in_progress`              |         **0**          |    0     | **ninguno**: la cola está libre para el siguiente `approved`        |
-| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e                |
-| **Total con `plan_id`**    |         **76**         | 116\*    | \*los 116 son TODOS los `.md` con `status:`, incluidos los 23 de estados que no son de plan (`published`, `informe`, `archived`, `open`, `delivered`, `remediation_implemented`) |
+| Estado                     | Planes (con `plan_id`) | Ficheros | Qué significa aquí                                                                                                                                                               |
+| -------------------------- | :--------------------: | :------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending_human_validation` |           40           |    51    | código entregado; esperan tests humanos                                                                                                                                          |
+| `completed`                |           19           |    25    | cerradas del todo                                                                                                                                                                |
+| `pending_approval`         |           13           |    13    | ver el aviso de abajo: **ya no significa «sin empezar»**                                                                                                                         |
+| `approved`                 |           3            |    3     | `gov-01`, `ui-reestructuracion-2026-09-09`, `memoria-agentes-…`                                                                                                                  |
+| `in_progress`              |         **0**          |    0     | **ninguno**: la cola está libre para el siguiente `approved`                                                                                                                     |
+| `blocked`                  |           1            |    1     | `guardas-research-por-novedad`: sólo le falta el e2e                                                                                                                             |
+| **Total con `plan_id`**    |         **76**         |  116\*   | \*los 116 son TODOS los `.md` con `status:`, incluidos los 23 de estados que no son de plan (`published`, `informe`, `archived`, `open`, `delivered`, `remediation_implemented`) |
 
 Los 11 ficheros de diferencia en `pending_human_validation` **no llevan
 `plan_id`** —ocho son las fases del córtex, con casillas y `blocking_plan`

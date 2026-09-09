@@ -66,7 +66,7 @@ cola de revisión a un clic, i18n donde faltaba.
 
 - **`task_mk_20`** — `projects.integrations` (migración `0149`, JSONB cerrado por
   proveedor: `jira {project_key, parent_issue_key}`, `confluence {space_key,
-  root_page_id}`; 422 ante claves desconocidas o formatos malos) y sección
+root_page_id}`; 422 ante claves desconocidas o formatos malos) y sección
   «Integraciones» en la ficha del proyecto. Sin secretos: viven en el MCP.
 - **`task_mk_21`** — las anclas viajan en el `ExecutionRequest` y el runtime las
   pliega como bloque «PROJECT INTEGRATION ANCHORS» tras la persona; las cuatro

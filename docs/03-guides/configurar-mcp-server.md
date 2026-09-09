@@ -329,11 +329,11 @@ Hay dos sitios, según lo que quieras:
   él** llamando a las tools genéricas del MCP. Hay tres formas típicas de que
   salga mal, y las tres se revisan mirando el mismo sitio:
 
-  | Síntoma en el run                                       | Qué pasó                                                                              | Qué mirar                                                                       |
-  | ------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-  | «no hay hijos» en un epic que sí los tiene              | El JQL usó `parent = KEY` donde ese sitio indexa `"Epic Link" = KEY`, o al revés      | El step `act` con la llamada a `jira_search`: el JQL va literal en los args     |
-  | La issue se creó en el proyecto pero **fuera** del epic  | Se omitió `parent` en `jira_create_issue` (o `parent_id` en `confluence_create_page`) | Los args de esa llamada; y en Jira, el campo «Parent» de la issue creada        |
-  | El agente se queda sin iteraciones antes del trabajo     | Reintentos de descubrimiento del parentesco, uno por llamada de modelo                | El contador de iteraciones del run frente a `max_iterations` del agente         |
+  | Síntoma en el run                                       | Qué pasó                                                                              | Qué mirar                                                                   |
+  | ------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+  | «no hay hijos» en un epic que sí los tiene              | El JQL usó `parent = KEY` donde ese sitio indexa `"Epic Link" = KEY`, o al revés      | El step `act` con la llamada a `jira_search`: el JQL va literal en los args |
+  | La issue se creó en el proyecto pero **fuera** del epic | Se omitió `parent` en `jira_create_issue` (o `parent_id` en `confluence_create_page`) | Los args de esa llamada; y en Jira, el campo «Parent» de la issue creada    |
+  | El agente se queda sin iteraciones antes del trabajo    | Reintentos de descubrimiento del parentesco, uno por llamada de modelo                | El contador de iteraciones del run frente a `max_iterations` del agente     |
 
   Cuando ocurra, **anótalo en el ADR 0167**: su reapertura está atada a este
   plan y esa evidencia es exactamente la que decide si las dos tools de

@@ -500,7 +500,7 @@ que alguien lo escriba en cada plan.
       `GITHUB_REMOTE_MCP`: una sola fuente para URL, transporte y timeout); manifest
       `mcp_tool` + bloque `mcp_server` + `targets` (D5) + `config_schema` (D8: vacío para
       Atlassian —OAuth—, `auth_ref` obligatorio para GitHub). Upsert por `(source, NULL,
-  name, version)` como las skills, sin artefacto en disco, VERIFIED + PUBLISHED.
+name, version)` como las skills, sin artefacto en disco, VERIFIED + PUBLISHED.
       `test_seed_publishes_the_remote_mcp_servers` fija forma y que ninguna plantilla
       `stdio` se publique; la idempotencia la cubre el test existente. Guía: la tabla de
       capas gana la fila «Egress → plataforma», la tercera capa pasa de «asignar por
@@ -516,7 +516,7 @@ que alguien lo escriba en cada plan.
       **Coste**: 0,5 d.
       **Cierre (2026-09-09)**: API — `MarketplaceInstallationResponse.listing_name/listing_kind`
       (la lista ya cargaba el listing), `MarketplaceShareResponse.listing_name/
-    target_tenant_name` (la lista resuelve los nombres: listings propios por RLS, tenants
+target_tenant_name` (la lista resuelve los nombres: listings propios por RLS, tenants
       destino con la sesión BYPASSRLS acotada a los ids de los grants) y el nuevo
       `GET /marketplace/shares/tenant-directory?q=` (tenant_admin, ≥2 caracteres, ≤20
       resultados, activos, nunca el propio; `test_shares_carry_names_and_the_tenant_directory_finds_targets`).
