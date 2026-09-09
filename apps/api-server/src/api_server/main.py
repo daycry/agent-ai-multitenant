@@ -58,6 +58,7 @@ from api_server.routers.cortex_ws import router as cortex_ws_router
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
+from api_server.routers.egress import admin_router as egress_admin_router
 from api_server.routers.embeddings import admin_router as embeddings_admin_router
 from api_server.routers.eval_quality import router as eval_quality_router
 from api_server.routers.evals import router as evals_router
@@ -315,6 +316,8 @@ def _register_routers(app: FastAPI) -> None:
         embeddings_admin_router,
         ollama_admin_router,
         platform_settings_admin_router,
+        # ADR 0165 D7.3: el sondeo de la allowlist de egress contra el proxy.
+        egress_admin_router,
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,

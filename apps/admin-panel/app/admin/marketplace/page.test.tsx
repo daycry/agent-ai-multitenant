@@ -20,7 +20,7 @@
 // permanente diciendo «todo al día» enseña a no leer la franja.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const apiFetchMock = vi.fn();
@@ -29,13 +29,23 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
+/** Mutable para poder mirar la pantalla con los ojos de un miembro sin rol. */
+const usuario = {
+  isSystemAdmin: false,
+  isTenantAdmin: true,
+  isTenantMember: true,
+  isLoading: false,
+};
 vi.mock("@/lib/use-current-user", () => ({
-  useCurrentUser: () => ({
-    isSystemAdmin: false,
-    isTenantAdmin: true,
-    isTenantMember: true,
-    isLoading: false,
-  }),
+  useCurrentUser: () => usuario,
+}));
+
+/** `task_mk_00`: instalar navega, así que la pantalla ya usa `useRouter`. */
+const pushMock = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: pushMock, replace: pushMock, prefetch: vi.fn() }),
+  useParams: () => ({ id: "inst-1" }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 import { LanguageProvider } from "@/lib/lang-context";
@@ -75,6 +85,8 @@ const INSTALACION = {
   id: "inst-1",
   tenant_id: "tenant-1",
   listing_id: "listing-1",
+  listing_name: "acme-checker",
+  listing_kind: "tool",
   project_id: null,
   version: "1.2.0",
   status: "enabled",
@@ -119,16 +131,30 @@ const CHECK_AL_DIA = {
 interface Escenario {
   listings?: unknown[];
   installations?: unknown[];
+  shares?: unknown[];
   check?: unknown;
+  /** Respuesta del POST de instalación (o rechazo, para los caminos de error). */
+  onInstall?: (body: unknown) => Promise<unknown>;
 }
 
-function montar({ listings = [LISTING], installations = [INSTALACION], check }: Escenario = {}) {
-  apiFetchMock.mockImplementation((path: string) => {
+function montar({
+  listings = [LISTING],
+  installations = [INSTALACION],
+  shares = [],
+  check,
+  onInstall,
+}: Escenario = {}) {
+  apiFetchMock.mockImplementation((path: string, opts?: { method?: string; body?: unknown }) => {
     const url = String(path);
+    if (url === "/marketplace/installations" && opts?.method === "POST") {
+      return onInstall
+        ? onInstall(opts.body)
+        : Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "disabled" });
+    }
     if (url.includes("update-check")) return Promise.resolve(check ?? CHECK_AL_DIA);
     if (url.startsWith("/marketplace/installations")) return Promise.resolve(installations);
     if (url.startsWith("/marketplace/listings")) return Promise.resolve(listings);
-    if (url.startsWith("/marketplace/shares")) return Promise.resolve([]);
+    if (url.startsWith("/marketplace/shares")) return Promise.resolve(shares);
     return Promise.resolve([]);
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -144,6 +170,9 @@ function montar({ listings = [LISTING], installations = [INSTALACION], check }: 
 afterEach(() => {
   cleanup();
   apiFetchMock.mockReset();
+  pushMock.mockReset();
+  usuario.isTenantAdmin = true;
+  usuario.isTenantMember = true;
 });
 
 describe("el aviso de actualización del catálogo", () => {
@@ -239,5 +268,262 @@ describe("el estado de revisión en el catálogo", () => {
     montar({ listings: [LISTING] });
     const nota = await screen.findByTestId("catalog-publish-review-note");
     expect(nota.textContent).toMatch(/cola de revisi/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `task_mk_00` — instalar desde el catálogo.
+//
+// Hasta hoy el panel no emitía UN SOLO `POST /marketplace/installations`: la
+// pestaña «Instaladas» presuponía instalaciones que ninguna pantalla sabía
+// crear. La tarjeta del catálogo era informativa y punto.
+//
+// Dos decisiones que estos tests fijan, y por qué:
+//
+//   * **La petición va síncrona** (sin `async_gates`). El camino asíncrono
+//     devuelve `202` y deja la fila en `analyzing` hasta que un worker de la
+//     lane `marketplace` la atienda; en una instalación que no levante esa lane,
+//     `analyzing` es para siempre y la UI habría dicho «aceptada». Un fallo
+//     honesto es mejor que un verde que miente.
+//   * **El destino de la navegación sale de la respuesta, no de una suposición**:
+//     un listing que exige consentimiento nace `disabled` con cero permisos
+//     otorgados (`marketplace/install.py:367-374`) y ahí falta un paso
+//     obligatorio; uno `verified` nace `enabled` y lo siguiente no es consentir,
+//     es desplegar — que es justo lo que ofrece su ficha.
+// ---------------------------------------------------------------------------
+
+describe("instalar desde el catálogo", () => {
+  it("ofrece instalar y manda el listing_id al backend", async () => {
+    montar({ installations: [] });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() => {
+      const post = apiFetchMock.mock.calls.find(
+        ([, opts]) => (opts as { method?: string } | undefined)?.method === "POST",
+      );
+      expect(post).toBeTruthy();
+      expect(post?.[0]).toBe("/marketplace/installations");
+      expect((post?.[1] as { body: { listing_id: string } }).body.listing_id).toBe("listing-1");
+    });
+  });
+
+  it("no usa el camino asíncrono, que sin worker deja la instalación en análisis para siempre", async () => {
+    montar({ installations: [] });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() => {
+      const post = apiFetchMock.mock.calls.find(
+        ([, opts]) => (opts as { method?: string } | undefined)?.method === "POST",
+      );
+      const body = (post?.[1] as { body: Record<string, unknown> }).body;
+      expect(body.async_gates ?? false).toBe(false);
+    });
+  });
+
+  it("si el listing exige consentimiento, lleva a otorgar los permisos", async () => {
+    montar({
+      listings: [
+        { ...LISTING, requested_permissions: [{ type: "filesystem_read", value: ["/x"] }] },
+      ],
+      installations: [],
+      onInstall: () => Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "disabled" }),
+    });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith(
+        "/admin/marketplace/installations/inst-nueva/permissions",
+      ),
+    );
+  });
+
+  it("si no hay nada que consentir, lleva a la ficha, que es donde se despliega", async () => {
+    montar({
+      installations: [],
+      onInstall: () => Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "enabled" }),
+    });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith("/admin/marketplace/installations/inst-nueva"),
+    );
+    expect(pushMock).not.toHaveBeenCalledWith(
+      "/admin/marketplace/installations/inst-nueva/permissions",
+    );
+  });
+
+  it("un rechazo del backend se lee, y no se pinta el cuerpo crudo", async () => {
+    const { ApiError } = await import("@/lib/api");
+    montar({
+      installations: [],
+      onInstall: () =>
+        Promise.reject(
+          new ApiError(
+            409,
+            JSON.stringify({ detail: "listing already installed for this tenant" }),
+          ),
+        ),
+    });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    const error = await screen.findByTestId("catalog-install-error-listing-1");
+    expect(error.textContent).toContain("already installed");
+    expect(error.textContent).not.toContain("{");
+  });
+
+  it("lo que ya está instalado no se ofrece instalar otra vez", async () => {
+    montar({ installations: [{ ...INSTALACION, listing_id: "listing-1", status: "enabled" }] });
+
+    await screen.findByTestId("catalog-installed-listing-1");
+    expect(screen.queryByTestId("catalog-install-listing-1")).toBeNull();
+    expect(
+      apiFetchMock.mock.calls.some(
+        ([, opts]) => (opts as { method?: string } | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("instalar es cosa de un tenant_admin: a un miembro no se le ofrece", async () => {
+    usuario.isTenantAdmin = false;
+    montar({ installations: [] });
+
+    await screen.findByText("acme-checker");
+    expect(screen.queryByTestId("catalog-install-listing-1")).toBeNull();
+  });
+});
+
+// La revisión de dos lentes (2026-09-03) encontró el caso que faltaba: un listing
+// `community` que NO pide permisos también nace `disabled`, porque `needs_consent`
+// mira sólo el nivel de confianza. Llevarlo a la pantalla de permisos lo dejaba en
+// una página vacía sin botón que pulsar — y sin forma de habilitar la instalación.
+describe("el destino tras instalar mira si hay algo que consentir", () => {
+  it("un listing sin permisos declarados no manda a una pantalla de consentimiento vacía", async () => {
+    montar({
+      listings: [{ ...LISTING, trust_level: "community", requested_permissions: [] }],
+      installations: [],
+      onInstall: () => Promise.resolve({ ...INSTALACION, id: "inst-nueva", status: "disabled" }),
+    });
+
+    fireEvent.click(await screen.findByTestId("catalog-install-listing-1"));
+
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith("/admin/marketplace/installations/inst-nueva"),
+    );
+    expect(pushMock).not.toHaveBeenCalledWith(
+      "/admin/marketplace/installations/inst-nueva/permissions",
+    );
+  });
+
+  it("una instalación bloqueada no se pinta como instalada: se puede reintentar", async () => {
+    montar({
+      installations: [{ ...INSTALACION, listing_id: "listing-1", status: "blocked" }],
+    });
+
+    await screen.findByTestId("catalog-install-listing-1");
+    expect(screen.queryByTestId("catalog-installed-listing-1")).toBeNull();
+  });
+});
+
+// task_mk_10 (ADR 0081 reabierto): `enabled` de un tipo diferido NO es una
+// capacidad viva, y la pestaña «Instaladas» deja de venderla como «Habilitada».
+describe("la pestaña Instaladas y los tipos diferidos", () => {
+  it("una instalación habilitada sin capacidad se pinta como autorizada, no habilitada", async () => {
+    montar({
+      installations: [
+        { ...INSTALACION, id: "inst-def", capability: "deferred", capability_reason: "ADR 0081" },
+      ],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const badge = await screen.findByTestId("installed-status-inst-def");
+    expect(badge.textContent).toBe("Autorizada, sin capacidad");
+    expect(badge.getAttribute("title")).toBe("ADR 0081");
+    expect(screen.getByTestId("installed-deferred-inst-def").textContent).toContain("ADR 0081");
+  });
+
+  it("una instalación con fila de catálogo sigue siendo «Habilitada»", async () => {
+    montar({
+      installations: [{ ...INSTALACION, id: "inst-row", capability: "catalog_row" }],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const badge = await screen.findByTestId("installed-status-inst-row");
+    expect(badge.textContent).toBe("Habilitada");
+    expect(screen.queryByTestId("installed-deferred-inst-row")).toBeNull();
+  });
+});
+
+// task_mk_13 (UI-05): la cola de revisión (ADR 0142 D6) es del System Admin y
+// tiene que encontrarse desde la cabecera del marketplace, no sólo por URL.
+describe("el enlace a la cola de revisión", () => {
+  it("lo ve el System Admin", async () => {
+    usuario.isSystemAdmin = true;
+    try {
+      montar();
+      const link = await screen.findByTestId("marketplace-review-link");
+      expect(link.getAttribute("href")).toBe("/admin/marketplace/review");
+    } finally {
+      usuario.isSystemAdmin = false;
+    }
+  });
+
+  it("un tenant admin no lo ve: la cola no es suya", async () => {
+    montar();
+    await screen.findByTestId("marketplace-admin-header");
+    expect(screen.queryByTestId("marketplace-review-link")).toBeNull();
+  });
+});
+
+// task_mk_23 (UI-06): nombres en vez de UUIDs en «Instaladas» y en los shares.
+describe("nombres en vez de UUIDs", () => {
+  it("la instalación enseña el nombre del listing (el UUID queda en el title)", async () => {
+    montar();
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const name = await screen.findByTestId("installed-listing-name-inst-1");
+    expect(name.textContent).toBe("acme-checker");
+    expect(name.getAttribute("title")).toBe("listing-1");
+  });
+
+  it("sin nombre resuelto cae al UUID, nunca a un hueco", async () => {
+    montar({ installations: [{ ...INSTALACION, listing_name: null }] });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-installed"));
+    const name = await screen.findByTestId("installed-listing-name-inst-1");
+    expect(name.textContent).toBe("listing-1");
+  });
+
+  it("el share enseña el listing y el tenant destino por su nombre", async () => {
+    montar({
+      shares: [
+        {
+          id: "share-1",
+          listing_id: "listing-2",
+          owner_tenant_id: "tenant-1",
+          target_tenant_id: "22222222-0000-0000-0000-000000000002",
+          granted_by: null,
+          revoked_at: null,
+          revoked_by: null,
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+          listing_name: "informe-interno",
+          target_tenant_name: "Tenant B",
+        },
+      ],
+    });
+    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    expect((await screen.findByTestId("share-listing-name-share-1")).textContent).toBe(
+      "informe-interno",
+    );
+    expect(screen.getByTestId("share-target-name-share-1").textContent).toContain("Tenant B");
+    expect(screen.getByTestId("share-target-name-share-1").textContent).not.toContain("22222222");
+  });
+
+  it("el diálogo de compartir busca el tenant en vez de pedir su UUID", async () => {
+    montar();
+    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    await screen.findByTestId("share-target-input");
+    expect(screen.queryByPlaceholderText("00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 });

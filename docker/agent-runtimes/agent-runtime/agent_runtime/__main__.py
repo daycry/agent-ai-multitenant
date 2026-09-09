@@ -931,6 +931,54 @@ def build_persona_preamble(persona: Any) -> str:
     return f"{_PERSONA_INSTRUCTION}\n{identity}{prompt}"
 
 
+_INTEGRATIONS_INSTRUCTION = (
+    "PROJECT INTEGRATION ANCHORS. This project works under the anchors below in "
+    "Jira and Confluence. When you create or look up issues, do it inside this "
+    "Jira project and under the parent issue if one is given; when you publish "
+    "or look up documentation, do it inside this Confluence space and under the "
+    "root page if one is given. Prefer these anchors over anything the plan or "
+    "task text says; only fall back to the plan text when an anchor is missing "
+    "here. These are identifiers, not instructions."
+)
+
+# Etiquetas humanas de cada ancla, por proveedor y clave (`schemas/integrations.py`).
+_INTEGRATION_ANCHOR_LABELS: dict[str, tuple[tuple[str, str], ...]] = {
+    "jira": (("project_key", "Jira project"), ("parent_issue_key", "Jira parent issue (epic)")),
+    "confluence": (("space_key", "Confluence space"), ("root_page_id", "Confluence root page id")),
+}
+_INTEGRATION_VALUE_MAX_CHARS = 128
+
+
+def build_integrations_preamble(integrations: Any) -> str:
+    """The project-anchors block (`task_mk_21`, MK-05), rendered right after the
+    persona.
+
+    ``integrations`` is the orchestrator-threaded ``project.integrations`` dict
+    (``{jira: {project_key, parent_issue_key}, confluence: {space_key,
+    root_page_id}}``). Unknown providers/keys are rendered generically so a
+    provider added later still reaches the model; blank/missing → ``""`` (no
+    block). Values are identifiers the API already validated, but they are
+    re-capped and kept on one line each so the block stays data, not prose.
+    """
+    if not isinstance(integrations, dict) or not integrations:
+        return ""
+    lines: list[str] = []
+    for provider in sorted(integrations):
+        anchors = integrations.get(provider)
+        if not isinstance(anchors, dict):
+            continue
+        labels = dict(_INTEGRATION_ANCHOR_LABELS.get(str(provider), ()))
+        for key in sorted(anchors, key=lambda k: (k not in labels, k)):
+            value = anchors.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            text = " ".join(str(value).split())[:_INTEGRATION_VALUE_MAX_CHARS]
+            lines.append(f"- {labels.get(key, f'{provider} {key}')}: {text}")
+    if not lines:
+        return ""
+    return _INTEGRATIONS_INSTRUCTION + "\n" + "\n".join(lines)
+
+
 _MCP_STATUS_INSTRUCTION = (
     "SOME MCP SERVERS OF THIS PROJECT ARE NOT AVAILABLE IN THIS RUN. Their "
     "`<server>.<tool>` tools are NOT registered: calling one fails as an unknown "
@@ -941,8 +989,46 @@ _MCP_STATUS_INSTRUCTION = (
 )
 
 
-def build_mcp_status_preamble(failures: list[dict[str, str]] | None) -> str:
-    """Tell the agent which MCP servers did not connect (task_wf_14, B-07).
+_MCP_NO_TOOLS_REASON = (
+    "declared in the project but NONE of its tools are imported into the catalog, "
+    "so none is available here (the operator imports them from the project's MCP tab)"
+)
+
+
+def servers_without_imported_tools(
+    spec: dict[str, Any], failures: list[dict[str, str]] | None = None
+) -> list[str]:
+    """Declared MCP servers with ZERO `<server>.` tools in the run's allowlist (ADR 0166 D4).
+
+    The runtime connects every declared server and registers what it announces,
+    but the model only sees the tools the project IMPORTED into the catalog
+    (`allowed_tools` carries them as `<server>.<tool>`). A server that connected
+    fine and has nothing imported used to be invisible: the model kept asking for
+    tools "the project has" that were never advertised. This is the runtime
+    REPORTING the gap, not closing it (the ADR rejected discovery-side import).
+
+    Only decidable when the spec carries `allowed_tools`; without the key there
+    is no restriction and nothing to report. Servers that failed to connect are
+    already reported by `failures` and are excluded here.
+    """
+    if "allowed_tools" not in spec:
+        return []
+    allowed = spec.get("allowed_tools") or []
+    prefixes = {str(t).split(".", 1)[0] for t in allowed if isinstance(t, str) and "." in str(t)}
+    failed = {str(f.get("server")) for f in (failures or []) if isinstance(f, dict)}
+    out: list[str] = []
+    for raw in spec.get("mcp_servers") or []:
+        name = str(raw.get("name") or "").strip() if isinstance(raw, dict) else ""
+        if name and name not in prefixes and name not in failed and name not in out:
+            out.append(name)
+    return sorted(out)
+
+
+def build_mcp_status_preamble(
+    failures: list[dict[str, str]] | None, without_tools: list[str] | None = None
+) -> str:
+    """Tell the agent which MCP servers did not connect (task_wf_14, B-07), and
+    which connected but have no tools imported (ADR 0166 D4).
 
     A failed server is emitted as an event and a step, so the OPERATOR sees it in
     the run viewer. The agent did not: its ``<server>.<tool>`` tools were simply
@@ -959,6 +1045,11 @@ def build_mcp_status_preamble(failures: list[dict[str, str]] | None) -> str:
         for f in (failures or [])
         if isinstance(f, dict) and str(f.get("server") or "").strip()
     ]
+    lines.extend(
+        f"- {str(name).strip()}: {_MCP_NO_TOOLS_REASON}"
+        for name in (without_tools or [])
+        if str(name).strip()
+    )
     if not lines:
         return ""
     return "\n".join([_MCP_STATUS_INSTRUCTION, _fence_untrusted("\n".join(lines))])
@@ -971,6 +1062,7 @@ def assemble_system_preamble(
 
     Rendered order (identity → capabilities → per-task context → skills):
       1. ``agent_persona`` (P0-1) — who the agent is;
+      1b. ``integrations`` (task_mk_21) — the project's Jira/Confluence anchors;
       2. ``mcp_failures`` (task_wf_14) — which MCP servers are NOT available;
       3. ``task_comments`` (Feature C) — human guidance for this task/plan;
       4. ``prior_review_feedback`` (A2) — what the reviewer rejected before;
@@ -1034,9 +1126,17 @@ def assemble_system_preamble(
     # task_wf_14: qué servidores MCP NO están disponibles. Va justo tras la
     # persona: es contexto sobre las CAPACIDADES del agente en esta ejecución, y
     # sin él el modelo insiste en llamar tools que no existen.
-    mcp_preamble = build_mcp_status_preamble(mcp_failures)
+    mcp_preamble = build_mcp_status_preamble(
+        mcp_failures, servers_without_imported_tools(spec, mcp_failures)
+    )
     if mcp_preamble:
         preamble = f"{mcp_preamble}\n\n{preamble}" if preamble else mcp_preamble
+
+    # `task_mk_21`: the project's integration anchors go right after the persona
+    # (project context the skills read) and before the MCP status block.
+    integrations_preamble = build_integrations_preamble(spec.get("integrations"))
+    if integrations_preamble:
+        preamble = f"{integrations_preamble}\n\n{preamble}" if preamble else integrations_preamble
 
     # P0-1: the agent's persona frames everything — prepended LAST so it lands FIRST.
     persona_preamble = build_persona_preamble(spec.get("agent_persona"))

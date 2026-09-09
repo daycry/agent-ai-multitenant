@@ -195,6 +195,8 @@ test("la ficha despliega la misma instalación en dos proyectos con base_url dis
     "data-outcome",
     "ok",
   );
+  // task_mk_11 (UI-02): el resumen dice qué se escribió en el proyecto.
+  await expect(page.getByTestId(`deploy-created-refs-${PROJECT_A}`)).toContainText("jira");
 
   // --- proyecto B, con OTRA base_url --------------------------------------
   await page.getByTestId("deployments-deploy-open").click();

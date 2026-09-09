@@ -41,9 +41,13 @@ from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
+from api_server.db.platform_settings import get_platform_setting
 from api_server.db.review_session_repo import list_active_preview_sessions
+from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
+from api_server.egress.mcp_discovery import egress_warnings_for_servers
 from api_server.git_integration import project_git_secret_path
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.mcp.import_tools import retire_server_tools
 from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -297,6 +301,22 @@ async def list_projects(
 # ---------------------------------------------------------------------------
 # GET /projects/{id}
 # ---------------------------------------------------------------------------
+async def _mcp_server_warnings(session: AsyncSession, project: Project) -> list[dict[str, str]]:
+    """Los avisos D11 (ADR 0165) de la ficha: servidores MCP cuyo host externo no
+    está en la allowlist de egress de la plataforma.
+
+    Se calculan en la ficha y en el guardado, no en el listado: una lectura del
+    ajuste por request (cacheada en Redis) es barata, pero el listado no pinta
+    servidores y pagarla N veces ahí no compra nada. El aviso afirma MENOS que
+    «permitido» o «pendiente de aplicar» a propósito: el único que puede decir
+    «permitido» es el sondeo contra el proxy (D7.3).
+    """
+    allowed = await get_platform_setting(session, MCP_ALLOWLIST_KEY, default=[])
+    return egress_warnings_for_servers(
+        project.mcp_servers or [], allowed_hosts=allowed if isinstance(allowed, list) else []
+    )
+
+
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: UUID,
@@ -309,7 +329,9 @@ async def get_project(
     project = result.scalar_one_or_none()
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return to_project_response(project)
+    return to_project_response(
+        project, mcp_server_warnings=await _mcp_server_warnings(session, project)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +566,9 @@ async def create_project(
         )
 
     await session.refresh(project)
-    return to_project_response(project)
+    return to_project_response(
+        project, mcp_server_warnings=await _mcp_server_warnings(session, project)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +628,10 @@ async def update_project(
             ):
                 payload.repository_config[platform_key] = project.repository_config[platform_key]
 
+    previous_mcp_names = {
+        str(s.get("name")) for s in (project.mcp_servers or []) if isinstance(s, dict)
+    }
+
     apply_partial_update(
         project,
         payload,
@@ -612,6 +640,23 @@ async def update_project(
         # `chat_llm_config` (JSON `chat_model_config`) → columna `chat_model_config`.
         rename={"llm_config": "model_config", "chat_llm_config": "chat_model_config"},
     )
+
+    # ADR 0166 D7 R4: un servidor que sale del proyecto se lleva sus filas
+    # `<server>.*` y sus claves de `mcp_tool_roles` — salvo que otro proyecto vivo
+    # del tenant declare un servidor con ese nombre (las filas son de tenant).
+    if "mcp_servers" in payload.model_fields_set and payload.mcp_servers is not None:
+        current_mcp_names = {
+            str(s.get("name")) for s in (project.mcp_servers or []) if isinstance(s, dict)
+        }
+        removed = previous_mcp_names - current_mcp_names
+        if removed:
+            await retire_server_tools(
+                session,
+                tenant_id=tenant_id,
+                project=project,
+                server_names=removed,
+                actor_user_id=principal.user_id,
+            )
 
     # P1-01: archivar cancela el trabajo en vuelo (tareas + runs) — espejo de la
     # cascada del soft-delete, sin el soft-delete.
@@ -625,7 +670,9 @@ async def update_project(
 
     await session.flush()
     await session.refresh(project)
-    return to_project_response(project)
+    return to_project_response(
+        project, mcp_server_warnings=await _mcp_server_warnings(session, project)
+    )
 
 
 # ---------------------------------------------------------------------------

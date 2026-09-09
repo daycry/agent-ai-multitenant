@@ -129,6 +129,21 @@ async def oauth_connect(
     return OAuthConnectResponse(authorization_url=authorization_url)
 
 
+async def _enqueue_import_after_connect(tenant_id: str, project_id: str, server_name: str) -> None:
+    """Encola el import de tools del servidor recién conectado (ADR 0166 D3/D5).
+
+    Import diferido para no arrastrar Celery al importar el router. No hay
+    transacción abierta en el callback (no toca la BD), así que se publica
+    directamente. Si no hay broker, `enqueue_*` devuelve False y lo registra: la
+    tarjeta seguirá diciendo «sin importar» y el botón manual sigue ahí (D4).
+    """
+    from api_server.celery_client import enqueue_mcp_import_server_tools
+
+    await enqueue_mcp_import_server_tools(
+        tenant_id=UUID(tenant_id), project_id=UUID(project_id), server_name=server_name
+    )
+
+
 @router.get("/callback")
 async def oauth_callback(
     project_id: UUID,
@@ -165,6 +180,9 @@ async def oauth_callback(
                 resolver=resolver,
                 redis=redis,
                 http_client=client,
+                # ADR 0166 D5: «Conectar» completado es el disparador del import
+                # automático de un servidor OAuth (el guardado nunca lo fue).
+                on_connected=_enqueue_import_after_connect,
             )
     except McpOAuthError as exc:
         return RedirectResponse(

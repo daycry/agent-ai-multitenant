@@ -288,6 +288,7 @@ def test_the_response_models_of_every_route_survived() -> None:
     from api_server.routers.agents.tools import EffectiveToolsResponse
     from api_server.schemas.agents import (
         AgentDiffResponse,
+        AgentForkResponse,
         AgentProviderOptionsResponse,
         AgentResponse,
     )
@@ -296,7 +297,12 @@ def test_the_response_models_of_every_route_survived() -> None:
     assert by_name["create_agent"] is AgentResponse
     assert by_name["update_agent"] is AgentResponse
     assert by_name["merge_from_source"] is AgentResponse
-    assert by_name["fork_agent"] is AgentResponse
+    # `task_mk_13` (MK-06) ensanchó ESTA a propósito: el fork no se lleva las tools
+    # MCP (son del proyecto, ADR 0052/0128) y lo dice en `mcp_tools_not_copied`. Se
+    # exige además que siga siendo un `AgentResponse` para que el ensanchamiento no
+    # se convierta en la puerta por la que la ruta devuelve otra cosa cualquiera.
+    assert by_name["fork_agent"] is AgentForkResponse
+    assert issubclass(AgentForkResponse, AgentResponse)
     assert by_name["list_agents"] == list[AgentResponse]
     assert by_name["get_agent_provider_options"] is AgentProviderOptionsResponse
     assert by_name["diff_fork_against_source"] is AgentDiffResponse

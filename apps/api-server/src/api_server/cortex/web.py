@@ -9,7 +9,9 @@ Reglas no negociables (Principio 2 — egress controlado):
   * TODA salida a Internet va por el ``egress-proxy`` (tinyproxy con allowlist). El
     api-server NUNCA abre una conexión directa: el httpx client se construye con
     ``proxy=<egress-proxy-url>``. El proxy es configurable por env
-    (``API_SERVER_CORTEX_EGRESS_PROXY_URL``).
+    (``API_SERVER_EGRESS_PROXY_URL``; el nombre viejo
+    ``API_SERVER_CORTEX_EGRESS_PROXY_URL`` sigue valiendo como alias — ADR 0165,
+    que le añadió un consumidor que no es del córtex).
   * ANTES de cualquier GET se valida la URL con :func:`assert_safe_url` (anti-SSRF):
     sólo http/https, host no privado/loopback/metadata, puerto permitido. El
     resolver DNS se inyecta en tests.
@@ -63,7 +65,7 @@ def _build_proxied_client(proxy_url: str | None, timeout: float) -> httpx.AsyncC
     trata el caller (aquí no auto-seguimos a un Location potencialmente privado)."""
     if not proxy_url:
         raise WebSearchError(
-            "no hay egress-proxy configurado (API_SERVER_CORTEX_EGRESS_PROXY_URL); "
+            "no hay egress-proxy configurado (API_SERVER_EGRESS_PROXY_URL); "
             "la web del córtex NO sale a Internet sin el proxy"
         )
     return httpx.AsyncClient(

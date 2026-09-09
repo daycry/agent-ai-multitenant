@@ -159,6 +159,10 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             # registrar la task y los mensajes de la cola `marketplace` mueren
             # con NotRegistered mientras el endpoint sigue devolviendo 202.
             "workers.marketplace_gates",
+            # ADR 0166 D3 (`task_mk_01`): el import de tools de un servidor MCP que
+            # dispara un despliegue del marketplace o el «Conectar» de OAuth. Misma
+            # lane `marketplace`; sin este import, misma muerte por NotRegistered.
+            "workers.mcp_import",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

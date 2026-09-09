@@ -21,6 +21,7 @@ probe as the NOBYPASSRLS app_user so the policies are actually exercised.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -449,3 +450,58 @@ async def test_official_listings_cannot_be_modified_from_a_tenant(
     assert after["author"] != "intruso"
     assert after["tenant_id"] is None
     assert after["deleted_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# task_mk_22 (MK-04): el catálogo distribuye los MCP remotos
+# ---------------------------------------------------------------------------
+def test_seed_publishes_the_remote_mcp_servers(
+    alembic_config, migrations_pg_dsn: str, tmp_path: Path
+) -> None:
+    """`atlassian-remote` y `github-remote` nacen como listings `mcp_server`
+    VERIFIED + GLOBAL, con la URL y el transporte de la plantilla del catálogo
+    MCP (una sola fuente) y el `config_schema` que el despliegue pregunta:
+    nada para Atlassian (OAuth) y el `auth_ref` de Vault para GitHub. Las
+    plantillas `stdio` NO se publican: la imagen del runtime no lleva binarios."""
+    command.upgrade(alembic_config, "head")
+    asyncio.run(_truncate(migrations_pg_dsn))
+    asyncio.run(_run_seed(_as_async_dsn(migrations_pg_dsn), str(tmp_path)))
+
+    async def _fetch() -> list[asyncpg.Record]:
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            return await conn.fetch(
+                "SELECT name, kind, trust_level, tenant_id, review_status, manifest::text"
+                " FROM marketplace_listings WHERE deleted_at IS NULL AND kind = 'mcp_server'"
+                " ORDER BY name"
+            )
+        finally:
+            await conn.close()
+
+    rows = asyncio.run(_fetch())
+    assert [r["name"] for r in rows] == ["atlassian-remote", "github-remote"]
+    manifests = {r["name"]: json.loads(r["manifest"]) for r in rows}
+    for row in rows:
+        assert row["trust_level"] == _VERIFIED
+        assert row["tenant_id"] is None
+        assert row["review_status"] == "published"
+        manifest = manifests[row["name"]]
+        assert manifest["implementation_type"] == "mcp_tool"
+        assert manifest["mcp_server"]["transport"] == "streamable_http"
+        assert manifest["mcp_server"]["url"].startswith("https://")
+        assert manifest["targets"], "D5: el manifest sugiere roles destino"
+
+    atlassian = manifests["atlassian-remote"]
+    assert atlassian["mcp_server"]["name"] == "atlassian"
+    assert atlassian["mcp_server"]["url"] == "https://mcp.atlassian.com/v1/mcp"
+    assert atlassian["config_schema"].get("required", []) == []
+
+    github = manifests["github-remote"]
+    assert github["mcp_server"]["url"] == "https://api.githubcopilot.com/mcp/"
+    assert github["config_schema"]["required"] == ["auth_ref"]
+
+    # Ninguna plantilla stdio se cuela como listing.
+    from shared_mcp.catalog import CATALOG
+
+    stdio_ids = {t.id for t in CATALOG.values() if t.transport == "stdio"}
+    assert not (stdio_ids & set(manifests)), "una plantilla stdio se publicó en el marketplace"

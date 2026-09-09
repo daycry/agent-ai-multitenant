@@ -101,6 +101,28 @@ const TENANT_REGISTRY = {
 
 const PLATFORM_REGISTRY = {
   categories: {
+    // task_mk_02 (ADR 0165 D6.5): el tipo `string_list` entra con sus dos caras,
+    // como el resto — un control nuevo sin fixture bilingüe entra sin cobertura.
+    egress: {
+      label_es: "Egress / Red",
+      label_en: "Egress / Network",
+      icon: "Network",
+      description_es: "Qué puede alcanzar la plataforma fuera del stack.",
+      description_en: "What the platform may reach outside the stack.",
+      settings: {
+        "egress.mcp_allowed_hosts": {
+          type: "string_list",
+          default: [],
+          label_es: "Hosts MCP remotos permitidos",
+          label_en: "Allowed remote MCP hosts",
+          description_es: "Hostnames de servidores MCP remotos que los sandboxes pueden alcanzar.",
+          description_en: "Hostnames of remote MCP servers the sandboxes may reach.",
+          min_value: null,
+          max_value: null,
+          max_items: 100,
+        },
+      },
+    },
     ejecucion: {
       label_es: "Ejecución",
       label_en: "Execution",
@@ -206,6 +228,7 @@ function routeApi(path: string): unknown {
       { key: "max_review_retries", value: 3, is_default: true },
       { key: "approvals_expiry_sweep_enabled", value: true, is_default: true },
       { key: "model.default_config", value: {}, is_default: true },
+      { key: "egress.mcp_allowed_hosts", value: ["mcp.atlassian.com"], is_default: false },
     ];
   }
   if (path === "/agents/provider-options") {
@@ -441,6 +464,10 @@ describe("settings/platform-defaults — valores por defecto de plataforma", () 
     expect(screen.getAllByRole("button", { name: "Guardar" }).length).toBeGreaterThan(0);
     // El selector de modelo por defecto de agentes.
     expect(screen.getByText("Temperatura")).toBeDefined();
+    // La lista de hosts de egress (`string_list`): etiqueta del registry y marco.
+    expect(screen.getByText("Hosts MCP remotos permitidos")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Comprobar contra el proxy" })).toBeDefined();
+    expect(screen.getByText("1 de 100 entradas")).toBeDefined();
   });
 
   it("en inglés rinde el marco traducido y el par inglés del registry", async () => {
@@ -454,8 +481,13 @@ describe("settings/platform-defaults — valores por defecto de plataforma", () 
     expect(screen.getByText("Enabled")).toBeDefined();
     expect(screen.getAllByRole("button", { name: "Save" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Temperature")).toBeDefined();
+    expect(screen.getByText("Allowed remote MCP hosts")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Check against the proxy" })).toBeDefined();
+    expect(screen.getByText("1 of 100 entries")).toBeDefined();
 
     expect(screen.queryByText("Ejecución")).toBeNull();
+    expect(screen.queryByText("Hosts MCP remotos permitidos")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Comprobar contra el proxy" })).toBeNull();
     expect(screen.queryByText("Reintentos máximos de revisión")).toBeNull();
     expect(screen.queryByText("Activado")).toBeNull();
     expect(screen.queryByText("Temperatura")).toBeNull();

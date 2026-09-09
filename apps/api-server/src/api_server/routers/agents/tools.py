@@ -39,7 +39,10 @@ from api_server.auth.deps import (
 from api_server.chat.modes import resolve_mode_config
 from api_server.db.domain import Agent, AgentTool, Project, Tool
 from api_server.routers._helpers import require_tenant_id
-from api_server.routers.agents.common import _load_writable_agent_for_tools
+from api_server.routers.agents.common import (
+    _load_writable_agent_for_tools,
+    marketplace_provenance,
+)
 from api_server.schemas.agents import AgentToolResponse, SetAgentToolsRequest
 from api_server.schemas.catalog import tool_is_runtime_wired
 
@@ -76,6 +79,8 @@ async def list_agent_tools(
         )
         .order_by(Tool.name, Tool.id)
     )
+    assigned = rows.all()
+    provenance = await marketplace_provenance(session, [tool for _, tool in assigned])
     return [
         AgentToolResponse(
             tool_id=tool.id,
@@ -86,8 +91,9 @@ async def list_agent_tools(
             security_level=tool.security_level,
             is_builtin=tool.is_builtin,
             config_override=config_override,
+            **provenance[tool.id],
         )
-        for config_override, tool in rows.all()
+        for config_override, tool in assigned
     ]
 
 
@@ -170,6 +176,7 @@ async def set_agent_tools(
         )
     await session.flush()
 
+    provenance = await marketplace_provenance(session, list(tools_by_id.values()))
     return [
         AgentToolResponse(
             tool_id=tool.id,
@@ -180,6 +187,7 @@ async def set_agent_tools(
             security_level=tool.security_level,
             is_builtin=tool.is_builtin,
             config_override=requested[tool.id],
+            **provenance[tool.id],
         )
         for tool in sorted(tools_by_id.values(), key=lambda t: (t.name, str(t.id)))
     ]

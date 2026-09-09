@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from shared_mcp.catalog import ATLASSIAN_REMOTE_MCP, GITHUB_REMOTE_MCP, McpServerTemplate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -321,6 +322,89 @@ _OFFICIAL_SKILLS: tuple[_OfficialSkill, ...] = (
 
 
 @dataclass(frozen=True, slots=True)
+class _OfficialMcpServer:
+    """Un listing `mcp_server` del catálogo oficial (`task_mk_22`, MK-04).
+
+    Se deriva de la plantilla del catálogo MCP (`shared_mcp.catalog`) para que
+    URL, transporte y timeout tengan UNA fuente: el marketplace distribuye lo
+    mismo que el picker «Añadir MCP server» ofrece. Sólo entran plantillas
+    HTTP — las `stdio` quedan fuera por transporte, igual que en
+    `routers/mcp_catalog.py::offered_catalog` (la imagen del runtime no lleva
+    binarios). `targets` es la sugerencia de roles (ADR 0142 D5) y
+    `config_schema` lo que se pregunta al desplegar por proyecto (D8).
+    """
+
+    template: McpServerTemplate
+    version: str
+    targets: tuple[str, ...]
+    config_schema: dict[str, object]
+
+    @property
+    def name(self) -> str:
+        return str(self.template.id)
+
+    def manifest(self) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "name": self.template.id.removesuffix("-remote"),
+            "transport": self.template.transport,
+            "url": self.template.url,
+            "timeout_s": self.template.default_timeout_s,
+        }
+        return {
+            "implementation_type": "mcp_tool",
+            "implementation_ref": self.template.url,
+            "description": self.template.description,
+            "targets": list(self.targets),
+            "mcp_server": entry,
+            "config_schema": dict(self.config_schema),
+            "docs_url": self.template.docs_url,
+            "maintainer": self.template.maintainer,
+        }
+
+
+_OFFICIAL_MCP_SERVERS: tuple[_OfficialMcpServer, ...] = (
+    _OfficialMcpServer(
+        template=ATLASSIAN_REMOTE_MCP,
+        version="1.0.0",
+        # Jira + Confluence sirven a quien planifica, implementa, revisa y documenta.
+        targets=(
+            "project_manager",
+            "backend_dev",
+            "frontend_dev",
+            "reviewer",
+            "qa",
+            "technical_writer",
+        ),
+        # OAuth (ADR 0127): no hay secreto que pedir; el operador pulsa «Conectar»
+        # tras desplegar y las tools se importan solas (ADR 0166).
+        config_schema={"type": "object", "properties": {}},
+    ),
+    _OfficialMcpServer(
+        template=GITHUB_REMOTE_MCP,
+        version="1.0.0",
+        targets=("backend_dev", "frontend_dev", "reviewer"),
+        # El PAT va en Vault; aquí sólo se pide el puntero (`auth_ref`), que es una
+        # de las claves que `deploy._build_mcp_entry` superpone sobre la entrada.
+        config_schema={
+            "type": "object",
+            "properties": {
+                "auth_ref": {
+                    "type": "string",
+                    "widget": "text",
+                    "title": "Vault path del token",
+                    "description": (
+                        "Puntero al secreto con el valor completo `Bearer <token>`; "
+                        "por convención `vault:secret/data/mcp/github/<project_id>`."
+                    ),
+                }
+            },
+            "required": ["auth_ref"],
+        },
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogSeedResult:
     """The outcome of :func:`seed_marketplace_listings`.
 
@@ -403,6 +487,57 @@ async def _seed_skill_listing(
     return SeedResult(listing_id=listing.id, created=created)
 
 
+async def _seed_mcp_server_listing(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    server: _OfficialMcpServer,
+) -> SeedResult:
+    """Upsert ONE `mcp_server` listing (`task_mk_22`).
+
+    Misma identidad e idempotencia que las skills —``(source, tenant_id=NULL,
+    name, version)``—, sin artefacto en disco: no hay nada que instalar, el
+    despliegue escribe la entrada en `projects.mcp_servers` (ADR 0142). Sin
+    permisos declarados: el consentimiento aquí es el OAuth/Vault del propio
+    servidor, no la lista del marketplace.
+    """
+    existing = await session.execute(
+        select(MarketplaceListing).where(
+            MarketplaceListing.source_id == source_id,
+            MarketplaceListing.tenant_id.is_(None),
+            MarketplaceListing.name == server.name,
+            MarketplaceListing.version == server.version,
+        )
+    )
+    listing = existing.scalar_one_or_none()
+    manifest = server.manifest()
+    if listing is not None:
+        listing.kind = MarketplaceListingKind.MCP_SERVER.value
+        listing.description = server.template.description
+        listing.trust_level = MarketplaceTrustLevel.VERIFIED.value
+        listing.review_status = ListingReviewStatus.PUBLISHED.value
+        listing.manifest = manifest
+        listing.requested_permissions = []
+        await session.flush()
+        return SeedResult(listing_id=listing.id, created=False)
+    listing = MarketplaceListing(
+        source_id=source_id,
+        tenant_id=None,
+        kind=MarketplaceListingKind.MCP_SERVER.value,
+        name=server.name,
+        version=server.version,
+        description=server.template.description,
+        author=OFFICIAL_AUTHOR,
+        trust_level=MarketplaceTrustLevel.VERIFIED.value,
+        review_status=ListingReviewStatus.PUBLISHED.value,
+        manifest=manifest,
+        requested_permissions=[],
+    )
+    session.add(listing)
+    await session.flush()
+    return SeedResult(listing_id=listing.id, created=True)
+
+
 def _write_skill_artifact(artifact_root: str, listing_id: UUID, skill_md: str) -> None:
     """Write the SKILL.md under ``artifact_root/<listing_id>/SKILL.md``.
 
@@ -452,6 +587,12 @@ async def seed_marketplace_listings(
         result = await _seed_skill_listing(
             session, source_id=source.id, skill=skill, artifact_root=root
         )
+        listing_ids.append(result.listing_id)
+        created += int(result.created)
+
+    # `task_mk_22` (MK-04): los servidores MCP remotos que el catálogo distribuye.
+    for server in _OFFICIAL_MCP_SERVERS:
+        result = await _seed_mcp_server_listing(session, source_id=source.id, server=server)
         listing_ids.append(result.listing_id)
         created += int(result.created)
 

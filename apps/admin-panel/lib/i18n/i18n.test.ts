@@ -117,6 +117,13 @@ describe("dictionary — invariantes", () => {
       "agents.promptEsLabel",
       "agents.promptEnLabel",
       "agents.readOnlyBadge",
+      // `task_mk_13`: la insignia de procedencia es el nombre propio del producto.
+      "agents.capabilityFromMarketplaceBadge",
+      // `task_mk_20`: nombres propios de producto en las cabeceras de la sección.
+      "projectIntegrations.jiraHeading",
+      "projectIntegrations.confluenceHeading",
+      // `task_mk_23`: «Listing» es el término del producto en ambos idiomas.
+      "marketplace.shareCardListing",
       "agents.memoryScope",
       "agents.maxConcurrent",
       "agents.deleteWarningStrong",
@@ -333,6 +340,11 @@ describe("dictionary — invariantes", () => {
       "tenantPicker.slugLabel",
       "tenantPicker.portfolioHint",
       "board.plansCountOne",
+      // task_mk_02 (ADR 0165 D7.3) — el veredicto del sondeo de la allowlist.
+      // «error» es la misma palabra en los dos idiomas y coincide con el literal
+      // que devuelve la API (`permitido` / `bloqueado` / `error`); los otros dos
+      // veredictos sí se traducen.
+      "platformDefaults.verdictError",
     ]);
 
     const identical = new Set(

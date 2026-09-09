@@ -204,7 +204,8 @@ echo "==> Starting api-server on http://localhost:$API_PORT (logs: $API_LOG)"
 
 export API_SERVER_DATABASE_URL="postgresql+asyncpg://app_user:changeme-app-dev-only@localhost:15432/agentic_platform"
 export API_SERVER_ADMIN_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
-export API_SERVER_REDIS_URL="redis://localhost:6379/0"
+# Con la contraseña que `.env.example` fija (Redis arranca con `--requirepass`).
+export API_SERVER_REDIS_URL="redis://:changeme-redis-dev-only@localhost:6379/0"
 export API_SERVER_JWT_SECRET="dev-only-jwt-secret-change-me"
 # Each Playwright spec performs a fresh login. The default 5 / 15 min
 # limit trips 429 once we have a handful of screen tests; loosen for E2E.

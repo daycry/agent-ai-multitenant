@@ -257,15 +257,30 @@ Configurar el server (arriba) es solo la mitad. Para que un agente llame
 una tool MCP durante un run tienen que cumplirse **tres capas**, cada una
 en su sitio:
 
-| Capa                    | Dónde se configura                                                | Qué hace                                                                                                     |
-| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Servidor** → proyecto | `/admin/projects/{id}/mcp-servers` (esta guía)                    | Declara la conexión. Al despachar un run, el orchestrator inyecta `mcp_servers` y el runtime abre la sesión. |
-| **Tools** → catálogo    | Botón **"Importar tools"** en la card del server                  | Descubre las tools del server y las materializa en el catálogo del tenant como `<server>.<tool>`.            |
-| **Tools** → agente      | `/admin/agents/{id}` → pestaña Tools (o `PUT /agents/{id}/tools`) | Solo los agentes con la tool asignada la ven: la allowlist del run es la **intersección** agente ∩ modo.     |
+| Capa                         | Dónde se configura                                                                                                                   | Qué hace                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Egress** → plataforma      | Sistema → **Ajustes por defecto → Egress MCP** (`egress.mcp_allowed_hosts`, ADR 0165)                                                | Abre el host del servidor remoto en el proxy de salida de los sandboxes. Sin esto, «Probar» y el run fallan con `EGRESS_BLOCKED`.                    |
+| **Servidor** → proyecto      | `/admin/projects/{id}/mcp-servers` (esta guía)                                                                                       | Declara la conexión. Al despachar un run, el orchestrator inyecta `mcp_servers` y el runtime abre la sesión.                                         |
+| **Tools** → catálogo y roles | La propia card del server: **Importar** (o solo, al guardar / al conectar por OAuth, ADR 0166) y la **política de roles** (ADR 0128) | Materializa las tools como `<server>.<tool>` en el catálogo del tenant y decide qué **roles** las reciben en el run. Sin política = todos los roles. |
 
-Si te saltas la tercera capa, el server conecta pero el agente **no ve**
-las tools (la allowlist las filtra). Verás el step `mcp_wire` en el visor
-del run con las tools registradas, y aun así el modelo no las tendrá.
+Las tools MCP **no se asignan por agente** (ADR 0128, fase 3): son del
+proyecto y las reparte su política de roles. La pestaña Tools de la ficha del
+agente no las ofrece, y un fork del agente tampoco se las lleva (`task_mk_13`).
+Si un agente no las ve, mira la política de roles de la card y el step
+`mcp_wire` del visor del run: ahí aparecen las tools registradas y, si el
+servidor no estaba disponible, el motivo.
+
+### La allowlist de egress (ADR 0165)
+
+Los sandboxes salen a Internet por el egress-proxy, que niega por defecto.
+Un servidor MCP remoto necesita su host **exacto** (sin comodines) en el ajuste
+de plataforma `egress.mcp_allowed_hosts`; el System Admin lo edita en
+**Sistema → Ajustes por defecto → Egress MCP**, el renderizador reescribe el
+filtro del proxy y el botón **Probar** confirma que el host ya sale. Mientras
+no esté, la card del server enseña el aviso tipado `EGRESS_BLOCKED` y el
+guardado sigue funcionando (fail-open con aviso, D11): declarar el server no
+depende de la allowlist, usarlo sí. Los hosts internos siguen prohibidos aunque
+alguien los escriba.
 
 ### Dónde indicar el prompt
 
@@ -306,6 +321,25 @@ Hay dos sitios, según lo que quieras:
   conectó (y qué tools registró) o por qué falló. Sin ese step, el spec
   del run no llevaba `mcp_servers` (¿proyecto sin el server declarado en
   el momento del despacho?).
+- **El parentesco Jira lo compone el MODELO, no la plataforma** (decidido el
+  2026-09-09 en el
+  [ADR 0167](../05-architecture-decisions/0167-tools-de-plataforma-para-el-arbol-jira-confluence.md),
+  opción (b)). Las anclas del proyecto —epic padre y página raíz— le llegan al
+  agente en el preámbulo del run, pero **el JQL y el campo `parent` los escribe
+  él** llamando a las tools genéricas del MCP. Hay tres formas típicas de que
+  salga mal, y las tres se revisan mirando el mismo sitio:
+
+  | Síntoma en el run                                       | Qué pasó                                                                              | Qué mirar                                                                   |
+  | ------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+  | «no hay hijos» en un epic que sí los tiene              | El JQL usó `parent = KEY` donde ese sitio indexa `"Epic Link" = KEY`, o al revés      | El step `act` con la llamada a `jira_search`: el JQL va literal en los args |
+  | La issue se creó en el proyecto pero **fuera** del epic | Se omitió `parent` en `jira_create_issue` (o `parent_id` en `confluence_create_page`) | Los args de esa llamada; y en Jira, el campo «Parent» de la issue creada    |
+  | El agente se queda sin iteraciones antes del trabajo    | Reintentos de descubrimiento del parentesco, uno por llamada de modelo                | El contador de iteraciones del run frente a `max_iterations` del agente     |
+
+  Cuando ocurra, **anótalo en el ADR 0167**: su reapertura está atada a este
+  plan y esa evidencia es exactamente la que decide si las dos tools de
+  plataforma (`jira_children_of_parent`, `confluence_page_under_root`) valen los
+  dos días que cuestan. El atajo mientras tanto es de prompt: decirle en la
+  descripción del plan qué forma de parentesco usa ese sitio de Jira.
 
 ---
 
@@ -360,3 +394,68 @@ al humano. El sistema no se cae ni filtra credenciales.
 - **ADR del modelo de tools / MCP**:
   [docs/05-architecture-decisions/0025-mcp-tools-y-ejecutores.md](../05-architecture-decisions/0025-mcp-tools-y-ejecutores.md)
 - **Plan de fase**: `docs/roadmap/05-mcp-tools-avanzadas.md`
+
+## Ejemplo 3 — Atlassian completo: MCP remoto + anclas del proyecto
+
+Plan `remediacion-marketplace-mcp-2026-09-02` (`task_mk_21`, MK-05). Es el
+recorrido entero para que un proyecto trabaje contra **su** epic de Jira y
+**su** página raíz de Confluence sin que nadie repita los identificadores en
+cada plan.
+
+### Paso 1 · Declarar el MCP remoto de Atlassian en el proyecto
+
+En `/admin/projects/{id}/mcp-servers` → **Añadir MCP server** → plantilla
+**Atlassian (remoto, OAuth)**. Deja el nombre por defecto (`atlassian`) o el
+que prefieras: las skills no cablean el nombre, hablan de «tus herramientas de
+Jira/Confluence». Guarda.
+
+Si el host del servidor (`mcp.atlassian.com`) no está en la allowlist de
+egress de la plataforma, la tarjeta lo avisa (ADR 0165): el System Admin lo
+añade en **Plataforma → Ajustes por defecto → Egress MCP** y pulsa **Probar**.
+
+### Paso 2 · Conectar por OAuth e importar
+
+Pulsa **Conectar** en la tarjeta y completa el consentimiento de Atlassian. Al
+volver, las tools se importan **solas** (ADR 0166): la insignia pasa a «N tools
+importadas». No hay que asignarlas por agente — las MCP del proyecto las
+reparte la política de roles de la tarjeta (ADR 0128).
+
+### Paso 3 · Poner las anclas del proyecto
+
+En la ficha del proyecto, sección **Integraciones**:
+
+| Campo                          | Ejemplo    | Qué hace en el run                                       |
+| ------------------------------ | ---------- | -------------------------------------------------------- |
+| Jira · Clave del proyecto      | `PLAT`     | Acota búsquedas y creación de issues a ese proyecto      |
+| Jira · Issue padre (epic)      | `PLAT-120` | Las tareas se crean como hijas de ese epic               |
+| Confluence · Clave del espacio | `ENG`      | Acota la búsqueda y publicación de páginas a ese espacio |
+| Confluence · Página raíz (id)  | `123456`   | Las páginas se crean como hijas de esa página            |
+
+Sin secretos aquí: las credenciales viven en el MCP (OAuth del paso 2). El
+backend valida el formato (`PLAT`, `PLAT-120`, id numérico) y rechaza claves
+desconocidas con un 422.
+
+### Paso 4 · Qué recibe el run
+
+El orchestrator añade `integrations` al `ExecutionRequest`; el worker lo pasa
+al spec y el runtime lo pliega como el bloque **«PROJECT INTEGRATION
+ANCHORS»** del preámbulo, justo detrás de la persona del agente:
+
+```text
+PROJECT INTEGRATION ANCHORS. This project works under the anchors below …
+- Jira project: PLAT
+- Jira parent issue (epic): PLAT-120
+- Confluence space: ENG
+- Confluence root page id: 123456
+```
+
+Las skills builtin `atlassian-jira-task-tracking`, `atlassian-jira-review-notes`,
+`atlassian-confluence-docs` y `atlassian-jira-planning-context` leen esas
+anclas **primero** y sólo caen a la descripción del plan si falta alguna. Un
+proyecto sin anclas no lleva el bloque y las skills se comportan como antes.
+
+### Paso 5 · Verificar
+
+Lanza una tarea con un agente que tenga una skill `atlassian-*`. En el visor
+del run, el preámbulo enseña el bloque de anclas y la sub-issue aparece bajo
+`PLAT-120` (test humano `human_mk_03` del plan).

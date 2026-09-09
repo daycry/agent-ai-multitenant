@@ -94,6 +94,11 @@ _BACKUP_PROBE_QUEUE = _RESTORE_QUEUE
 # deja el mensaje en el broker para siempre y el endpoint devuelve 202 igual.
 MARKETPLACE_GATES_TASK = "workers.marketplace_run_install_gates"
 MARKETPLACE_GATES_QUEUE = "marketplace"
+# ADR 0166 D3 (`task_mk_01`): el import de tools de un servidor MCP que dispara
+# un despliegue del marketplace o el «Conectar» de OAuth. Misma lane que las
+# puertas, mismo contrato de nombres con `workers.mcp_import`.
+MCP_IMPORT_TASK = "workers.mcp_import_server_tools"
+MCP_IMPORT_QUEUE = "marketplace"
 
 # The human Memorizer task (Plan 16 task_16_15). When a human task reaches
 # `done` (auto_approve submit, or a peer reviewer's approval) the inbox/review
@@ -194,6 +199,54 @@ async def enqueue_marketplace_install_gates(*, installation_id: UUID, tenant_id:
         _log.warning(
             "marketplace.gates.enqueue_failed",
             installation_id=str(installation_id),
+            error=str(exc),
+        )
+        return False
+    return True
+
+
+async def enqueue_mcp_import_server_tools(
+    *,
+    tenant_id: UUID,
+    project_id: UUID,
+    server_name: str,
+    installation_id: UUID | None = None,
+    listing_id: UUID | None = None,
+    version: str | None = None,
+    roles: list[str] | None = None,
+) -> bool:
+    """Encola el import automático de las tools de un servidor MCP (ADR 0166 D3).
+
+    Se llama tras el commit del despliegue (`schedule_after_commit`) o al cerrar
+    el «Conectar» de OAuth: los dos momentos en que el operador ya decidió algo
+    sobre ESE servidor y no hay diálogo abierto. Nunca desde el guardado del
+    proyecto (D1: la transacción del request no puede esperar a un tercero).
+
+    Por el broker viajan identificadores, el nombre del servidor y los roles del
+    `role_map`: la task lo lee todo de la BD bajo el `tenant_id` del mensaje. El
+    fallo se devuelve, no se traga — y no hay estado que se quede atascado si
+    nadie lo drena (D4: «N tools importadas» es un COUNT, no una columna).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            MCP_IMPORT_TASK,
+            kwargs={
+                "tenant_id": str(tenant_id),
+                "project_id": str(project_id),
+                "server_name": server_name,
+                "installation_id": str(installation_id) if installation_id else None,
+                "listing_id": str(listing_id) if listing_id else None,
+                "version": version,
+                "roles": list(roles) if roles else None,
+            },
+            queue=MCP_IMPORT_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning(
+            "mcp.import.enqueue_failed",
+            project_id=str(project_id),
+            server=server_name,
             error=str(exc),
         )
         return False

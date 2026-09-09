@@ -98,3 +98,55 @@ Requisitos para que el install fresco sea seguro **y** produzca capacidad:
 - **Cablear los gates ya (naïve):** regresa el feature (todo install → 422). Descartado.
 - **Saltar los gates cuando falta infra (fail-open):** degradación de seguridad silenciosa,
   contradice el diseño "fail-closed" del orquestador. Descartado.
+
+## Reapertura de la Fase B/C (2026-09-08, `task_mk_10` del plan `remediacion-marketplace-mcp-2026-09-02`)
+
+La auditoría del 2026-09-02 (hallazgo **MK-01 · ALTO**) midió lo que este ADR
+dejó abierto: `python_function` y `docker_command` se instalan `enabled` **sin
+fila** (`materialize.py`, «diferido honesto»), mientras el runtime **sí** los
+ejecutaría si la fila existiera (`tool_wiring.py`). Se vende una capacidad que
+no llega. Y una segunda cosa que este ADR no vio: el formato privado de tools
+(`tool.yaml`, Plan 09) no lleva `implementation_type` sino
+`implementation.runtime` (python, node…), así que un tenant que publica una tool
+propia pasa la publicación, la revisión y el consentimiento, y muere al
+**habilitar** con `enable cannot materialise its capability` — dos pantallas
+después de donde se decidió.
+
+### Las dos opciones
+
+| Opción                                                                                                                                                                                                      | A favor                                                                                                                                                                                                          | En contra                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(a) Materializar** `python_function`/`docker_command` con el gate de revisión que YA existe (`workers/marketplace_gates.py` en la lane `marketplace`, cola de revisión de `routers/marketplace/admin.py`) | El runtime ya los ejecuta; el sandbox del ADR 0081 §1 existe hoy como task fuera del api-server (prod-13); la fila `Tool` sería el ancla de gobernanza de siempre (ADR 0052/0101).                               | **Reabre la superficie de ejecución de código arbitrario del marketplace** (riesgo escrito en el plan): hay que MEDIR que el gate se aplica a TODO listing antes de la fila, no sólo al `async_gates` opt-in; el registro de artefactos (§2) y la clave de firma (§3) siguen sin cablear. Es una **decisión de producto y de seguridad**, no de implementación. |
+| **(b) Rechazar** esos manifiestos en la publicación privada hasta que exista (a), y que «Instaladas» no muestre `enabled` a un ítem sin fila                                                                | Honesto y barato: el fallo aparece donde se decide, con motivo y ADR; cero superficie nueva; el catálogo oficial ya no publica nada de estos tipos salvo Playwright, que va por su propio despliegue (ADR 0142). | No da capacidad: un tenant que quiera una tool Python propia sigue sin poder. Es exactamente el estado de hoy, dicho en voz alta.                                                                                                                                                                                                                               |
+
+### Lo que se aplica ahora: (b)
+
+La casilla `task_mk_10` lo ordena así («mientras no se decida, aplicar (b)») y la
+orden permanente del operador reserva las decisiones de producto: **(a) queda
+propuesta al operador**, no tomada. Lo implementado el 2026-09-08:
+
+1. `marketplace/capability.py::capability_of` clasifica por dónde llega la
+   capacidad de un listing: `catalog_row` (skills, tools de red), `on_deploy`
+   (servidores MCP — ADR 0166 D6 — y listings con validador tipado en su
+   `config_schema`, como Playwright) o `deferred` (código arbitrario sin
+   sandbox). Resuelve el formato privado (`implementation.runtime` ⇒ código).
+2. `GET /marketplace/installations` devuelve `capability` y `capability_reason`
+   (LEFT JOIN al listing), y la pestaña «Instaladas» pinta «Autorizada, sin
+   capacidad» en vez de «Habilitada» cuando `enabled` + `deferred`.
+3. `POST /marketplace/private/listings` rechaza con **422 y motivo** un manifiesto
+   de `kind: tool` con `implementation.runtime`; un `mcp_server` privado sigue
+   pasando (su capacidad la crea el import del despliegue).
+
+`materialize_installation` **no cambia**: el «diferido honesto» sigue ahí para
+las filas que ya existen en el catálogo oficial o en instalaciones anteriores.
+
+### Qué necesita (a) para dejar de ser propuesta
+
+Los cinco puntos de §«Plan de Fase B/C» siguen vigentes, y el 1 está parcialmente
+hecho (la lane `marketplace` ejecuta el sandbox fuera del api-server desde
+prod-13). Lo que falta medir antes de firmar (a): que **ningún** camino de
+instalación de un listing con código llegue a `ENABLED` sin haber pasado el
+gate de sandbox —hoy `async_gates` es opt-in (`schemas/marketplace.py:143`)— y
+que el `security_level` de la fila resultante nazca `sandboxed` y el runtime lo
+respete. Con eso medido, (a) es una casilla de implementación; sin eso, es un
+agujero con un nombre bonito.

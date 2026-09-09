@@ -389,7 +389,9 @@ describe("política rol→tool en los dos idiomas", () => {
     renderIn("en", <McpToolRolePolicySection projectId="proj-1" />);
 
     const empty = await screen.findByTestId("mcp-tool-roles-empty");
-    expect(empty.textContent).toContain("no MCP tools imported yet");
+    // ADR 0166 D2: el estado vacío enlaza al botón «Importar» de la tarjeta.
+    expect(empty.textContent).toContain("no MCP tools imported into the catalog yet");
+    expect(empty.textContent).toContain("Import");
     expect(screen.getByTestId("mcp-tool-roles-save").textContent).toBe("Save");
   });
 });

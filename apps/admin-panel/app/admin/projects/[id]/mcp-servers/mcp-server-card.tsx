@@ -16,11 +16,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT } from "@/lib/i18n";
 import { McpOAuthConnect } from "./mcp-oauth-connect";
+import { McpServerCardActions } from "./mcp-server-card-actions";
 import {
   OAUTH_AUTH_KIND,
   TRANSPORT_BADGE,
   TRANSPORT_LABEL,
   type McpServerConfig,
+  type McpServerEgressWarning,
 } from "./mcp-server-types";
 
 // --------------------------------------------------------------------------
@@ -34,6 +36,8 @@ export function McpServerCard({
   projectId,
   authKind,
   providerLabel,
+  egressWarning,
+  importedCount,
 }: {
   server: McpServerConfig;
   onEdit: () => void;
@@ -45,6 +49,13 @@ export function McpServerCard({
   projectId?: string;
   authKind?: string;
   providerLabel?: string;
+  // task_mk_02 (ADR 0165 D11): el aviso del backend cuando el host externo del
+  // servidor aún no está en la allowlist de egress. Se pinta en la PÁGINA (esta
+  // tarjeta), no en el diálogo, porque el diálogo se cierra al guardar.
+  egressWarning?: McpServerEgressWarning;
+  // ADR 0166 D2/D4 (task_mk_01): filas `<server>.*` vivas en el catálogo
+  // (`null` mientras carga; `undefined` = la página no lo calcula, sin acciones).
+  importedCount?: number | null;
 }) {
   const t = useT("mcpServers");
   const isOAuth = authKind === OAUTH_AUTH_KIND;
@@ -66,12 +77,26 @@ export function McpServerCard({
                 vault
               </Badge>
             ) : null}
+            {egressWarning ? (
+              <Badge variant="warning" data-testid={`mcp-server-egress-badge-${server.name}`}>
+                {t("egressWarningBadge")}
+              </Badge>
+            ) : null}
           </CardTitle>
           <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
             {server.transport === "stdio"
               ? `${server.command ?? ""} ${server.args.join(" ")}`.trim()
               : (server.url ?? "")}
           </p>
+          {egressWarning ? (
+            <p
+              className="text-warning-soft-foreground mt-1 text-xs"
+              title={egressWarning.message}
+              data-testid={`mcp-server-egress-warning-${server.name}`}
+            >
+              {t("egressWarning", { host: egressWarning.host })}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -96,13 +121,23 @@ export function McpServerCard({
           </Button>
         </div>
       </CardHeader>
-      {isOAuth && projectId ? (
+      {(isOAuth && projectId) || (projectId && importedCount !== undefined) ? (
         <CardContent className="pt-0">
-          <McpOAuthConnect
-            projectId={projectId}
-            serverName={server.name}
-            providerLabel={providerLabel}
-          />
+          {isOAuth ? (
+            <McpOAuthConnect
+              projectId={projectId}
+              serverName={server.name}
+              providerLabel={providerLabel}
+            />
+          ) : null}
+          {importedCount !== undefined ? (
+            <McpServerCardActions
+              projectId={projectId}
+              server={server}
+              importedCount={importedCount}
+              disabled={busy}
+            />
+          ) : null}
         </CardContent>
       ) : null}
     </Card>

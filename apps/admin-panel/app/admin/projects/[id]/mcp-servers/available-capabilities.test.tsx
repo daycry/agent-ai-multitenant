@@ -10,7 +10,7 @@
 // arrastra, y no lo caza ningún test del componente.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -99,5 +99,43 @@ describe("pestaña MCP del proyecto — «Disponibles en tu tenant»", () => {
     expect(screen.getByTestId("available-capabilities-section")).toBeTruthy();
     // Una skill no se activa desde la pestaña MCP.
     expect(screen.queryByTestId("available-i2")).toBeNull();
+  });
+
+  // task_mk_11 (UI-02): la puerta de despliegue del proyecto enseña lo que pasó,
+  // igual que la ficha de la instalación — antes descartaba `warnings` y
+  // `oauth_pending`, y nadie pintaba `created_refs`.
+  it("tras activar, enseña avisos, OAuth pendiente y qué se escribió en el proyecto", async () => {
+    wireApi();
+    const base = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation((path: string, opts?: { method?: string }) => {
+      if (path === "/marketplace/installations/i1/deployments" && opts?.method === "POST") {
+        return Promise.resolve({
+          deployment: {
+            id: "dep-1",
+            created_refs: {
+              mcp_servers: ["jira"],
+              mcp_import: { server: "jira", queue: "marketplace", publish: "after_commit" },
+            },
+          },
+          already_deployed: false,
+          warnings: ["las tools de 'jira' se importarán al catálogo en segundo plano"],
+          oauth_pending: true,
+        });
+      }
+      return base(path, opts);
+    });
+    mount();
+    await waitFor(() => expect(screen.getByTestId("available-activate-i1")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("available-activate-i1"));
+    await waitFor(() => expect(screen.getByTestId("available-submit-i1")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("available-submit-i1"));
+
+    await waitFor(() => expect(screen.getByTestId("available-last-result")).toBeTruthy());
+    expect(screen.getByTestId("deploy-warnings-last").textContent).toContain("segundo plano");
+    expect(screen.getByTestId("deploy-oauth-last")).toBeTruthy();
+    const refs = screen.getByTestId("deploy-created-refs-last").textContent ?? "";
+    expect(refs).toContain("Servidores MCP declarados");
+    expect(refs).toContain("jira");
+    expect(refs).toContain("Import de tools encolado");
   });
 });

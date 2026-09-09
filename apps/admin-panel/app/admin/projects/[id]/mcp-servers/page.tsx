@@ -39,9 +39,12 @@ import { McpServerDialog } from "./mcp-server-dialog";
 import { McpToolRolePolicySection } from "./mcp-tool-roles-section";
 import {
   authKindByUrl,
+  type CatalogToolLite,
   emptyServer,
+  isMcpTool,
   type McpCatalogEntry,
   type McpServerConfig,
+  mcpServerPrefix,
   type ProjectResponse,
 } from "./mcp-server-types";
 
@@ -106,6 +109,25 @@ export default function ProjectMcpServersPage() {
   const [editingIndex, setEditingIndex] = useState<number>(-1);
 
   const servers = projectQuery.data?.mcp_servers ?? [];
+  // task_mk_02 (ADR 0165 D11): avisos por servidor con host externo fuera de la
+  // allowlist de egress. Vienen en la ficha y en el 200 del guardado; se pintan
+  // aquí y no en el diálogo, que se cierra al guardar.
+  const egressWarningByServer = new Map(
+    (projectQuery.data?.mcp_server_warnings ?? []).map((w) => [w.server, w] as const),
+  );
+  // ADR 0166 D4 (task_mk_01): «N tools importadas» es un COUNT de filas
+  // `<server>.*` del catálogo — el mismo criterio que el runtime—, no una columna.
+  // Misma queryKey que la sección de roles: el import la invalida para las dos.
+  const toolsQuery = useQuery({
+    queryKey: ["tools-catalog"],
+    queryFn: () => apiFetch<CatalogToolLite[]>("/tools?limit=500"),
+  });
+  const importedCountByServer = new Map<string, number>();
+  for (const tool of toolsQuery.data ?? []) {
+    if (!isMcpTool(tool)) continue;
+    const prefix = mcpServerPrefix(tool.name);
+    if (prefix) importedCountByServer.set(prefix, (importedCountByServer.get(prefix) ?? 0) + 1);
+  }
 
   const saveMutation = useMutation({
     mutationFn: (next: McpServerConfig[]) =>
@@ -212,6 +234,8 @@ export default function ProjectMcpServersPage() {
               projectId={projectId}
               authKind={server.url ? kindByUrl[server.url] : undefined}
               providerLabel={server.url ? nameByUrl[server.url] : undefined}
+              egressWarning={egressWarningByServer.get(server.name)}
+              importedCount={toolsQuery.data ? (importedCountByServer.get(server.name) ?? 0) : null}
             />
           ))}
         </div>

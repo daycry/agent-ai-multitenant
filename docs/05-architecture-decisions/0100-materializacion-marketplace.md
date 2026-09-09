@@ -6,10 +6,38 @@ date: 2026-07-03
 deciders: operador (pendiente)
 phase: auditoria-plataforma-2026-07-03
 related: ["0081", "0019", "0032", "0049", "0050", "0066", "0067"]
+amended_by: ["0166"]
 docs_language: es
 ---
 
 # ADR 0100 — Materialización del marketplace: puente install→catálogo, provenance y gates
+
+> **Enmendado por el [ADR 0166](0166-tools-mcp-en-el-catalogo-sin-paso-manual.md) el 2026-09-03,
+> y sólo para `kind=mcp_server`.** Este ADR **sigue `accepted`** y su decisión —materialización
+> parcial cortada por `implementation_type`, con provenance y des-materialización transaccional—
+> **no cambia**. Lo que queda sin efecto es **una rama** de su pieza 2: instalar un listing
+> `kind=mcp_server` **deja de producir una fila `Tool`** con el nombre del listing. `kind=skill` y
+> `kind=tool` —incluida una tool suelta con `implementation_type='mcp_tool'`, que sí **es** una
+> tool— siguen exactamente igual.
+>
+> **Por qué esa fila se retira.** No es una limpieza estética: esa fila **nunca fue invocable**.
+> `_project_mcp_tool_rows` (`agent_tools_enforcement.py:282-284`) exige el prefijo `<server>.`, así
+> que una fila con el nombre del listing es invisible al runtime; además representa un **servidor**,
+> no una tool, y con el import automático del 0166 convive con las `<server>.*` duplicando en
+> `/tools` lo que no duplica en el sistema. En su lugar, las filas namespaceadas que produce el
+> import disparado por el despliegue **estampan la procedencia** en las tres columnas de la pieza 1
+> (`source_listing_id`, `source_installation_id`, `source_version`).
+>
+> **El contrato de este ADR sale reforzado, no debilitado.** «La capacidad no puede sobrevivir a su
+> permiso» sigue igual y la query de `dematerialize_installation` (`materialize.py:259-305`) tampoco
+> cambia: sigue soft-borrando por `source_installation_id`. Cambia **qué encuentra** — las N filas
+> `<server>.*` en vez de una fila que nadie podía ejecutar. Por eso retirar la rama y estampar la
+> procedencia son **el mismo cambio**: sin el estampado, `uninstall`/`revoke` dejaría vivas todas las
+> tools de un servidor cuyo permiso se acaba de revocar, que es exactamente el fallo que este ADR
+> existe para impedir, agravado por el número de filas.
+>
+> Las tres ubicaciones tocadas llevan su nota en el sitio: §Decisión pieza 2 («Materializa ahora»),
+> §Criterio de aceptación punto 2 y §Estado de implementación.
 
 ## Contexto
 
@@ -83,12 +111,31 @@ que pueden secuenciarse (la primera es independiente y no activa el feature):
 
 2. **Paso de materialización transaccional**, disparado al pasar una instalación a `ENABLED`,
    **restringido al slice sin sandbox de arranque**:
-   - **Materializa ahora**: listings `kind=skill`; y `kind=tool`/`mcp_server` cuyo
+   - **Materializa ahora**: listings `kind=skill`; y `kind=tool`/~~`mcp_server`~~ cuyo
      `implementation_type` resuelto sea `mcp_tool` o `http_endpoint`. Upsert de la fila
      `Tool`/`Skill` del tenant instalador desde el manifest, con `category` **válida del
      catálogo cerrado** (ADR 0049 para tools, ADR 0050 para skills), nombre resuelto contra
      el índice `uq_tools_tenant_name` (`domain.py:543`) — colisión → sufijo determinista o
      422 explícito, nunca insert silencioso — y `source_*` poblado.
+
+     > **[Enmendado por el [ADR 0166](0166-tools-mcp-en-el-catalogo-sin-paso-manual.md), 2026-09-03]**
+     > El `mcp_server` tachado **queda fuera de esta rama**: su instalación ya no hace upsert de una
+     > fila `Tool` con el nombre del listing. Lo que materializa un `mcp_server` a partir de ahora son
+     > las filas namespaceadas `<server>.*` que produce el import de tools encolado tras el despliegue
+     > (§D3/D6 del 0166), con `source_listing_id`/`source_installation_id`/`source_version` estampados
+     > — es decir, esta misma frase, aplicada a los objetos que sí son tools. `kind=skill` y
+     > `kind=tool` no se tocan.
+     >
+     > **Aviso de implementación, no cosmético:** la resolución de colisión de nombre de esta viñeta
+     > —«sufijo determinista» (`_dedupe_name`, `materialize.py:101-121`, `-mkt-XXXXXX`)— **no se puede
+     > aplicar a una tool MCP**: un nombre sufijado ya no cumple `<server>.<tool>` y
+     > `_project_mcp_tool_rows` deja de verlo, o sea el mismo defecto que se está retirando,
+     > reintroducido por la puerta de atrás. Para las tools MCP el nombre no es negociable: o cabe en
+     > los 120 caracteres de `Tool.name`, o **se omite con aviso** (§D9 · L3 del 0166). Y el lookup
+     > previo por `Tool.source_installation_id` con `scalar_one_or_none()` (`materialize.py:213`)
+     > asume **una** fila por instalación: con N filas namespaceadas lanzaría `MultipleResultsFound`,
+     > así que retirar la rama y estampar la procedencia son el mismo cambio, no dos.
+
    - **Difiere** (no materializa; queda `ENABLED`-intent documentado, sin fila de catálogo):
      `implementation_type ∈ {python_function, docker_command}`, hasta que exista el sandbox
      out-of-process (Fase B/C completa de ADR 0081).
@@ -172,6 +219,23 @@ trazabilidad barata de la pieza 1 y el marketplace sigue sin ser un feature util
    un tool `python_function`/`docker_command` **no** crea fila de catálogo y queda marcado como
    diferido. `uninstall`/`revoke` soft-borra la fila materializada en la misma transacción:
    **test de no-orfandad** (no queda `Tool`/`Skill` viva sin instalación viva, ni viceversa).
+
+   > **[Enmendado por el [ADR 0166](0166-tools-mcp-en-el-catalogo-sin-paso-manual.md), 2026-09-03]**
+   > La palabra **«invocable»** de este criterio **era falsa para `kind=mcp_server`**, y conviene
+   > decirlo así de claro porque es el tipo de criterio que se da por cumplido leyéndolo: la fila que
+   > creaba el install no llevaba el prefijo `<server>.`, `_project_mcp_tool_rows`
+   > (`agent_tools_enforcement.py:282-284`) no la veía, y por tanto ni entraba en la allowlist del
+   > dispatch ni el runtime la ejecutaba. Un criterio de aceptación que afirma lo contrario de lo que
+   > hace el código no es un criterio: es una promesa que nadie comprobó.
+   >
+   > **Redacción vigente para `kind=mcp_server`**: un install `ENABLED` de un listing `mcp_server`
+   > declara el servidor en `projects.mcp_servers` y **encola el import de sus tools**; las filas
+   > invocables son las `<server>.*` que ese import crea, con `source_*` estampado. La no-orfandad se
+   > comprueba **sobre ellas** — `uninstall`/`revoke` las soft-borra todas en la misma transacción, y
+   > el test es que no quede ninguna `<server>.*` viva sin instalación viva. Para `kind=tool` (con
+   > `implementation_type` `mcp_tool` o `http_endpoint`) y `kind=skill` el criterio queda **tal cual
+   > está escrito arriba**.
+
 3. **Pieza 3 (gates)**: un artefacto oficial manipulado (firma inválida) → install `verified`
    → **422** con audit de abort (fail-closed); un skill/tool MCP con manifest inválido →
    rechazado en gate 2; el gate de sandbox de arranque **no** se ejecuta para el slice
@@ -184,3 +248,34 @@ trazabilidad barata de la pieza 1 y el marketplace sigue sin ser un feature util
 ## Estado de implementación (2026-07-13)
 
 OPCION (c) IMPLEMENTADA (mandato del operador «abordamos estos puntos»). Pieza 1: migracion **0111** (tools+skills: source_listing_id/source_installation_id/source_version, FK SET NULL, indice parcial). Pieza 2: `marketplace/materialize.py` — al pasar a ENABLED (install fresco verified o flip de consent) upsert transaccional de la fila nativa: kind=skill -> Skill (prompt_fragment obligatorio, categoria del catalogo cerrado con fallback honesto); tool/mcp_server con implementation_type de RED (mcp_tool/http_endpoint) -> Tool (security_level sandboxed por defecto); python_function/docker_command -> DIFERIDO honesto sin fila (deferred_reason al audit) hasta el sandbox ADR 0081 B/C. Idempotente por source_installation_id (re-enable resucita); colision de nombre -> sufijo determinista -mkt-XXXXXX; manifest invalido -> 422 y el enable aborta entero. Des-materializacion en uninstall/revoke (\_revoke_installation) y al quedarse DISABLED tras consent — la capacidad no sobrevive a su permiso (tests de no-orfandad). Pieza 3: el gate de analisis estatico YA corria en el install fresco (task_prod12_mkt_01); el gate de FIRMA verified sigue pendiente de la clave MARKETPLACE_SIGNING_PUBLIC_KEY en Vault (prerequisito de despliegue, no de codigo). Integracion 4/4.
+
+### Nota de enmienda (2026-09-03) — la rama `mcp_server` de la pieza 2 se retira
+
+El párrafo de arriba describe el comportamiento **vivo el 2026-07-13** y se conserva tal cual, en su
+fecha: es la traza de qué se implementó y cómo. Pero una de sus cláusulas —«tool/mcp_server con
+implementation_type de RED (mcp_tool/http_endpoint) -> Tool»— **ya no rige para `mcp_server`**, por
+el [ADR 0166](0166-tools-mcp-en-el-catalogo-sin-paso-manual.md) §D6, aceptado por el operador el
+2026-09-03.
+
+**Qué se retira y por qué.** La fila `Tool` que el install creaba para un `mcp_server` llevaba el
+nombre del **listing**, no el namespaceado `<server>.<tool>`, así que era **invisible al runtime**
+(`_project_mcp_tool_rows` exige ese prefijo) y representaba un servidor haciéndose pasar por una
+tool. Con el import automático que el 0166 encola tras el despliegue, además, convivía con las filas
+`<server>.*` reales duplicando en `/tools` lo que no duplica en el sistema. Retirarla no rompe
+ninguna ejecución: convierte un `unknown tool` en una ausencia honesta. La migración es soft-delete
+con entrada de changelog.
+
+**Qué NO cambia.** El corte por `implementation_type` (los `python_function`/`docker_command` siguen
+diferidos, ADR 0081 B/C), la migración de provenance **0111** y sus tres columnas —que el 0166 usa
+**más**, no menos: son las que estampa en cada fila `<server>.*`—, los gates sin sandbox y la
+des-materialización transaccional en `uninstall`/`revoke`, cuya query no se toca. Y `kind=skill` y
+`kind=tool` (incluida una tool suelta `mcp_tool`, que sí es una tool) se materializan exactamente
+igual que el 2026-07-13.
+
+**Dos avisos para quien implemente esto**, porque son el mismo cambio y no dos: el lookup previo por
+`source_installation_id` con `scalar_one_or_none()` (`materialize.py:213`) asume **una** fila por
+instalación y con N lanzaría `MultipleResultsFound`; y el `-mkt-XXXXXX` de `_dedupe_name` **no** vale
+para resolver colisiones de nombre en tools MCP (rompe el formato `<server>.<tool>` y devuelve la
+fila a la invisibilidad que aquí se corrige) — para ellas el 0166 fija omisión con aviso, nunca
+sufijo ni truncado. `_materialized_catalog_row` (`deploy.py:506-531`) tiene la misma forma y hoy no
+se llama para este kind, pero no puede reutilizarse sin la misma corrección.

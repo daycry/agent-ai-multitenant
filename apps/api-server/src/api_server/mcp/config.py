@@ -20,8 +20,12 @@ changes shape there, update it here and bump the test in
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from shared_domain.mcp_hosts import is_internal_mcp_host
+
+from api_server.egress.mcp_allowlist import InvalidMcpHostError, normalise_host
 
 # Mirror of `shared_mcp.types.Transport`. We duplicate the Literal here
 # rather than importing because api-server's mypy hook doesn't always
@@ -31,6 +35,54 @@ Transport = Literal["stdio", "sse", "streamable_http"]
 
 
 _NAME_PATTERN = r"^[a-zA-Z][a-zA-Z0-9_\-.]{0,63}$"
+
+#: Los dos `ConnectPort` globales del egress-proxy (`tinyproxy.conf`, ADR 0165 D3).
+#: Un CONNECT a cualquier otro puerto muere en el proxy sin dejar ni una línea de
+#: log, así que una URL externa fuera de ellos no se guarda: fallaría siempre.
+_EGRESS_CONNECT_PORTS = frozenset({443, 8443})
+
+
+def _assert_external_url_is_well_formed(url: str) -> None:
+    """Fail-CLOSED de FORMA de la `url` de un servidor HTTP (ADR 0165 D11 + A2).
+
+    NO mira la allowlist: eso es fail-open con aviso y vive en el router. Aquí
+    se rechaza lo que la prueba de conexión marcaría después desde el api-server
+    —IP literal, nombre de metadata, host mal formado, puerto fuera de
+    `ConnectPort`— y el `http://` en claro contra un host externo, porque el
+    token viaja en cabecera y `ConnectPort` sólo gobierna el túnel TLS.
+
+    Un host SIN punto es un servicio del compose: se exime entero (esquema
+    incluido, `http://docling:5001/mcp`), con la misma regla que el worker aplica
+    por `NO_PROXY`. La resolución DNS no se hace aquí a propósito: es lenta y el
+    handler mantiene la transacción del request abierta (MK-11).
+    """
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"`url` no es una URL válida: {exc}") from exc
+    if not host:
+        raise ValueError("`url` no tiene host")
+    if is_internal_mcp_host(host):
+        return
+    if parts.scheme != "https":
+        raise ValueError(
+            f"`url` apunta al host externo `{host}` por `{parts.scheme}://`: un MCP remoto "
+            "va por https (el token viaja en cabecera y el egress-proxy sólo abre túneles TLS)"
+        )
+    try:
+        normalise_host(host)
+    except InvalidMcpHostError as exc:
+        raise ValueError(
+            f"`url` tiene un host que no puede salir por el egress: {exc.reason}"
+        ) from exc
+    if port is not None and port not in _EGRESS_CONNECT_PORTS:
+        raise ValueError(
+            f"`url` usa el puerto {port} y el egress-proxy sólo deja salir CONNECT por "
+            "443 y 8443 (dos directivas globales de tinyproxy, ADR 0165 D3): ese servidor "
+            "no sería alcanzable desde ninguna ejecución"
+        )
 
 
 class MCPServerConfigModel(BaseModel):
@@ -105,6 +157,7 @@ class MCPServerConfigModel(BaseModel):
         else:  # sse | streamable_http
             if not self.url:
                 raise ValueError(f"transport={self.transport!r} requires `url`")
+            _assert_external_url_is_well_formed(self.url)
             if self.command is not None:
                 raise ValueError(f"transport={self.transport!r} must not set `command`")
             if self.args:

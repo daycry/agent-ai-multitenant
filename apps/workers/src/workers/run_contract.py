@@ -146,6 +146,12 @@ class ExecutionRequest:
     # reviewer runs carry the agent's domain identity. `None` = no key
     # (agent without persona) → prompt untouched (backward-compat).
     agent_persona: dict[str, Any] | None = None
+    # `task_mk_21` (MK-05): las anclas de integración del proyecto
+    # (`project.integrations`: `{jira: {project_key, parent_issue_key},
+    # confluence: {space_key, root_page_id}}`). El runtime las pliega como bloque
+    # del preámbulo justo tras la persona; las skills `atlassian-*` las leen de
+    # ahí. `None`/vacío = sin bloque (proyecto sin anclas).
+    integrations: dict[str, Any] | None = None
     # `task_gov_03`: el sello del prompt del agente — `{prompt_hash, version}`,
     # donde `version` es el número de la última fila de `agent_prompt_versions`
     # (`task_gov_02`) o `None` si el agente nunca se editó. El runtime lo mezcla en
@@ -185,6 +191,7 @@ class ExecutionRequest:
             "human_answers": self.human_answers,
             "predecessors": self.predecessors,
             "agent_persona": self.agent_persona,
+            "integrations": self.integrations,
             "agent_prompt_version": self.agent_prompt_version,
         }
 
@@ -213,6 +220,7 @@ class ExecutionRequest:
             prior_failure=raw.get("prior_failure"),
             human_answers=raw.get("human_answers"),
             agent_persona=raw.get("agent_persona"),
+            integrations=raw.get("integrations"),
             agent_prompt_version=raw.get("agent_prompt_version"),
             claim_id=raw.get("claim_id"),
         )

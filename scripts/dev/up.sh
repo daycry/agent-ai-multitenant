@@ -140,7 +140,10 @@ echo "==> Applying Alembic migrations"
 # ---------------------------------------------------------------------------
 export API_SERVER_DATABASE_URL="postgresql+asyncpg://app_user:changeme-app-dev-only@localhost:15432/agentic_platform"
 export API_SERVER_ADMIN_DATABASE_URL="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
-export API_SERVER_REDIS_URL="redis://localhost:6379/0"
+# Con contraseña: el compose arranca Redis con `--requirepass ${REDIS_PASSWORD}`
+# (prod-10) y `.env.example` la fija en `changeme-redis-dev-only`. Sin ella el
+# primer login muere con `AuthenticationError` (2026-09-08, máquina nueva).
+export API_SERVER_REDIS_URL="redis://:changeme-redis-dev-only@localhost:6379/0"
 export API_SERVER_JWT_SECRET="dev-only-jwt-secret-change-me"
 
 rm -f "$API_LOG" "$API_ERR"

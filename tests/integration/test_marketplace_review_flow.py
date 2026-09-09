@@ -108,7 +108,7 @@ _TOOL_YAML = """
 name: acme-checker
 version: 1.0.0
 description: Comprueba el estado de un servicio.
-kind: tool
+kind: mcp_server
 entrypoint: acme_checker.main:run
 implementation:
   runtime: python
@@ -204,7 +204,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 async def _publish(client: AsyncClient, token: str, *, manifest: str = _TOOL_YAML) -> dict:
     resp = await client.post(
         "/marketplace/private/listings",
-        json={"kind": "tool", "manifest": manifest, "changelog": "Primera versión."},
+        json={"kind": "mcp_server", "manifest": manifest, "changelog": "Primera versión."},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 201, resp.text

@@ -402,11 +402,14 @@ def test_el_worker_cierra_un_verified_como_enabled_y_materializa(
 def test_el_worker_respeta_el_consentimiento_de_un_listing_community(
     configured_app: Any, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Community exige consentimiento por permiso: `disabled` y CERO concedidos.
+    """El worker no concede lo que el listing no declara, y no tiene política propia.
 
-    Es la aserción que demuestra que el worker NO tiene su propia política: llama
-    al mismo `finalize_installation` que el router, y por eso ignora los permisos
-    pedidos igual que él.
+    Este `listing_community` declara CERO permisos (`'[]'`). Desde `task_mk_14`
+    (MK-17) eso significa que no hay nada que consentir: nace `enabled` — antes
+    nacía `disabled` sin poder habilitarse jamás — pero con CERO concedidos aunque
+    el llamante pidiera `net:https`: conceder lo que nadie declaró sería el agujero
+    por la otra puerta. Y sigue demostrando lo de siempre: el worker llama al mismo
+    `finalize_installation` que el router, así que decide igual que él.
     """
     ids = asyncio.run(_seed(migrations_pg_dsn))
 
@@ -431,9 +434,9 @@ def test_el_worker_respeta_el_consentimiento_de_un_listing_community(
         return UUID(resp.json()["id"])
 
     installation_id = asyncio.run(_accept())
-    assert _run_worker(installation_id, ids["tenant_a"])["status"] == "disabled"
+    assert _run_worker(installation_id, ids["tenant_a"])["status"] == "enabled"
     row = asyncio.run(_row(migrations_pg_dsn, installation_id))
-    assert row is not None and row["status"] == "disabled"
+    assert row is not None and row["status"] == "enabled"
     concedidos = row["granted_permissions"]
     concedidos = json.loads(concedidos) if isinstance(concedidos, str) else concedidos
     assert concedidos == [], (

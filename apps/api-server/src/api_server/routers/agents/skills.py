@@ -32,7 +32,10 @@ from api_server.auth.deps import (
 )
 from api_server.db.domain import Agent, AgentSkill, Skill
 from api_server.routers._helpers import require_tenant_id
-from api_server.routers.agents.common import _load_writable_agent_for_skills
+from api_server.routers.agents.common import (
+    _load_writable_agent_for_skills,
+    marketplace_provenance,
+)
 from api_server.schemas.agents import AgentSkillResponse, SetAgentSkillsRequest
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -61,6 +64,8 @@ async def list_agent_skills(
         .where(AgentSkill.agent_id == agent_id, Skill.deleted_at.is_(None))
         .order_by(Skill.name, Skill.id)
     )
+    assigned = list(rows.scalars().all())
+    provenance = await marketplace_provenance(session, assigned)
     return [
         AgentSkillResponse(
             skill_id=skill.id,
@@ -69,8 +74,9 @@ async def list_agent_skills(
             description=skill.description,
             prompt_fragment=skill.prompt_fragment,
             is_builtin=skill.is_builtin,
+            **provenance[skill.id],
         )
-        for skill in rows.scalars().all()
+        for skill in assigned
     ]
 
 
@@ -118,6 +124,7 @@ async def set_agent_skills(
         session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id))
     await session.flush()
 
+    provenance = await marketplace_provenance(session, list(skills_by_id.values()))
     return [
         AgentSkillResponse(
             skill_id=skill.id,
@@ -126,6 +133,7 @@ async def set_agent_skills(
             description=skill.description,
             prompt_fragment=skill.prompt_fragment,
             is_builtin=skill.is_builtin,
+            **provenance[skill.id],
         )
         for skill in sorted(skills_by_id.values(), key=lambda s: (s.name, str(s.id)))
     ]

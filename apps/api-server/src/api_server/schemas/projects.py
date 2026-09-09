@@ -24,6 +24,7 @@ from shared_test_runtimes import CATALOG
 
 from api_server.db.domain import BudgetPeriod, HumanTaskReviewMode, Project, ProjectStatus
 from api_server.mcp.config import validate_mcp_servers_payload
+from api_server.schemas.integrations import validate_integrations_payload
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -414,6 +415,8 @@ class ProjectCreateRequest(BaseModel):
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     rag_knowledge_bases: list[dict[str, Any]] = Field(default_factory=list)
     worker_config: dict[str, Any] = Field(default_factory=dict)
+    # `task_mk_20` (MK-05): anclas de integración por proveedor (`schemas/integrations.py`).
+    integrations: dict[str, Any] = Field(default_factory=dict)
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
     # `secrets_vault_id` NO se acepta (task_wf_35): la columna está DEPRECATED
@@ -453,6 +456,11 @@ class ProjectCreateRequest(BaseModel):
     @classmethod
     def _validate_mcp_servers(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return validate_mcp_servers_payload(value)
+
+    @field_validator("integrations", mode="after")
+    @classmethod
+    def _validate_integrations(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_integrations_payload(value)
 
     @field_validator("allowed_commands", mode="after")
     @classmethod
@@ -514,6 +522,8 @@ class ProjectUpdateRequest(BaseModel):
     # DEPRECATED (P1-04): sin lectores (lo real es `kb_projects`).
     rag_knowledge_bases: list[dict[str, Any]] | None = None
     worker_config: dict[str, Any] | None = None
+    # `task_mk_20` (MK-05): None = sin cambio (PATCH); `{}` borra las anclas.
+    integrations: dict[str, Any] | None = None
     repository_config: dict[str, Any] | None = None
     human_approval_policy: dict[str, Any] | None = None
     # P1-03: presupuestos de ejecución (clamp en dispatch) y guardrails del
@@ -562,6 +572,11 @@ class ProjectUpdateRequest(BaseModel):
         except InvalidModelConfigError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+    @field_validator("integrations", mode="after")
+    @classmethod
+    def _validate_integrations(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if value is None else validate_integrations_payload(value)
 
     @field_validator("mcp_servers", mode="after")
     @classmethod
@@ -684,6 +699,15 @@ class ProjectResponse(BaseModel):
     allowed_domains: list[str]
     # ADR 0128 fase 2: política rol→tool de las MCP del proyecto (`{}` = sin política).
     mcp_tool_roles: dict[str, list[str]]
+    # `task_mk_20` (MK-05): anclas de integración (`{}` = sin anclas).
+    integrations: dict[str, Any] = Field(default_factory=dict)
+    # `task_mk_02` (ADR 0165 D11): avisos tipados sobre servidores MCP cuyo host
+    # externo aún no está en la allowlist de egress de la plataforma. Viajan en
+    # el 200 del guardado (fail-open) y en el GET de la ficha, porque el diálogo
+    # se cierra al guardar y la página es donde el operador los va a leer. Cada
+    # uno: {server, host, code, message}. Vacío = nada que avisar (o el endpoint
+    # no lo calcula, caso de los listados).
+    mcp_server_warnings: list[dict[str, str]] = Field(default_factory=list)
 
     # Plan 16 task_16_11.
     human_task_review_mode: str
@@ -701,11 +725,14 @@ class ProjectResponse(BaseModel):
     deleted_at: datetime | None
 
 
-def to_project_response(p: Project) -> ProjectResponse:
+def to_project_response(
+    p: Project, *, mcp_server_warnings: list[dict[str, str]] | None = None
+) -> ProjectResponse:
     # Vía `model_validate` con la clave ALIAS `model_config`: el plugin mypy de
     # Pydantic no expone el kwarg field-name (`llm_config`) cuando hay alias
     # (mismo patrón que to_agent_response / to_team_response).
     payload: dict[str, Any] = {
+        "mcp_server_warnings": list(mcp_server_warnings or []),
         "id": p.id,
         "tenant_id": p.tenant_id,
         "name": p.name,
@@ -727,6 +754,7 @@ def to_project_response(p: Project) -> ProjectResponse:
         "default_runtime_template": p.default_runtime_template,
         "allowed_domains": p.allowed_domains,
         "mcp_tool_roles": p.mcp_tool_roles,
+        "integrations": p.integrations or {},
         "human_task_review_mode": p.human_task_review_mode,
         "budget_amount": p.budget_amount,
         "budget_currency": p.budget_currency,

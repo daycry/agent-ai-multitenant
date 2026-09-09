@@ -93,19 +93,27 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         # Tres listings community del catálogo global: dos 1.0.0 (una por test
         # destructivo) y una 1.1.0 del MISMO nombre que community_2 para el update.
         await conn.execute(
+            # `manifest` con `prompt_fragment`, y no vacío como estaba: desde
+            # `task_mk_10` (ADR 0081 B/C, opción b) una instalación cuyo
+            # manifiesto no materializa nada se rechaza con 422 en vez de crear
+            # una fila `enabled` que no produce capacidad. Estos tres listings
+            # son de un test del gate de ANÁLISIS ESTÁTICO —el manifiesto les da
+            # igual—, así que se les pone el mínimo que un skill real tiene. La
+            # forma es la de `test_marketplace_materialization.py`.
             "INSERT INTO marketplace_listings"
             " (id, source_id, tenant_id, kind, name, version, trust_level,"
-            "  requested_permissions, signature)"
+            "  requested_permissions, signature, manifest)"
             " VALUES"
-            " ($1, $2, NULL, 'skill', 'sa-skill', '1.0.0', 'community', '[]'::jsonb, NULL),"
+            " ($1, $2, NULL, 'skill', 'sa-skill', '1.0.0', 'community', '[]'::jsonb, NULL, $5),"
             " ($3, $2, NULL, 'skill', 'sa-skill-pipeline', '1.0.0', 'community',"
-            "  '[]'::jsonb, NULL),"
+            "  '[]'::jsonb, NULL, $5),"
             " ($4, $2, NULL, 'skill', 'sa-skill-pipeline', '1.1.0', 'community',"
-            "  '[]'::jsonb, NULL)",
+            "  '[]'::jsonb, NULL, $5)",
             ids["community"],
             ids["source"],
             ids["community_2"],
             ids["community_v2"],
+            json.dumps({"prompt_fragment": "Cuerpo del skill.", "category": "docs"}),
         )
     finally:
         await conn.close()
@@ -292,8 +300,13 @@ async def test_clean_install_records_report_and_keeps_consent_gate(
             headers=headers,
         )
         assert resp.status_code == 201, resp.text
-        # El gate de consentimiento sigue intacto: community nace DISABLED.
-        assert resp.json()["status"] == "disabled"
+        # `task_mk_14` (MK-17): este listing `community` NO declara permisos
+        # (`requested_permissions = '[]'`), así que no hay nada que consentir y
+        # nace ENABLED. Antes nacía DISABLED sin poder habilitarse jamás — la
+        # pantalla de consentimiento exige al menos una decisión. La política de
+        # confianza sigue intacta para un community CON permisos
+        # (`test_consent.py`), que sí nace disabled.
+        assert resp.json()["status"] == "enabled"
 
     audits = await _fetch_audit_rows(migrations_pg_dsn, seeded["tenant"])
     assert len(audits) == 1

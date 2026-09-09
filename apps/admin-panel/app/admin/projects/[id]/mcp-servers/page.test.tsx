@@ -156,4 +156,52 @@ describe("MCP servers del proyecto (caracterización tramo #9)", () => {
     expect(screen.getByTestId("mcp-form-test-tool-count").textContent).toBe("2");
     expect(screen.getByTestId("mcp-form-test-tool-read_file")).toBeTruthy();
   });
+
+  // task_mk_02 (ADR 0165 D11): el aviso del guardado fail-open se lee en la
+  // PÁGINA, en la tarjeta del servidor — el diálogo se cierra al guardar.
+  it("paints the egress warning the backend attaches to a server whose host is not allowlisted", async () => {
+    const remote = server({
+      name: "atlassian",
+      transport: "streamable_http",
+      command: null,
+      url: "https://mcp.atlassian.com/v1/mcp",
+    });
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === "/projects/proj-1") {
+        return Promise.resolve({
+          ...project([remote, server()]),
+          mcp_server_warnings: [
+            {
+              server: "atlassian",
+              host: "mcp.atlassian.com",
+              code: "EGRESS_HOST_NOT_ALLOWLISTED",
+              message: "Guardado. El host `mcp.atlassian.com` no está hoy en la allowlist…",
+            },
+          ],
+        });
+      }
+      return Promise.resolve([]);
+    });
+    mount();
+    await waitFor(() =>
+      expect(screen.getByTestId("mcp-server-egress-warning-atlassian")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("mcp-server-egress-warning-atlassian").textContent).toContain(
+      "mcp.atlassian.com",
+    );
+    expect(screen.getByTestId("mcp-server-egress-badge-atlassian")).toBeTruthy();
+    // El aviso afirma MENOS que «permitido»/«pendiente de aplicar» (D7.2).
+    expect(
+      screen.getByTestId("mcp-server-egress-warning-atlassian").textContent?.toLowerCase(),
+    ).not.toContain("permitido");
+    // El stdio de al lado no lleva aviso: no tiene host.
+    expect(screen.queryByTestId("mcp-server-egress-warning-files")).toBeNull();
+  });
+
+  it("without warnings the cards carry no egress badge", async () => {
+    wireApi([server()]);
+    mount();
+    await waitFor(() => expect(screen.getByTestId("mcp-server-card-files")).toBeTruthy());
+    expect(screen.queryByTestId("mcp-server-egress-badge-files")).toBeNull();
+  });
 });

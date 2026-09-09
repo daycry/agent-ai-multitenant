@@ -94,3 +94,42 @@ def test_a_run_without_mcp_failures_is_byte_identical() -> None:
     """Backward-compat estricta: el bloque solo existe cuando hay algo que decir."""
     spec = {"skill_prompt_fragments": ["Usa TDD."]}
     assert assemble_system_preamble(spec, mcp_failures=[]) == assemble_system_preamble(spec)
+
+
+# ---------------------------------------------------------------------------
+# ADR 0166 D4 (`task_mk_01`): un servidor declarado SIN tools importadas se
+# reporta en el mismo bloque — el runtime informa del hueco, no lo cierra.
+# ---------------------------------------------------------------------------
+from agent_runtime.__main__ import servers_without_imported_tools  # noqa: E402
+
+
+def test_un_servidor_declarado_sin_tools_en_la_allowlist_se_reporta() -> None:
+    spec = {
+        "mcp_servers": [{"name": "atlassian"}, {"name": "gh"}],
+        "allowed_tools": ["gh.read_file", "read_file"],
+    }
+    assert servers_without_imported_tools(spec) == ["atlassian"]
+    block = build_mcp_status_preamble([], ["atlassian"])
+    assert "atlassian" in block
+    assert "NONE of its tools are imported" in block
+
+
+def test_sin_allowed_tools_no_hay_nada_que_decidir() -> None:
+    assert servers_without_imported_tools({"mcp_servers": [{"name": "x"}]}) == []
+
+
+def test_un_servidor_que_no_conecto_no_se_reporta_dos_veces() -> None:
+    spec = {"mcp_servers": [{"name": "muerto"}], "allowed_tools": []}
+    assert servers_without_imported_tools(spec, [_FAILURE | {"server": "muerto"}]) == []
+
+
+def test_el_hueco_llega_al_preambulo_ensamblado() -> None:
+    spec = {"mcp_servers": [{"name": "atlassian"}], "allowed_tools": ["read_file"]}
+    preamble = assemble_system_preamble(spec)
+    assert preamble is not None
+    assert "atlassian" in preamble
+
+
+def test_sin_hueco_ni_fallos_el_preambulo_no_cambia() -> None:
+    spec = {"mcp_servers": [{"name": "gh"}], "allowed_tools": ["gh.read_file"]}
+    assert build_mcp_status_preamble([], servers_without_imported_tools(spec)) == ""

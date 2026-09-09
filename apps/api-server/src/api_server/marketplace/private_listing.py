@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from api_server.db.marketplace import MarketplaceListingKind
+from api_server.marketplace.capability import capability_of
 from api_server.marketplace.skill_format import SkillFormatError, parse_skill_md
 from api_server.marketplace.tool_format import ToolFormatError, parse_tool_manifest
 
@@ -110,6 +111,19 @@ def parse_private_listing(
         raise PrivateListingFormatError(
             f"manifest 'kind' {tool.kind.value!r} does not match the declared kind {kind.value!r}"
         )
+    # ADR 0081 B/C, reabierto por `task_mk_10` (2026-09-08), opción (b): un manifiesto
+    # de tool que ejecuta código (`implementation.runtime`) no se publica hasta que
+    # exista el sandbox out-of-process que lo materialice. Antes se aceptaba y el
+    # fallo aparecía al HABILITAR («enable cannot materialise its capability»),
+    # dos pantallas y un consentimiento después. Un `mcp_server` privado sí pasa:
+    # su capacidad la crea el import del despliegue (ADR 0166 D6), no una fila.
+    if tool.kind == MarketplaceListingKind.TOOL:
+        capability = capability_of(tool.kind.value, tool.to_manifest_dict())
+        if capability.kind == "deferred":
+            raise PrivateListingFormatError(
+                f"tool manifests with 'implementation.runtime' ({tool.implementation.runtime!r}) "
+                "execute arbitrary code and cannot be published yet: " + str(capability.reason)
+            )
     return ParsedPrivateListing(
         kind=tool.kind,
         name=tool.name,

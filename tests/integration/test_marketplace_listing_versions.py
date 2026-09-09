@@ -100,7 +100,7 @@ def _tool_yaml(*, version: str, description: str) -> str:
             "name: versioned-tool",
             f"version: {version}",
             f"description: {description}",
-            "kind: tool",
+            "kind: mcp_server",
             "entrypoint: versioned.main:run",
             "implementation:",
             "  runtime: python",
@@ -234,7 +234,7 @@ def test_republishing_the_same_version_updates_the_row_instead_of_duplicating(
             created = await client.post(
                 "/marketplace/private/listings",
                 json={
-                    "kind": "tool",
+                    "kind": "mcp_server",
                     "manifest": _tool_yaml(version="1.0.0", description="Primera."),
                     "changelog": "Primera.",
                 },

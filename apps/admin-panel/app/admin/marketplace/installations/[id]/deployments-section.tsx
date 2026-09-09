@@ -45,6 +45,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  DeployResultNotes,
+  summariseCreatedRefs,
+} from "@/components/marketplace/deploy-result-notes";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -63,6 +67,8 @@ interface DeployResult {
   outcome: Outcome;
   warnings: string[];
   oauthPending: boolean;
+  // task_mk_11 (UI-02): qué recibió quién, para no vender un 201 vacío.
+  createdRefs: Record<string, unknown>;
   error?: string;
 }
 
@@ -147,6 +153,7 @@ export function DeploymentsSection({ installationId, capability }: DeploymentsSe
             outcome: response.already_deployed ? "already" : "ok",
             warnings: response.warnings ?? [],
             oauthPending: Boolean(response.oauth_pending),
+            createdRefs: response.deployment?.created_refs ?? {},
           });
         } catch (err: unknown) {
           out.push({
@@ -154,6 +161,7 @@ export function DeploymentsSection({ installationId, capability }: DeploymentsSe
             outcome: "failed",
             warnings: [],
             oauthPending: false,
+            createdRefs: {},
             error: errorText(err),
           });
         }
@@ -242,6 +250,16 @@ export function DeploymentsSection({ installationId, capability }: DeploymentsSe
                           : "statusRetired",
                     )}
                   </Badge>
+                  {/* task_mk_11: qué recibió quién, también en la fila del despliegue. */}
+                  {summariseCreatedRefs(row.created_refs).map(([key, detail]) => (
+                    <span
+                      key={key}
+                      className="text-muted-foreground text-xs"
+                      data-testid={`deployment-ref-${row.id}-${key}`}
+                    >
+                      {key}: {detail}
+                    </span>
+                  ))}
                 </span>
                 {row.status === "active" ? (
                   <RoleGuard min="tenant_admin">
@@ -354,24 +372,12 @@ export function DeploymentsSection({ installationId, capability }: DeploymentsSe
                         ? t("resultAlready", { project: name })
                         : `${t("resultFailed", { project: name })} ${result.error ?? ""}`}
                   </p>
-                  {result.warnings.length > 0 ? (
-                    <ul
-                      className="text-warning-soft-foreground space-y-0.5 pl-4"
-                      data-testid={`deploy-warnings-${result.projectId}`}
-                    >
-                      {result.warnings.map((warning, index) => (
-                        <li key={index}>• {warning}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {result.oauthPending ? (
-                    <p
-                      className="text-warning-soft-foreground pl-4"
-                      data-testid={`deploy-oauth-${result.projectId}`}
-                    >
-                      {t("oauthPending")}
-                    </p>
-                  ) : null}
+                  <DeployResultNotes
+                    warnings={result.warnings}
+                    oauthPending={result.oauthPending}
+                    createdRefs={result.createdRefs}
+                    testId={result.projectId}
+                  />
                 </li>
               );
             })}

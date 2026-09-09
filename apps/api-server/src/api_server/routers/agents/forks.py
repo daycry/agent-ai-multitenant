@@ -32,6 +32,7 @@ from api_server.schemas.agents import (
     AgentDiffResponse,
     AgentFieldDiff,
     AgentForkRequest,
+    AgentForkResponse,
     AgentMergeRequest,
     AgentResponse,
     to_agent_response,
@@ -69,7 +70,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # ---------------------------------------------------------------------------
 @router.post(
     "/{source_id}/fork",
-    response_model=AgentResponse,
+    response_model=AgentForkResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def fork_agent(
@@ -77,7 +78,7 @@ async def fork_agent(
     payload: AgentForkRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
-) -> AgentResponse:
+) -> AgentForkResponse:
     tenant_id = require_tenant_id(principal)
 
     # The source can be a global_builtin (visible to all tenants via the
@@ -156,7 +157,9 @@ async def fork_agent(
     # propia pero el origen ya es visible (RLS de `agents`), de modo que un
     # source de otro tenant ni siquiera llega aquí (404 arriba). Las filas
     # clonadas de KB llevan el `tenant_id` del que forkea, nunca el del origen.
-    await _clone_agent_capabilities(
+    # `task_mk_13` (MK-06): las tools MCP son del proyecto y NO viajan; el fork
+    # las nombra en la respuesta en vez de arrastrar concesiones muertas.
+    mcp_tools_not_copied = await _clone_agent_capabilities(
         session,
         source_id=source.id,
         fork_id=fork.id,
@@ -165,7 +168,12 @@ async def fork_agent(
     )
 
     await session.refresh(fork)
-    return to_agent_response(fork)
+    return AgentForkResponse.model_validate(
+        {
+            **to_agent_response(fork).model_dump(by_alias=True),
+            "mcp_tools_not_copied": mcp_tools_not_copied,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

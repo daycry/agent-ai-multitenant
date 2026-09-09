@@ -73,6 +73,7 @@ from api_server.db.marketplace import (
     MarketplaceListingKind,
 )
 from api_server.marketplace.consent import consent_required_for
+from api_server.marketplace.consent import needs_consent as consent_needed
 from api_server.marketplace.skill_format import SkillFormatError, parse_skill_md
 from api_server.marketplace.tool_format import ToolFormatError, parse_tool_manifest
 from api_server.marketplace.trust import NetworkPolicy, trust_policy
@@ -366,10 +367,16 @@ class InstallOrchestrator:
 
         # --- gate 6+7: consent gate + persist ----------------------------
         gate_report = ctx.gate_report
-        needs_consent = consent_required_for(listing.trust_level)
+        # `task_mk_14` (MK-17): sin permisos que consentir no hay consentimiento
+        # que esperar — ver `consent.needs_consent`.
+        needs_consent = consent_needed(listing.trust_level, listing.requested_permissions)
         if needs_consent:
             initial_status = InstallationStatus.DISABLED.value
             granted: list[Any] = []
+        elif consent_required_for(listing.trust_level):
+            # Sin permisos declarados no hay nada que conceder: habilitada y vacía.
+            initial_status = InstallationStatus.ENABLED.value
+            granted = []
         else:
             initial_status = InstallationStatus.ENABLED.value
             granted = list(granted_permissions or [])

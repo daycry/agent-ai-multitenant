@@ -69,6 +69,8 @@ import {
 } from "@/components/projects/git-config-section";
 import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { ProjectGovernanceSection } from "@/components/projects/governance-section";
+import { ProjectIntegrationsSection } from "@/components/projects/integrations-section";
+import type { IntegrationsValue } from "@/lib/project-integrations";
 import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
 import { RuntimeServicesSection } from "@/components/projects/runtime-services-section";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -98,6 +100,9 @@ interface Project {
   // recibe el proyecto entero y toma solo sus claves (`GovernanceValue`).
   execution_budgets?: Record<string, unknown> | null;
   guardrails_config?: Record<string, unknown> | null;
+  // task_mk_20 (MK-05): anclas Jira/Confluence del proyecto. Las edita
+  // `ProjectIntegrationsSection`; `{}` = sin anclas.
+  integrations?: IntegrationsValue | null;
   human_task_review_mode?: string | null;
   budget_amount?: string | number | null;
   budget_currency?: string | null;
@@ -381,6 +386,11 @@ export default function ProjectHubPage() {
               backend acepta y ninguna pantalla ofrecía. */}
           <div className="mb-6">
             <ProjectGovernanceSection projectId={projectId} value={project} />
+          </div>
+
+          {/* task_mk_20 (MK-05): anclas Jira/Confluence que el run recibe en su preámbulo. */}
+          <div className="mb-6">
+            <ProjectIntegrationsSection projectId={projectId} value={project.integrations} />
           </div>
 
           {/* ADR 0130: levantar la app del proyecto (rama por defecto) en preview 24h. */}

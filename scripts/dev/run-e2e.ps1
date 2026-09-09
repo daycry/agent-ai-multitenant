@@ -208,7 +208,8 @@ try {
 # ---------------------------------------------------------------------------
 $env:API_SERVER_DATABASE_URL = "postgresql+asyncpg://app_user:changeme-app-dev-only@localhost:15432/agentic_platform"
 $env:API_SERVER_ADMIN_DATABASE_URL = "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@localhost:15432/agentic_platform"
-$env:API_SERVER_REDIS_URL = "redis://localhost:6379/0"
+# Con la contraseña que `.env.example` fija (Redis arranca con `--requirepass`).
+$env:API_SERVER_REDIS_URL = "redis://:changeme-redis-dev-only@localhost:6379/0"
 $env:API_SERVER_JWT_SECRET = "dev-only-jwt-secret-change-me"
 # Each Playwright spec performs a fresh login. With the default 5
 # attempts / 15 min limit we'd trip 429 once we have a handful of

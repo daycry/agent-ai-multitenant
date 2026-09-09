@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 from uuid import UUID
 
 import structlog
@@ -46,6 +45,7 @@ from api_server.db.models import Organization
 from api_server.events import publish_execution_event
 from api_server.task_state_machine import transition_task_status
 from redis.asyncio import Redis
+from shared_domain.mcp_hosts import internal_mcp_hosts
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -222,15 +222,15 @@ async def _catalog_price_hint(
 
 def _internal_mcp_hosts(request: ExecutionRequest) -> list[str]:
     """Hosts sin punto de los servidores MCP del proyecto: servicios internos del
-    compose. Van a NO_PROXY y (`task_cv_25`) al bridge de la ejecución."""
-    return sorted(
-        {
-            host
-            for server in (request.mcp_servers or [])
-            if (url := str(server.get("url") or ""))
-            and (host := urlparse(url).hostname)
-            and "." not in host
-        }
+    compose. Van a NO_PROXY y (`task_cv_25`) al bridge de la ejecución.
+
+    La regla vive en `shared_domain.mcp_hosts` desde `task_mk_02` (ADR 0165 D9):
+    el api-server toma la MISMA decisión al probar la conexión por el proxy, y dos
+    copias que se bifurquen devuelven la asimetría entre probar y ejecutar que ese
+    ADR existe para cerrar.
+    """
+    return internal_mcp_hosts(
+        str(server.get("url") or "") for server in (request.mcp_servers or [])
     )
 
 

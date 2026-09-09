@@ -28,6 +28,7 @@ import {
   Microscope,
   Search,
   Server,
+  Store,
   Ticket,
 } from "lucide-react";
 
@@ -38,7 +39,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { apiFetch } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { type CapabilityProvenance, provenanceIndex } from "@/lib/agents/capability-provenance";
+import { pickLang, useT } from "@/lib/i18n";
+import { useLang, type Lang } from "@/lib/lang-context";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
 
@@ -62,6 +65,10 @@ interface AgentSkillRow {
   description: string | null;
   prompt_fragment: string;
   is_builtin: boolean;
+  // `task_mk_13` (UI-04): procedencia del marketplace (ADR 0100); null = nativa.
+  source_installation_id?: string | null;
+  source_listing_name?: string | null;
+  source_version?: string | null;
 }
 
 interface AgentSkillsSectionProps {
@@ -74,14 +81,14 @@ interface AgentSkillsSectionProps {
 // Etiquetas humanas — sin enums crudos (categorías del seed, ADR 0050; +atlassian
 // como bucket de integración, ADR 0127/0128)
 // ---------------------------------------------------------------------------
-const CATEGORY_LABEL: Record<string, string> = {
-  backend: "Backend",
-  frontend: "Frontend",
-  devops: "DevOps",
-  qa: "QA / Testing",
-  research: "Investigación",
-  docs: "Documentación",
-  atlassian: "Atlassian (Jira/Confluence)",
+const CATEGORY_LABEL: Record<string, { es: string; en: string }> = {
+  backend: { es: "Backend", en: "Backend" },
+  frontend: { es: "Frontend", en: "Frontend" },
+  devops: { es: "DevOps", en: "DevOps" },
+  qa: { es: "QA / Testing", en: "QA / Testing" },
+  research: { es: "Investigación", en: "Research" },
+  docs: { es: "Documentación", en: "Documentation" },
+  atlassian: { es: "Atlassian (Jira/Confluence)", en: "Atlassian (Jira/Confluence)" },
 };
 
 const CATEGORY_ICON: Record<string, LucideIcon> = {
@@ -96,8 +103,9 @@ const CATEGORY_ICON: Record<string, LucideIcon> = {
 
 const CATEGORY_ORDER = ["backend", "frontend", "devops", "qa", "research", "docs", "atlassian"];
 
-function categoryLabel(cat: string): string {
-  return CATEGORY_LABEL[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
+function categoryLabel(cat: string, lang: Lang): string {
+  const known = CATEGORY_LABEL[cat];
+  return known ? pickLang(lang, known) : cat.charAt(0).toUpperCase() + cat.slice(1);
 }
 
 function categoryRank(cat: string): number {
@@ -108,6 +116,7 @@ function categoryRank(cat: string): number {
 export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionProps) {
   const errorText = useErrorText();
   const t = useT("agents");
+  const { lang } = useLang();
   const queryClient = useQueryClient();
   const { isTenantAdmin, isLoading: roleLoading } = useCurrentUser();
 
@@ -134,6 +143,10 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
 
   const assignedIds = useMemo(
     () => (assignedQuery.data ?? []).map((r) => r.skill_id).sort(),
+    [assignedQuery.data],
+  );
+  const provenanceById = useMemo(
+    () => provenanceIndex(assignedQuery.data, (r) => r.skill_id),
     [assignedQuery.data],
   );
 
@@ -204,9 +217,9 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
           q === "" ||
           s.name.toLowerCase().includes(q) ||
           (s.description ?? "").toLowerCase().includes(q) ||
-          categoryLabel(s.category).toLowerCase().includes(q),
+          categoryLabel(s.category, lang).toLowerCase().includes(q),
       ),
-    [catalog, q],
+    [catalog, q, lang],
   );
 
   return (
@@ -243,7 +256,7 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
               disabled={!dirty || saveMutation.isPending}
               data-testid="agent-skills-save"
             >
-              {saveMutation.isPending ? "Guardando…" : "Guardar"}
+              {saveMutation.isPending ? t("skillsSaving") : t("skillsSave")}
             </Button>
           </div>
         )}
@@ -258,7 +271,7 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
 
         {!isLoading && isError && (
           <p className="text-danger-soft-foreground text-sm" data-testid="agent-skills-error">
-            No se pudieron cargar las skills: {errorMsg}.
+            {t("skillsLoadError", { error: errorMsg })}
           </p>
         )}
 
@@ -295,11 +308,8 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
               canEdit={canEdit}
               onToggle={toggle}
               onToggleMany={toggleMany}
-              emptyMessage={
-                q
-                  ? "Ninguna skill coincide con la búsqueda."
-                  : "No hay skills en el catálogo. Crea una en /skills."
-              }
+              provenance={provenanceById}
+              emptyMessage={q ? t("skillsEmptySearch") : t("skillsEmptyCatalog")}
             />
           </>
         )}
@@ -317,6 +327,7 @@ function GroupedSkillList({
   canEdit,
   onToggle,
   onToggleMany,
+  provenance,
   emptyMessage,
 }: {
   skills: CatalogSkill[];
@@ -324,8 +335,11 @@ function GroupedSkillList({
   canEdit: boolean;
   onToggle: (skillId: string) => void;
   onToggleMany: (skillIds: string[], on: boolean) => void;
+  provenance: Map<string, CapabilityProvenance>;
   emptyMessage: string;
 }) {
+  const t = useT("agents");
+  const { lang } = useLang();
   const groups = useMemo(() => {
     const byCat = new Map<string, CatalogSkill[]>();
     for (const s of skills) {
@@ -361,7 +375,7 @@ function GroupedSkillList({
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <h4 className="text-muted-foreground inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
                 <Icon className="h-3.5 w-3.5" />
-                {categoryLabel(cat)}
+                {categoryLabel(cat, lang)}
                 <span className="text-muted-foreground/70 font-normal normal-case">
                   ({selectedCount}/{ids.length})
                 </span>
@@ -373,7 +387,7 @@ function GroupedSkillList({
                   className="text-primary text-xs hover:underline"
                   data-testid={`agent-skills-group-toggle-${cat}`}
                 >
-                  {allOn ? "Quitar todas" : "Asignar todas"}
+                  {allOn ? t("toolsUnselectAll") : t("toolsSelectAll")}
                 </button>
               )}
             </div>
@@ -385,6 +399,7 @@ function GroupedSkillList({
                   checked={selected.has(skill.id)}
                   canEdit={canEdit}
                   onToggle={onToggle}
+                  provenance={provenance.get(skill.id) ?? null}
                 />
               ))}
             </ul>
@@ -400,12 +415,15 @@ function SkillRow({
   checked,
   canEdit,
   onToggle,
+  provenance,
 }: {
   skill: CatalogSkill;
   checked: boolean;
   canEdit: boolean;
   onToggle: (skillId: string) => void;
+  provenance: CapabilityProvenance | null;
 }) {
+  const t = useT("agents");
   const inputId = `agent-skill-${skill.id}`;
   return (
     <li
@@ -430,8 +448,19 @@ function SkillRow({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">{skill.name}</span>
           <Badge variant={skill.is_builtin ? "info" : "muted"}>
-            {skill.is_builtin ? "Catálogo" : "Custom"}
+            {skill.is_builtin ? t("skillsBadgeCatalog") : t("skillsBadgeCustom")}
           </Badge>
+          {provenance && (
+            <Badge
+              variant="info"
+              className="gap-1"
+              title={t("capabilityFromMarketplaceTooltip", provenance)}
+              data-testid={`agent-skill-provenance-badge-${skill.id}`}
+            >
+              <Store aria-hidden="true" className="h-3 w-3" />
+              {t("capabilityFromMarketplaceBadge")} · {provenance.listing} v{provenance.version}
+            </Badge>
+          )}
         </div>
         {skill.description && (
           <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{skill.description}</p>

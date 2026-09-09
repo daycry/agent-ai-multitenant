@@ -37,6 +37,9 @@ vi.mock("@/lib/use-current-user", () => ({
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "inst-1" }),
+  // `task_mk_00`: el catálogo navega tras instalar, así que usa `useRouter`.
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 import MarketplaceAdminPage from "@/app/admin/marketplace/page";
@@ -199,7 +202,7 @@ describe("marketplace en inglés", () => {
       "Sharing is opt-in and explicit",
     );
     expect(screen.getByText("Private listing")).toBeDefined();
-    expect(screen.getByText("Target tenant (UUID)")).toBeDefined();
+    expect(screen.getByText("Target tenant")).toBeDefined();
     expect(screen.getByTestId("share-submit").textContent).toBe("Share");
     expect(screen.getByText("Active grants created by your tenant")).toBeDefined();
     const empty = await screen.findByTestId("shares-empty");

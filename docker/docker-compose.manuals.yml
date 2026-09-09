@@ -64,10 +64,16 @@ services:
       # modelo al 1er arranque; el WS de voz es best-effort si aún no están listos.
       API_SERVER_ASSISTANT_STT_URL: http://stt:8000
       API_SERVER_ASSISTANT_TTS_URL: http://tts:8880
-      # Web del córtex (ADR 0067): searxng por la red interna (directo) y el
-      # egress-proxy para web_fetch/Brave. El default del setting es
+      # Salida a Internet del api-server (ADR 0067 + ADR 0165 D9): searxng por la
+      # red interna (directo) y el egress-proxy para web_fetch/Brave y para la
+      # prueba de conexión de los MCP remotos. El default del setting es
       # `http://localhost:8888` (inservible dentro del contenedor); aquí se
       # apunta al servicio real del compose.
+      API_SERVER_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # El nombre anterior, mientras viva el alias de `api_server.config`. Está
+      # de más para ESTE fichero —el de arriba gana— y se mantiene a propósito
+      # como el caso que prueba que un `.env` viejo sigue valiendo: el día que se
+      # retire el alias, esta línea se va con él.
       API_SERVER_CORTEX_EGRESS_PROXY_URL: http://egress-proxy:8888
       API_SERVER_CORTEX_SEARXNG_URL: http://searxng:8080
       API_SERVER_CLAMAV_HOST: clamav

@@ -35,6 +35,7 @@ import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
+import { DeployResultNotes } from "./deploy-result-notes";
 import { DeploymentConfigForm } from "./deployment-config-form";
 import {
   capabilitiesFromInstallations,
@@ -108,6 +109,17 @@ export function AvailableCapabilitiesSection({
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DeploymentDraft | null>(null);
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null);
+  // task_mk_11 (UI-02): lo que el despliegue dijo de sí mismo se conserva y se
+  // pinta; antes se descartaba y un despliegue que no entregó nada parecía un
+  // 201 limpio. El item desaparece de «disponibles» al refrescar, así que el
+  // resultado vive a nivel de sección, con el nombre de la capacidad.
+  const [lastResult, setLastResult] = useState<{
+    name: string;
+    already: boolean;
+    warnings: string[];
+    oauthPending: boolean;
+    createdRefs: Record<string, unknown>;
+  } | null>(null);
 
   const openCapability = available.find((c) => c.installation_id === openId) ?? null;
 
@@ -117,12 +129,20 @@ export function AvailableCapabilitiesSection({
         `/marketplace/installations/${capability.installation_id}/deployments`,
         { method: "POST", body: draftBody(projectId, draft ?? initialDraft(capability)) },
       ),
-    onSuccess: () => {
+    onSuccess: (response, capability) => {
+      setLastResult({
+        name: capability.name,
+        already: Boolean(response.already_deployed),
+        warnings: response.warnings ?? [],
+        oauthPending: Boolean(response.oauth_pending),
+        createdRefs: response.deployment?.created_refs ?? {},
+      });
       setOpenId(null);
       setDraft(null);
       setFailed(null);
       void queryClient.invalidateQueries({ queryKey: availableKey });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["tools-catalog"] });
     },
     onError: (err: unknown) => {
       // Un fallo se enseña donde se pulsó, no en un toast que se va.
@@ -229,6 +249,22 @@ export function AvailableCapabilitiesSection({
             })}
           </ul>
         )}
+
+        {lastResult ? (
+          <div className="border-t pt-4" data-testid="available-last-result">
+            <p className="text-sm" data-outcome={lastResult.already ? "already" : "ok"}>
+              {lastResult.already
+                ? t("resultAlready", { project: lastResult.name })
+                : t("resultOk", { project: lastResult.name })}
+            </p>
+            <DeployResultNotes
+              warnings={lastResult.warnings}
+              oauthPending={lastResult.oauthPending}
+              createdRefs={lastResult.createdRefs}
+              testId="last"
+            />
+          </div>
+        ) : null}
 
         {/* Lo que YA vino del marketplace: las dos vías (D4) enseñan lo mismo. */}
         {deployedHere.length > 0 ? (

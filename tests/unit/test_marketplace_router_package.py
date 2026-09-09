@@ -224,6 +224,17 @@ ROUTES_ADDED_AFTER_THE_SPLIT: tuple[
         "MarketplaceInstallationResponse",
         None,
     ),
+    # marketplace-mcp task_mk_23. El buscador de tenant del diálogo de compartir:
+    # antes había que pegar el UUID del tenant destino a mano, que es la clase de
+    # campo que se rellena mal una vez de cada tres. Es `tenant_admin`, exige dos
+    # caracteres y nunca devuelve el propio tenant.
+    (
+        "/marketplace/shares/tenant-directory",
+        ("GET",),
+        "tenant_directory",
+        "list[TenantDirectoryEntry]",
+        None,
+    ),
 )
 
 

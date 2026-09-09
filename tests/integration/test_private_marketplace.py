@@ -77,6 +77,20 @@ input_schema:
   required: [target]
 """
 
+# El MISMO documento declarando `kind: mcp_server`, que es lo que publican los dos
+# tests de abajo.
+#
+# Por qué existe (2026-09-09): `task_mk_10` (ADR 0081 B/C, opción b) prohibió
+# publicar un manifiesto de tool que ejecuta código —y `_TOOL_YAML` trae
+# `implementation.runtime: python`—, así que esos dos tests pasaron a publicar
+# `kind: mcp_server`… sin cambiar el manifiesto, que seguía diciendo `kind: tool`.
+# La comprobación de coherencia manifiesto↔kind declarado es de plan-09 y los
+# rechazaba con 422. Estuvo rojo en CI dos días porque **integración no corre en
+# local**: es el modo de fallo de
+# `docs/03-guides/gotchas/cambio-de-contrato-deja-tests-rezagados.md`, y el arreglo
+# no es relajar la comprobación, es declarar lo que se publica.
+_MCP_SERVER_YAML = _TOOL_YAML.replace("kind: tool", "kind: mcp_server")
+
 # Malformed: missing the required ``version`` field -> the parser rejects it.
 _BAD_SKILL_MD = """\
 ---
@@ -266,7 +280,9 @@ async def test_publish_skill_creates_private_listing(
 
 
 @pytest.mark.asyncio
-async def test_publish_tool_creates_private_listing(configured_app, migrations_pg_dsn: str) -> None:
+async def test_publish_mcp_server_creates_private_listing(
+    configured_app, migrations_pg_dsn: str
+) -> None:
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
@@ -274,13 +290,13 @@ async def test_publish_tool_creates_private_listing(configured_app, migrations_p
     async with _client(configured_app) as client:
         resp = await client.post(
             "/marketplace/private/listings",
-            json={"kind": "tool", "manifest": _TOOL_YAML},
+            json={"kind": "mcp_server", "manifest": _MCP_SERVER_YAML},
             headers=headers,
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
         assert body["tenant_id"] == str(seeded["tenant_a"])
-        assert body["kind"] == "tool"
+        assert body["kind"] == "mcp_server"
         assert body["name"] == "internal-deployer"
         assert body["version"] == "2.1.0"
         # The manifest's machine-readable metadata persisted verbatim.
@@ -317,7 +333,7 @@ async def test_browse_shows_own_private_and_global_not_other_tenants(
 
         pub_b = await client.post(
             "/marketplace/private/listings",
-            json={"kind": "tool", "manifest": _TOOL_YAML},
+            json={"kind": "mcp_server", "manifest": _MCP_SERVER_YAML},
             headers={"Authorization": f"Bearer {token_b}"},
         )
         assert pub_b.status_code == 201, pub_b.text
@@ -460,3 +476,31 @@ async def test_update_and_unpublish_own_listing(configured_app, migrations_pg_ds
         assert listing_id not in ids
 
     assert await _count_listings(migrations_pg_dsn, seeded["tenant_a"]) == 0
+
+
+# ===========================================================================
+# `task_mk_10` (ADR 0081 reabierto, opción b): una tool que ejecuta código no se publica
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_publish_tool_with_code_runtime_is_rejected_with_the_adr(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Antes se aceptaba y el fallo aparecía al HABILITAR («enable cannot
+    materialise its capability»), dos pantallas después. Ahora el 422 llega donde
+    se decide, con el motivo y el ADR, y no se escribe ninguna fila."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    tool_yaml = _TOOL_YAML.replace("kind: mcp_server", "kind: tool")
+
+    async with _client(configured_app) as client:
+        resp = await client.post(
+            "/marketplace/private/listings",
+            json={"kind": "tool", "manifest": tool_yaml},
+            headers=headers,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "ADR 0081" in resp.text
+        assert "'python'" in resp.text
+        browse = await client.get("/marketplace/listings", headers=headers)
+        assert all(r["name"] != "internal-deployer" for r in browse.json())

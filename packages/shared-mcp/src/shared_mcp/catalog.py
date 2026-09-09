@@ -629,8 +629,9 @@ CONTEXT7_MCP = McpServerTemplate(
         "Documentación ACTUALIZADA de frameworks/librerías (resolve-library-id + "
         "get-library-docs): los agentes consultan la API real en vez de recordarla. "
         "Remoto público — funciona SIN credencial (con rate limits); una API key opcional "
-        "sube el límite (guárdala en Vault y añádela como cabecera). ⚠️ Requiere abrir "
-        "`mcp.context7.com` en los dominios permitidos del proyecto (egress deny-by-default)."
+        "sube el límite (guárdala en Vault y añádela como cabecera). ⚠️ Requiere que un System "
+        "Admin abra `mcp.context7.com` en la allowlist de MCP remotos de la plataforma "
+        "(Sistema → Egress, ADR 0165) y aplique el cambio al proxy; el egress es deny-by-default."
     ),
     transport="streamable_http",
     url="https://mcp.context7.com/mcp",
@@ -675,8 +676,9 @@ ATLASSIAN_REMOTE_MCP = McpServerTemplate(
         "Confluence, autenticado con OAuth 2.1 (ADR 0127): el operador pulsa «Conectar» UNA "
         "vez, consiente en Atlassian, y la plataforma refresca el token sola. Multi-tenant "
         "limpio (cada tenant autoriza SU cuenta; sin sidecar ni bot compartido). Alternativa "
-        "al sidecar `atlassian` para quien no quiera desplegar infra. ⚠️ Requiere abrir "
-        "`mcp.atlassian.com` en los dominios permitidos del proyecto (egress)."
+        "al sidecar `atlassian` para quien no quiera desplegar infra. ⚠️ Requiere que un System "
+        "Admin abra `mcp.atlassian.com` en la allowlist de MCP remotos de la plataforma "
+        "(Sistema → Egress, ADR 0165) y aplique el cambio al proxy."
     ),
     # Endpoint OFICIAL streamable-HTTP (`/v1/sse` está deprecado, retirada jun-2026).
     transport="streamable_http",
@@ -696,8 +698,9 @@ GITHUB_REMOTE_MCP = McpServerTemplate(
         "Servidor MCP HOSPEDADO por GitHub (issues, PRs, repos, Actions) sobre HTTP — no "
         "necesita binario local (a diferencia de github-mcp stdio). Auth con un PAT (o token "
         "OAuth) en la cabecera `Authorization`: guárdalo en Vault como el valor completo "
-        "`Bearer <token>`. ⚠️ Requiere abrir `api.githubcopilot.com` en los dominios "
-        "permitidos del proyecto (egress)."
+        "`Bearer <token>`. ⚠️ Requiere que `api.githubcopilot.com` esté en la allowlist del "
+        "egress-proxy: hoy lo está por ser proveedor LLM (Copilot, ADR 0021); si algún día "
+        "sale de ahí, un System Admin lo abre en Sistema → Egress (ADR 0165)."
     ),
     transport="streamable_http",
     url="https://api.githubcopilot.com/mcp/",

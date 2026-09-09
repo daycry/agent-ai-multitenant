@@ -39,33 +39,31 @@ import {
   type LucideIcon,
   ScanSearch,
   Search,
-  Shield,
   Terminal,
   TerminalSquare,
   Wrench,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
+import { ToolRow } from "./agent-tool-row";
+import { type CapabilityProvenance, provenanceIndex } from "@/lib/agents/capability-provenance";
 import { pickLang, useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
-import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
+import { resolveCategory } from "@/lib/tools/taxonomy";
 import { useCurrentUser } from "@/lib/use-current-user";
-import { cn } from "@/lib/utils";
 import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types (mirror api_server.schemas.catalog.ToolResponse +
 // api_server.schemas.agents.AgentToolResponse)
 // ---------------------------------------------------------------------------
-interface CatalogTool {
+export interface CatalogTool {
   id: string;
   name: string;
   description: string | null;
@@ -87,6 +85,10 @@ interface AgentToolRow {
   security_level: string;
   is_builtin: boolean;
   config_override: Record<string, unknown> | null;
+  // `task_mk_13` (UI-04): procedencia del marketplace (ADR 0100); null = nativa.
+  source_installation_id?: string | null;
+  source_listing_name?: string | null;
+  source_version?: string | null;
 }
 
 interface AgentToolsSectionProps {
@@ -200,6 +202,10 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
 
   const assignedIds = useMemo(
     () => (assignedQuery.data ?? []).map((r) => r.tool_id).sort(),
+    [assignedQuery.data],
+  );
+  const provenanceById = useMemo(
+    () => provenanceIndex(assignedQuery.data, (r) => r.tool_id),
     [assignedQuery.data],
   );
 
@@ -412,6 +418,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   lang={lang}
                   onToggle={toggle}
                   onToggleMany={toggleMany}
+                  provenance={provenanceById}
                   emptyMessage={q ? t("toolsEmptyBasicSearch") : t("toolsEmptyBasic")}
                   testidPrefix="basic"
                 />
@@ -438,6 +445,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   lang={lang}
                   onToggle={toggle}
                   onToggleMany={toggleMany}
+                  provenance={provenanceById}
                   emptyMessage={
                     q ? (
                       t("toolsEmptyAdvancedSearch")
@@ -478,6 +486,7 @@ function GroupedToolList({
   onToggleMany,
   emptyMessage,
   testidPrefix,
+  provenance,
 }: {
   tools: CatalogTool[];
   selected: Set<string>;
@@ -487,6 +496,7 @@ function GroupedToolList({
   onToggleMany: (toolIds: string[], on: boolean) => void;
   emptyMessage: ReactNode;
   testidPrefix: string;
+  provenance: Map<string, CapabilityProvenance>;
 }) {
   const t = useT("agents");
   const groups = useMemo(() => {
@@ -565,6 +575,7 @@ function GroupedToolList({
                   canEdit={canEdit}
                   lang={lang}
                   onToggle={onToggle}
+                  provenance={provenance.get(tool.id) ?? null}
                 />
               ))}
             </ul>
@@ -572,122 +583,5 @@ function GroupedToolList({
         );
       })}
     </div>
-  );
-}
-
-function ToolRow({
-  tool,
-  checked,
-  canEdit,
-  lang,
-  onToggle,
-}: {
-  tool: CatalogTool;
-  checked: boolean;
-  canEdit: boolean;
-  lang: Lang;
-  onToggle: (toolId: string) => void;
-}) {
-  const t = useT("agents");
-  const inputId = `agent-tool-${tool.id}`;
-  // SINGLE source: the same shared resolvers the diagnostic uses, so a tool
-  // shows identical label/variant in both screens (never the raw enum).
-  const sec = resolveSecurity(tool.security_level, lang);
-  const impl = resolveImpl(tool.implementation_type, lang);
-  const secVariant = sec.variant;
-  const implVariant = impl.variant;
-  // Mismo caso que `categoryLabel`: label bilingue que viene en datos.
-  const secLabel = pickLang(lang, { es: sec.labelEs, en: sec.labelEn });
-  const secHelp = sec.help;
-  const implLabel = pickLang(lang, { es: impl.labelEs, en: impl.labelEn });
-  const implHelp = impl.help;
-
-  return (
-    <li
-      // Strong, glance-readable selected state: the whole row tints and
-      // gets a primary border. Hover affordance only when editable, and
-      // the highlighted area === the toggle area (the <label> is full-bleed).
-      className={cn(
-        "rounded border transition-colors",
-        checked ? "border-primary/60 bg-primary/5" : "border-border",
-        canEdit && "hover:bg-muted/40",
-        checked && canEdit && "hover:bg-primary/10",
-      )}
-      data-testid={`agent-tool-row-${tool.id}`}
-      data-selected={checked ? "true" : "false"}
-    >
-      <div className="flex items-start gap-3 p-3">
-        {/* Toggle area: the label fills the row, so clicking the name /
-            description / blank space all flip the same checkbox. Read-only
-            rows use the default cursor and the checkbox is disabled, so
-            nothing pretends to be clickable. */}
-        <label
-          htmlFor={inputId}
-          className={cn(
-            "flex min-w-0 flex-1 items-start gap-3",
-            canEdit ? "cursor-pointer" : "cursor-default",
-          )}
-        >
-          <Checkbox
-            id={inputId}
-            className="mt-0.5"
-            checked={checked}
-            disabled={!canEdit}
-            onChange={() => onToggle(tool.id)}
-            data-testid={`agent-tool-checkbox-${tool.id}`}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="text-sm font-medium">{tool.name}</span>
-            {tool.description && (
-              <span className="text-muted-foreground mt-0.5 line-clamp-2 block text-xs">
-                {tool.description}
-              </span>
-            )}
-          </span>
-        </label>
-
-        {/* Informative badges live OUTSIDE the toggle <label> so a click on
-            a badge (or its tooltip trigger) never flips the checkbox. They
-            are flat (no border / no button affordance) but carry an icon
-            and an accessible tooltip that opens on hover AND keyboard focus. */}
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          <Tooltip content={secHelp}>
-            <TooltipTrigger
-              aria-label={t("toolSecurityAria", { label: secLabel, help: secHelp })}
-              data-testid={`agent-tool-security-badge-${tool.id}`}
-            >
-              <Badge variant={secVariant} className="gap-1">
-                <Shield aria-hidden="true" className="h-3 w-3" />
-                {secLabel}
-              </Badge>
-            </TooltipTrigger>
-          </Tooltip>
-          <Tooltip content={implHelp}>
-            <TooltipTrigger
-              aria-label={t("toolImplAria", { label: implLabel, help: implHelp })}
-              data-testid={`agent-tool-impl-badge-${tool.id}`}
-            >
-              <Badge variant={implVariant} className="gap-1">
-                <Info aria-hidden="true" className="h-3 w-3" />
-                {implLabel}
-              </Badge>
-            </TooltipTrigger>
-          </Tooltip>
-          {tool.is_runtime_wired === false && (
-            <Tooltip content={t("toolNotWiredTooltip")}>
-              <TooltipTrigger
-                aria-label={t("toolNotWiredAria")}
-                data-testid={`agent-tool-not-wired-badge-${tool.id}`}
-              >
-                <Badge variant="warning" className="gap-1">
-                  <Info aria-hidden="true" className="h-3 w-3" />
-                  {t("toolNotWiredBadge")}
-                </Badge>
-              </TooltipTrigger>
-            </Tooltip>
-          )}
-        </div>
-      </div>
-    </li>
   );
 }

@@ -181,6 +181,7 @@ export const dictionary = {
     evalQuality: { es: "Calidad (Evals)", en: "Quality (Evals)" },
     tenantStats: { es: "Estadísticas", en: "Statistics" },
     marketplace: { es: "Marketplace", en: "Marketplace" },
+    marketplaceReview: { es: "Revisión del marketplace", en: "Marketplace review" },
     settings: { es: "Settings", en: "Settings" },
 
     // --- grupo Plataforma ---
@@ -955,6 +956,16 @@ export const dictionary = {
       es: "el conocimiento, las tools y las skills del original y es independiente: editarla no afecta al agente de origen.",
       en: "the original's knowledge, tools and skills, and it is independent: editing it does not affect the source agent.",
     },
+    // `task_mk_13` (MK-06): las tools MCP son del proyecto (ADR 0052/0128) y el
+    // fork no se las lleva; la API las nombra en `mcp_tools_not_copied`.
+    forkMcpNotice: {
+      es: "Las tools MCP no viajan con la copia: son del proyecto y las reparte su política de roles. La copia usará las del proyecto destino.",
+      en: "MCP tools do not travel with the copy: they belong to the project and its role policy hands them out. The copy will use the target project's.",
+    },
+    forkMcpSkipped: {
+      es: "Copia creada sin estas tools MCP: {tools}",
+      en: "Copy created without these MCP tools: {tools}",
+    },
     forkNameLabel: { es: "Nombre de la copia", en: "Name of the copy" },
     // Las dos plantillas de la sugerencia de `lib/agents/fork-name.ts`. La
     // numerada existe porque hay un índice único (tenant, proyecto, nombre)
@@ -1070,8 +1081,35 @@ export const dictionary = {
     },
     toolNotWiredAria: { es: "No ejecutable en runtime", en: "Not runtime-wired" },
     toolNotWiredBadge: { es: "No ejecutable", en: "Not wired" },
+    // `task_mk_13` (UI-04): de dónde viene una capacidad materializada (ADR 0100).
+    capabilityFromMarketplaceBadge: { es: "Marketplace", en: "Marketplace" },
+    capabilityFromMarketplaceTooltip: {
+      es: "Instalada desde el marketplace: {listing} v{version}",
+      en: "Installed from the marketplace: {listing} v{version}",
+    },
+    capabilityFromMarketplaceAria: {
+      es: "Del marketplace: {listing} v{version}",
+      en: "From the marketplace: {listing} v{version}",
+    },
 
     // --- sección "Skills del agente" (`agent-skills-section.tsx`) ---
+    // task_mk_23 (UI-06): la sección de skills pasa por el diccionario.
+    skillsSave: { es: "Guardar", en: "Save" },
+    skillsSaving: { es: "Guardando…", en: "Saving…" },
+    skillsLoadError: {
+      es: "No se pudieron cargar las skills: {error}.",
+      en: "The skills could not be loaded: {error}.",
+    },
+    skillsEmptySearch: {
+      es: "Ninguna skill coincide con la búsqueda.",
+      en: "No skill matches the search.",
+    },
+    skillsEmptyCatalog: {
+      es: "No hay skills en el catálogo. Crea una en /skills.",
+      en: "There are no skills in the catalog. Create one under /skills.",
+    },
+    skillsBadgeCatalog: { es: "Catálogo", en: "Catalog" },
+    skillsBadgeCustom: { es: "Personalizada", en: "Custom" },
     skillsSearchPlaceholder: {
       es: "Buscar skill por nombre, descripción o categoría…",
       en: "Search skills by name, description or category…",
@@ -2332,6 +2370,22 @@ export const dictionary = {
       es: "El servidor declara OAuth: la entrada nace sin conexión. Complétala con «Conectar» en la pestaña MCP del proyecto.",
       en: "The server declares OAuth: the entry starts unconnected. Finish it with «Connect» on the project's MCP tab.",
     },
+    // task_mk_11 (UI-02): qué recibió quién, y el tipo diferido explicado.
+    createdRefsTitle: {
+      es: "Qué se escribió en el proyecto:",
+      en: "What was written to the project:",
+    },
+    refMcpServers: { es: "Servidores MCP declarados", en: "MCP servers declared" },
+    refMcpToolRoles: { es: "Política rol→tool escrita para", en: "Role→tool policy written for" },
+    refMcpImport: { es: "Import de tools encolado", en: "Tool import queued" },
+    refAgentTools: { es: "Agentes que recibieron la tool", en: "Agents that received the tool" },
+    refAgentSkills: { es: "Agentes que recibieron la skill", en: "Agents that received the skill" },
+    deferredTypeNote: {
+      es: "Este listing es de un tipo diferido: ejecuta código y la plataforma aún no tiene el sandbox que lo materialice (ADR 0081), así que no hay ninguna fila de catálogo que asignar. La instalación está autorizada, sin capacidad.",
+      en: "This listing is of a deferred type: it executes code and the platform does not yet have the sandbox to materialise it (ADR 0081), so there is no catalog row to assign. The installation is authorised, with no capability.",
+    },
+    deferredTypeLink: { es: "Ver en «Instaladas»", en: "See under “Installed”" },
+    lastResultTitle: { es: "Resultado del último despliegue", en: "Last deployment result" },
 
     // --- pestañas del proyecto (activación local) ------------------------
     availableTitle: { es: "Disponibles en tu tenant", en: "Available in your tenant" },
@@ -3089,6 +3143,49 @@ export const dictionary = {
       es: "Elige un proveedor para ver sus modelos.",
       en: "Pick a provider to see its models.",
     },
+
+    // --- `string_list` y la allowlist de egress (task_mk_02, ADR 0165) -------
+    // El control es genérico (una lista de cadenas); los textos de egress sólo
+    // se pintan para `egress.mcp_allowed_hosts`. Ninguno dice «permitido»: eso
+    // sólo lo puede decir el sondeo contra el proxy (D7.2/D7.3).
+    stringListHelp: {
+      es: "Una entrada por línea. Sólo hostnames: sin esquema, puerto, ruta ni comodines.",
+      en: "One entry per line. Hostnames only: no scheme, port, path or wildcards.",
+    },
+    stringListCount: { es: "{count} de {max} entradas", en: "{count} of {max} entries" },
+    stringListSavedPendingApply: {
+      es: "Guardado — pendiente de aplicar al proxy. Esto es la intención; el proxy sigue con su filtro anterior hasta que alguien ejecute, en el host:",
+      en: "Saved — pending apply to the proxy. This is the intent; the proxy keeps its previous filter until someone runs, on the host:",
+    },
+    egressConnectPorts: {
+      es: "El proxy sólo deja salir CONNECT por 443 y 8443, para todos los hosts permitidos. Un host que sólo escuche en otro puerto no se puede habilitar desde aquí.",
+      en: "The proxy only lets CONNECT out on 443 and 8443, for every allowed host. A host that only listens on another port cannot be enabled from here.",
+    },
+    egressNoWildcards: {
+      es: "Aquí no caben comodines: un patrón abre una familia entera de hosts y se revisa en el repo, con PR.",
+      en: "No wildcards here: a pattern opens a whole family of hosts and gets reviewed in the repo, with a PR.",
+    },
+    egressNotExfiltration: {
+      es: "Esto NO es control de exfiltración: cada host abierto es un canal de salida completamente escribible desde cualquier sandbox de cualquier tenant.",
+      en: "This is NOT exfiltration control: every opened host is a fully writable outbound channel from any sandbox of any tenant.",
+    },
+    probeButton: { es: "Comprobar contra el proxy", en: "Check against the proxy" },
+    probing: { es: "Comprobando…", en: "Checking…" },
+    probeHelp: {
+      es: "Abre un CONNECT a través del egress-proxy por cada host guardado. Es la única forma de saber qué está en vigor; sondear no enumera lo que el proxy permite además.",
+      en: "Opens a CONNECT through the egress proxy for every saved host. It is the only way to know what is in force; probing does not enumerate what else the proxy allows.",
+    },
+    probeNoProxy: {
+      es: "El api-server no tiene egress-proxy configurado (API_SERVER_EGRESS_PROXY_URL): no hay a quién preguntar.",
+      en: "The api-server has no egress proxy configured (API_SERVER_EGRESS_PROXY_URL): there is nobody to ask.",
+    },
+    probeEmpty: {
+      es: "No hay hosts guardados que comprobar.",
+      en: "There are no saved hosts to check.",
+    },
+    verdictPermitido: { es: "permitido", en: "allowed" },
+    verdictBloqueado: { es: "bloqueado", en: "blocked" },
+    verdictError: { es: "error", en: "error" },
   },
 
   /**
@@ -4724,6 +4821,81 @@ export const dictionary = {
     diffUnchanged: { es: "No hay diferencias entre", en: "There are no differences between" },
   },
   /**
+   * «Integraciones» del proyecto (`task_mk_20`, MK-05): anclas Jira/Confluence que
+   * el run recibe en su preámbulo. Comparten namespace la sección
+   * (`components/projects/integrations-section.tsx`) y su módulo puro
+   * (`lib/project-integrations.ts`), que redacta los problemas con `translate(lang, …)`.
+   */
+  projectIntegrations: {
+    title: { es: "Integraciones", en: "Integrations" },
+    description: {
+      es:
+        "Las anclas bajo las que trabaja este proyecto en Jira y Confluence. Los agentes las " +
+        "reciben en cada run y las skills de Atlassian las usan sin que nadie las repita en " +
+        "cada plan.",
+      en:
+        "The anchors this project works under in Jira and Confluence. Agents receive them on " +
+        "every run and the Atlassian skills use them without anyone repeating them per plan.",
+    },
+    jiraHeading: { es: "Jira", en: "Jira" },
+    jiraDescription: {
+      es: "El proyecto de Jira y, si lo hay, el epic o issue padre bajo el que van las tareas.",
+      en: "The Jira project and, if any, the parent epic or issue the tasks go under.",
+    },
+    jiraProjectKeyLabel: { es: "Clave del proyecto", en: "Project key" },
+    jiraParentIssueKeyLabel: { es: "Issue padre (epic)", en: "Parent issue (epic)" },
+    jiraParentIssueKeyHelp: {
+      es: "Con el formato CLAVE-123. Vacío = las tareas se crean sueltas en el proyecto.",
+      en: "In the form KEY-123. Empty = tasks are created loose in the project.",
+    },
+    confluenceHeading: { es: "Confluence", en: "Confluence" },
+    confluenceDescription: {
+      es: "El espacio y, si la hay, la página raíz bajo la que se documenta.",
+      en: "The space and, if any, the root page documentation goes under.",
+    },
+    confluenceSpaceKeyLabel: { es: "Clave del espacio", en: "Space key" },
+    confluenceRootPageIdLabel: { es: "Página raíz (id)", en: "Root page (id)" },
+    confluenceRootPageIdHelp: {
+      es: "El número que aparece en la URL de la página (/pages/123456/). Vacío = raíz del espacio.",
+      en: "The number in the page URL (/pages/123456/). Empty = the space root.",
+    },
+    noSecretsNote: {
+      es:
+        "Aquí no van credenciales: viven en el servidor MCP de Atlassian del proyecto " +
+        "(Vault u OAuth), que se configura en «MCP servers».",
+      en:
+        "No credentials here: they live in the project's Atlassian MCP server (Vault or " +
+        "OAuth), configured under “MCP servers”.",
+    },
+    problemJiraProjectKey: {
+      es: "La clave del proyecto Jira va en mayúsculas y empieza por letra (p. ej. PLAT).",
+      en: "The Jira project key is uppercase and starts with a letter (e.g. PLAT).",
+    },
+    problemJiraParentWithoutProject: {
+      es: "Un issue padre necesita la clave del proyecto Jira.",
+      en: "A parent issue needs the Jira project key.",
+    },
+    problemJiraParentIssueKey: {
+      es: "El issue padre tiene el formato CLAVE-123 (p. ej. PLAT-120).",
+      en: "The parent issue has the form KEY-123 (e.g. PLAT-120).",
+    },
+    problemConfluenceSpaceKey: {
+      es: "La clave del espacio Confluence es alfanumérica (p. ej. ENG).",
+      en: "The Confluence space key is alphanumeric (e.g. ENG).",
+    },
+    problemConfluenceRootWithoutSpace: {
+      es: "Una página raíz necesita la clave del espacio Confluence.",
+      en: "A root page needs the Confluence space key.",
+    },
+    problemConfluenceRootPageId: {
+      es: "El id de la página raíz es numérico (el de la URL /pages/123456/).",
+      en: "The root page id is numeric (the one in the URL /pages/123456/).",
+    },
+    save: { es: "Guardar integraciones", en: "Save integrations" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saved: { es: "Integraciones guardadas.", en: "Integrations saved." },
+  },
+  /**
    * Catálogo de categorías y tipos de documento (`lib/docs-filters.ts`).
    *
    * Namespace propio y COMPARTIDO: lo consumen el panel de facetas y la lista de
@@ -4760,6 +4932,7 @@ export const dictionary = {
       en: "Browse the catalog, manage what is installed, your private listings and what is shared across tenants.",
     },
     privateLink: { es: "Privadas", en: "Private" },
+    reviewLink: { es: "Cola de revisión", en: "Review queue" },
     publish: { es: "Publicar", en: "Publish" },
     tabCatalog: { es: "Catálogo", en: "Catalog" },
     tabInstalled: { es: "Instaladas", en: "Installed" },
@@ -4786,9 +4959,24 @@ export const dictionary = {
     installStatusEnabled: { es: "Habilitada", en: "Enabled" },
     installStatusDisabled: { es: "Deshabilitada", en: "Disabled" },
     installStatusRevoked: { es: "Revocada", en: "Revoked" },
+    // task_mk_10 (ADR 0081 reabierto): una instalación habilitada de un tipo que
+    // ejecuta código y no tiene sandbox está AUTORIZADA pero no produce nada. No se
+    // vende como «Habilitada».
+    installStatusDeferred: { es: "Autorizada, sin capacidad", en: "Authorised, no capability" },
+    installDeferredHelp: {
+      es: "Este listing ejecuta código arbitrario y la plataforma aún no tiene el sandbox que lo materialice (ADR 0081, Fase B/C). Ningún agente puede usarlo todavía.",
+      en: "This listing executes arbitrary code and the platform does not yet have the sandbox to materialise it (ADR 0081, Phase B/C). No agent can use it yet.",
+    },
     permissions: { es: "Permisos", en: "Permissions" },
     revoke: { es: "Revocar", en: "Revoke" },
     uninstall: { es: "Desinstalar", en: "Uninstall" },
+    // `task_mk_00`: instalar desde el catálogo. Hasta 2026-09-03 el panel no
+    // sabía crear una instalación: sólo listarlas.
+    install: { es: "Instalar", en: "Install" },
+    installing: { es: "Instalando…", en: "Installing…" },
+    installed: { es: "Instalada", en: "Installed" },
+    installStatusAnalyzing: { es: "en análisis", en: "under analysis" },
+    installStatusBlocked: { es: "bloqueada", en: "blocked" },
     shareCardTitle: {
       es: "Compartir un listing privado con otro tenant",
       en: "Share a private listing with another tenant",
@@ -4804,7 +4992,28 @@ export const dictionary = {
       en: "You have no private listings to share. Publish one in",
     },
     shareNoPrivateLink: { es: "Marketplace privado", en: "Private marketplace" },
-    shareTargetLabel: { es: "Tenant destino (UUID)", en: "Target tenant (UUID)" },
+    shareTargetLabel: { es: "Tenant destino", en: "Target tenant" },
+    // task_mk_23 (UI-06): buscador de tenant (`components/marketplace/tenant-picker.tsx`).
+    shareTargetSearchPlaceholder: {
+      es: "Busca el tenant por nombre…",
+      en: "Search the tenant by name…",
+    },
+    shareTargetSearchHint: {
+      es: "Escribe al menos dos letras del nombre o del identificador del tenant.",
+      en: "Type at least two letters of the tenant's name or identifier.",
+    },
+    shareTargetSearching: { es: "Buscando…", en: "Searching…" },
+    shareTargetSearchError: {
+      es: "No se pudo consultar el directorio de tenants.",
+      en: "The tenant directory could not be queried.",
+    },
+    shareTargetNoMatches: {
+      es: "Ningún tenant coincide. Solo aparecen tenants activos distintos del tuyo.",
+      en: "No tenant matches. Only active tenants other than yours are listed.",
+    },
+    shareTargetClear: { es: "Cambiar tenant", en: "Change tenant" },
+    shareCardListing: { es: "Listing", en: "Listing" },
+    shareCardTarget: { es: "Compartido con", en: "Shared with" },
     shareSubmit: { es: "Compartir", en: "Share" },
     shareSubmitting: { es: "Compartiendo…", en: "Sharing…" },
     sharesTitle: {
@@ -5782,6 +5991,31 @@ export const dictionary = {
       en: "{count} imported to the catalog (Origin MCP, “Isolated” level).",
     },
 
+    // --- egress: probar sale por el proxy (task_mk_02, ADR 0165 D9/D11) ------
+    // El backend devuelve `error_code` tipado; la UI ramifica por él y no por el
+    // texto, que es lo que antes pintaba crudo (`403 Filtered`).
+    egressBlockedTitle: {
+      es: "El egress-proxy bloqueó el host",
+      en: "The egress proxy blocked the host",
+    },
+    egressBlockedHelp: {
+      es: "El host de este servidor no está en la allowlist de MCP remotos de la plataforma. Pídele a un System Admin que lo añada en Sistema → Egress y que aplique el cambio al proxy. La prueba recorre el mismo camino que las ejecuciones: hasta entonces fallarán igual.",
+      en: "This server's host is not in the platform's remote MCP allowlist. Ask a System Admin to add it under System → Egress and apply the change to the proxy. The test walks the same path as the runs: until then they will fail the same way.",
+    },
+    egressProxyUnavailableTitle: {
+      es: "El api-server no puede usar el egress-proxy",
+      en: "The api-server cannot use the egress proxy",
+    },
+    egressProxyUnavailableHelp: {
+      es: "No es la allowlist. Revisa API_SERVER_EGRESS_PROXY_URL, que el proxy esté en marcha y que la IP del api-server caiga en las redes Allow de tinyproxy (runbook egress-mcp-allowlist §5).",
+      en: "It is not the allowlist. Check API_SERVER_EGRESS_PROXY_URL, that the proxy is running, and that the api-server's IP falls within tinyproxy's Allow networks (egress-mcp-allowlist runbook §5).",
+    },
+    egressWarningBadge: { es: "host sin abrir en el egress", en: "host not opened in egress" },
+    egressWarning: {
+      es: "Guardado. El host {host} no está hoy en la allowlist de egress de la plataforma; pídele su apertura a un System Admin (Sistema → Egress). Hasta entonces, las ejecuciones y las pruebas con este servidor fallarán.",
+      en: "Saved. The host {host} is not in the platform's egress allowlist today; ask a System Admin to open it (System → Egress). Until then, runs and tests with this server will fail.",
+    },
+
     // --- política rol→tool (ADR 0128 fase 4) ------------------------------
     rolesTitle: { es: "Acceso por rol a las tools MCP", en: "Role-based access to MCP tools" },
     rolesOptional: { es: "opcional", en: "optional" },
@@ -5794,13 +6028,36 @@ export const dictionary = {
     rolesDiscard: { es: "Descartar", en: "Discard" },
     rolesSave: { es: "Guardar", en: "Save" },
     rolesSaved: { es: "Guardado", en: "Saved" },
+    // ADR 0166 D2: el estado vacío enlaza a la CAUSA — el botón «Importar» de la
+    // tarjeta del servidor —, no a «pulsa Probar» dentro del diálogo.
     rolesEmptyBefore: {
-      es: "Este proyecto aún no tiene tools MCP importadas. Configura un MCP server arriba y usa",
-      en: "This project has no MCP tools imported yet. Configure an MCP server above and use",
+      es: "Este proyecto aún no tiene tools MCP importadas en el catálogo: sus tarjetas de arriba dicen «sin importar». Pulsa",
+      en: "This project has no MCP tools imported into the catalog yet: its cards above say “not imported”. Press",
     },
     rolesEmptyAfter: {
-      es: "para importar sus tools al catálogo; luego podrás afinar aquí qué roles las usan.",
-      en: "to import its tools into the catalog; then you can tune here which roles may use them.",
+      es: "en la tarjeta del servidor para traerlas todas en un viaje (o elige cuáles desde Editar); luego podrás afinar aquí qué roles las usan.",
+      en: "on the server card to bring them all in one go (or pick which ones from Edit); then you can tune here which roles may use them.",
+    },
+
+    // --- tarjeta: recuento e import directo (ADR 0166 D2/D4, task_mk_01) -----
+    cardImportedCount: { es: "{count} tools importadas", en: "{count} tools imported" },
+    cardNotImported: { es: "sin importar", en: "not imported" },
+    cardImportAll: { es: "Importar", en: "Import" },
+    cardTestOk: {
+      es: "Conexión OK: el servidor anuncia {count} tools.",
+      en: "Connection OK: the server announces {count} tools.",
+    },
+    cardImportDone: {
+      es: "Importadas {count} tools al catálogo ({retired} retiradas por dejar de anunciarse).",
+      en: "{count} tools imported into the catalog ({retired} retired as no longer announced).",
+    },
+    cardImportTooMany: {
+      es: "El servidor anuncia más de 200 tools: el import automático se abstiene. Elige cuáles importar desde Editar → Probar conexión.",
+      en: "The server announces more than 200 tools: the automatic import stands down. Pick which ones to import from Edit → Test connection.",
+    },
+    cardImportOauthNotConnected: {
+      es: "Este servidor usa OAuth y no está conectado: pulsa «Conectar» y sus tools se importarán solas al completarlo.",
+      en: "This server uses OAuth and is not connected: press “Connect” and its tools will be imported on completion.",
     },
     rolesOpenToAll: { es: "Abierta a todos", en: "Open to all" },
     rolesCount: { es: "{count} roles", en: "{count} roles" },

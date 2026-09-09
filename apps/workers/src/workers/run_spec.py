@@ -243,6 +243,9 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     # emit when present (backward-compat).
     if request.agent_persona is not None:
         spec["agent_persona"] = request.agent_persona
+    # `task_mk_21`: las anclas Jira/Confluence del proyecto → bloque del preámbulo.
+    if request.integrations:
+        spec["integrations"] = request.integrations
     # `task_gov_03`: el sello del prompt del agente → el runtime lo mezcla en
     # `executions.prompt_version` (`prompt_version.agent_prompt_seal`). Sin él el
     # runtime hashea la persona por su cuenta y la etiqueta sigue distinguiendo

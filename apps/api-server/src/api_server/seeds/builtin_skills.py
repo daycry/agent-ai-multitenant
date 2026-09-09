@@ -562,8 +562,12 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
     ),
     # ------ Atlassian (integración Jira + Confluence vía MCP, ADR 0127/0128) ------
     # Enseñan a los agentes a USAR el MCP de Atlassian del proyecto. No cablean
-    # nombres de tool namespaced (el operador elige el nombre del server) ni ids
-    # (llegan por el plan). Idempotentes y degradan con gracia si el MCP no está.
+    # nombres de tool namespaced (el operador elige el nombre del server) ni ids.
+    # `task_mk_21` (MK-05): los identificadores —proyecto y epic padre de Jira,
+    # espacio y página raíz de Confluence— llegan como «anclas de integración del
+    # proyecto» en el preámbulo del run (`project.integrations`); las skills las
+    # leen de AHÍ y sólo caen a la descripción del plan si faltan. Idempotentes y
+    # degradan con gracia si el MCP no está.
     BuiltinSkill(
         "atlassian-jira-task-tracking",
         "Jira — seguimiento de tareas",
@@ -575,11 +579,14 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "proyecto: primero buscas si ya existe su issue —por el título de la tarea o por una "
         "clave que el plan haya registrado— y solo la creas si no aparece, normalmente como "
         "subtarea del epic del plan, volcando el título y la descripción de la tarea, de modo "
-        "que nunca duplicas. Tomas la clave del epic y los demás identificadores del contexto "
-        "del plan (su descripción, la de la tarea o un comentario del plan); si no están, los "
-        "pides en un comentario del plan o creas la issue sin colgarla del epic en lugar de "
-        "inventarlos, y trabajas siempre contra el proyecto Jira de este plan, nunca contra "
-        "otros. Nada más localizarla o crearla la transicionas a «en curso», y al cerrar la "
+        "que nunca duplicas. La clave del proyecto Jira y la del epic padre las tomas PRIMERO "
+        "de las anclas de integración del proyecto que ves en tu preámbulo («Jira project», "
+        "«Jira parent issue»): son la configuración del proyecto y mandan sobre lo que diga el "
+        "plan. Solo si el preámbulo no trae un ancla caes al contexto del plan (su descripción, "
+        "la de la tarea o un comentario del plan); y si tampoco está ahí, la pides en un "
+        "comentario del plan o creas la issue sin colgarla del epic en lugar de inventarla. "
+        "Trabajas siempre contra ese proyecto Jira, nunca contra otros. Nada más localizarla o "
+        "crearla la transicionas a «en curso», y al cerrar la "
         "tarea la llevas a «hecho», eligiendo siempre entre las transiciones que la herramienta "
         "te ofrezca en vez de asumir nombres de estado. Conforme avanzas, enlazas en la issue "
         "la rama, los commits o el PR en cuanto existan, para que Jira y el trabajo real queden "
@@ -592,12 +599,14 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "atlassian",
         "Publica tu veredicto y hallazgos de revisión como comentario en la issue de "
         "Jira y transiciónala según apruebes o rechaces (reviewer, qa).",
-        "Cuando cierras la revisión de una tarea, reflejas tu veredicto en Jira: localizas la "
-        "issue por la clave que venga en el contexto del plan —descripción del plan o de la "
-        "tarea, o un comentario del plan— y, si no la tienes clara, la buscas con tus "
-        "herramientas de Jira por el título de la tarea antes de comentar o transicionar sobre "
-        "la issue equivocada, operando siempre sobre issues del proyecto actual y nunca sobre "
-        "otras aunque las veas listadas. Antes de escribir relees los comentarios existentes de "
+        "Cuando cierras la revisión de una tarea, reflejas tu veredicto en Jira: acotas la "
+        "búsqueda al proyecto Jira y al epic padre que ves en las anclas de integración del "
+        "proyecto de tu preámbulo (mandan sobre el plan; solo si faltan caes a la descripción "
+        "del plan, la de la tarea o un comentario del plan), localizas la issue por la clave "
+        "que venga en ese contexto y, si no la tienes clara, la buscas con tus herramientas de "
+        "Jira por el título de la tarea antes de comentar o transicionar sobre la issue "
+        "equivocada, operando siempre sobre issues del proyecto actual y nunca sobre otras "
+        "aunque las veas listadas. Antes de escribir relees los comentarios existentes de "
         "esa issue para no duplicar un informe que ya dejaste en una iteración previa —si ya "
         "hay una nota equivalente la amplías en lugar de crear otra— y publicas tus hallazgos "
         "como comentario, nunca como una issue nueva, redactando de forma concreta qué apruebas "
@@ -622,9 +631,12 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "Cuando el trabajo documentable está listo —normalmente al cerrar el plan o al "
         "completar tu tarea de documentación— reflejas el resultado en Confluence con tus "
         "herramientas de crear y actualizar páginas, sin cablear nombres de servidor ni "
-        "identificadores fijos. Tomas del contexto del plan (su descripción, la de la tarea o "
-        "un comentario del plan) el espacio y la página padre bajo la que debes anclar; si ese "
-        "dato no viene, lo pides o lo omites con gracia en vez de inventarlo. Antes de crear "
+        "identificadores fijos. El espacio y la página raíz bajo la que anclas los tomas "
+        "PRIMERO de las anclas de integración del proyecto que ves en tu preámbulo "
+        "(«Confluence space», «Confluence root page id»): son la configuración del proyecto y "
+        "mandan sobre el plan. Solo si el preámbulo no trae un ancla caes al contexto del plan "
+        "(su descripción, la de la tarea o un comentario del plan); y si tampoco viene ahí, lo "
+        "pides o lo omites con gracia en vez de inventarlo. Antes de crear "
         "nada, buscas con tu herramienta de búsqueda si ya existe una página equivalente bajo "
         "ese padre y, de existir, la actualizas en lugar de duplicarla, de modo que la "
         "documentación quede sincronizada con el estado real al cierre. Creas y actualizas "
@@ -645,11 +657,13 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
         "Cuando arrancas a planificar o diseñar, antes de proponer tareas nuevas usas tus "
         "herramientas de búsqueda de Jira para localizar issues y epics ya existentes "
         "relacionados con el objetivo, de modo que no dupliques trabajo ya registrado y alinees "
-        "el plan con lo que hay. Tomas la clave del epic o los identificadores de proyecto del "
-        "contexto del plan —su descripción, la de la tarea o un comentario del plan— y acotas "
-        "la búsqueda al proyecto Jira actual sin cruzar a espacios de otros; si no vienen, "
-        "buscas por los términos del objetivo y, si aún dudas, los pides en un comentario del "
-        "plan en lugar de inventarlos. Este paso de consulta va siempre primero: solo tras "
+        "el plan con lo que hay. La clave del proyecto Jira y la del epic padre las tomas "
+        "PRIMERO de las anclas de integración del proyecto que ves en tu preámbulo (mandan "
+        "sobre el plan) y acotas la búsqueda a ese proyecto y a ese epic sin cruzar a espacios "
+        "de otros; solo si el preámbulo no las trae caes al contexto del plan —su descripción, "
+        "la de la tarea o un comentario del plan—, y si tampoco vienen ahí buscas por los "
+        "términos del objetivo y, si aún dudas, los pides en un comentario del plan en lugar "
+        "de inventarlos. Este paso de consulta va siempre primero: solo tras "
         "verificar que un issue existe anotas su clave en la descripción del plan y en las "
         "tareas que dependan de él, dejando claro qué relación guarda cada una (amplía, depende "
         "de o solapa con lo ya existente) para que la trazabilidad sea real y no duplicada. "

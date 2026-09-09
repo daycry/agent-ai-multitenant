@@ -150,6 +150,12 @@ export function AgentForkDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
+          <p
+            className="bg-info-soft text-info-soft-foreground rounded p-2 text-xs"
+            data-testid="fork-agent-mcp-notice"
+          >
+            {t("forkMcpNotice")}
+          </p>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="fork-name">{t("forkNameLabel")}</Label>
             <Input
