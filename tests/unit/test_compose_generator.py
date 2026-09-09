@@ -224,9 +224,39 @@ def test_bootstrap_pulls_configured_embedding_model() -> None:
         _config(ollama_mode="cpu", embedding_model="snowflake-arctic-embed:110m")
     )
     boot = compose["services"][OLLAMA_BOOTSTRAP_SERVICE]
-    assert boot["command"] == ["ollama pull snowflake-arctic-embed:110m"]
+    assert boot["command"][0].startswith("ollama pull snowflake-arctic-embed:110m")
     assert boot["depends_on"] == {OLLAMA_SERVICE: {"condition": "service_healthy"}}
     assert boot["restart"] == "no"
+
+
+def test_bootstrap_pulls_the_chat_model_too() -> None:
+    """`task_inst_02` (G4). Hasta el 2026-09-09 el bootstrap bajaba SÓLO el modelo
+    de embeddings: una instalación limpia con Ollama como único proveedor no tenía
+    ningún modelo con el que pensar, y el primer run moría en `plan`. El modelo de
+    chat que declara el proveedor Ollama del `install.yaml` se baja en el mismo
+    one-shot, detrás del de embeddings (el `&&` es a propósito: si el primero
+    falla, el servicio sale distinto de cero y `--wait` lo cuenta)."""
+    compose = generate_compose(
+        _config(
+            ollama_mode="cpu",
+            embedding_model="nomic-embed-text",
+            providers=ProvidersConfig(
+                ollama=OllamaProvider(
+                    enabled=True, endpoint="http://ollama:11434", chat_model="qwen2.5:3b"
+                )
+            ),
+        )
+    )
+    boot = compose["services"][OLLAMA_BOOTSTRAP_SERVICE]
+    assert boot["command"] == ["ollama pull nomic-embed-text && ollama pull qwen2.5:3b"]
+
+
+def test_the_default_chat_model_supports_tool_calling() -> None:
+    """El runtime es un bucle LangGraph que llama tools: un modelo sin
+    tool-calling (`orca-mini` responde «does not support tools») deja al agente
+    mudo en `plan`. El default tiene que ser uno que lo soporte — `qwen2.5:3b`,
+    verificado el 2026-09-09 con `tool_calls` reales contra Ollama."""
+    assert OllamaProvider(enabled=True, endpoint="http://ollama:11434").chat_model == "qwen2.5:3b"
 
 
 def test_embedder_env_wired_into_app_services_when_ollama_on() -> None:
@@ -366,6 +396,11 @@ def _app_env(compose: dict[str, object], service: str = "api-server") -> dict[st
 
 
 def test_provider_toggle_includes_wiring_when_enabled() -> None:
+    """`task_inst_03` (G1): el compose sólo lleva el cableado de proveedor que el
+    api-server LEE. Hasta el 2026-09-09 estos dos tests fijaban `LLM_<KIND>_ENABLED`
+    para los cuatro kinds — variables que nadie leía y que hacían creer que el
+    proveedor quedaba configurado. Ollama es el único kind que se puede sembrar sin
+    credencial: es el único que viaja, y viaja con el prefijo `API_SERVER_`."""
     providers = ProvidersConfig(
         claude_sdk=ClaudeSdkProvider(enabled=True, oauth_token="tok-throwaway"),
         azure_foundry=AzureFoundryProvider(
@@ -373,25 +408,25 @@ def test_provider_toggle_includes_wiring_when_enabled() -> None:
             apim_endpoint="https://apim.example.com",
             api_key="key-throwaway",
         ),
+        ollama=OllamaProvider(enabled=True, endpoint="http://o:11434", chat_model="qwen2.5:3b"),
     )
     compose = generate_compose(_config(providers=providers))
     env = _app_env(compose)
-    assert env["LLM_CLAUDE_SDK_ENABLED"] == "true"
-    assert env["LLM_AZURE_FOUNDRY_ENABLED"] == "true"
-    assert env["LLM_AZURE_FOUNDRY_ENDPOINT"] == "https://apim.example.com"
-    # Disabled providers contribute NO wiring.
-    assert "LLM_COPILOT_ENABLED" not in env
-    assert "LLM_OLLAMA_ENABLED" not in env
+    assert env["API_SERVER_LLM_OLLAMA_ENABLED"] == "true"
+    assert env["API_SERVER_LLM_OLLAMA_ENDPOINT"] == "http://o:11434"
+    assert env["API_SERVER_LLM_OLLAMA_CHAT_MODEL"] == "qwen2.5:3b"
+    # Los otros kinds NO dejan cableado: sus credenciales no las escribe el
+    # instalador y una variable que prometiera lo contrario mentiría.
+    assert not [k for k in env if k.startswith("LLM_")]
+    assert not [k for k in env if "CLAUDE_SDK" in k or "AZURE_FOUNDRY" in k or "COPILOT" in k]
 
 
 def test_provider_toggle_excludes_wiring_when_disabled() -> None:
-    # Only Ollama enabled → only the Ollama wiring is present.
-    compose = generate_compose(_config())
+    # Ollama deshabilitado (otro kind habilitado) → ningún cableado de Ollama.
+    providers = ProvidersConfig(copilot=CopilotProvider(enabled=True, oauth_token="x"))
+    compose = generate_compose(_config(providers=providers))
     env = _app_env(compose)
-    assert env["LLM_OLLAMA_ENABLED"] == "true"
-    assert env["LLM_OLLAMA_ENDPOINT"] == "http://o:11434"
-    for absent in ("LLM_CLAUDE_SDK_ENABLED", "LLM_COPILOT_ENABLED", "LLM_AZURE_FOUNDRY_ENABLED"):
-        assert absent not in env
+    assert not [k for k in env if "LLM_OLLAMA" in k]
 
 
 def test_enabled_providers_reports_only_enabled() -> None:

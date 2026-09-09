@@ -182,3 +182,133 @@ def test_init_tenant_normalizes_email_and_hashes_password(
     assert password_hash.startswith("$argon2")
     assert "a-very-long-throwaway-password-123" not in password_hash
     assert role == "tenant_admin"
+
+
+# ===========================================================================
+# `task_inst_03`/`task_inst_04` (plan remediacion-instalador-runs-de-serie-2026-09-09)
+# El seed del instalador deja un proveedor con el que los agentes puedan pensar.
+# ===========================================================================
+async def _truncate_providers_and_settings(dsn: str) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("TRUNCATE llm_providers CASCADE")
+        await conn.execute("DELETE FROM platform_settings WHERE key = 'model.default_config'")
+    finally:
+        await conn.close()
+
+
+async def _run_seed_providers(dsn: str, *, settings, actor_user_id):
+    from api_server.seeds.init_llm_providers import ensure_llm_providers_from_settings
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(dsn, pool_pre_ping=False)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session, session.begin():
+            return await ensure_llm_providers_from_settings(
+                session, settings=settings, actor_user_id=actor_user_id
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _read_default_model(dsn: str) -> dict | None:
+    from api_server.db.platform_settings import MODEL_DEFAULT_CONFIG_KEY, get_platform_setting
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(dsn, pool_pre_ping=False)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as session:
+            return await get_platform_setting(session, MODEL_DEFAULT_CONFIG_KEY, default=None)
+    finally:
+        await engine.dispose()
+
+
+async def _providers(dsn: str) -> list[tuple[str, str, str, bool]]:
+    conn = await asyncpg.connect(dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT kind, slug, base_url, is_active FROM llm_providers ORDER BY slug"
+        )
+        return [(r["kind"], r["slug"], r["base_url"], r["is_active"]) for r in rows]
+    finally:
+        await conn.close()
+
+
+def _ollama_settings(**over):
+    from api_server.config import Settings
+
+    base = {
+        "llm_ollama_enabled": True,
+        "llm_ollama_endpoint": "http://ollama:11434",
+        "llm_ollama_chat_model": "qwen2.5:3b",
+    }
+    base.update(over)
+    return Settings(**base)
+
+
+def test_seed_creates_the_ollama_provider_with_v1_and_a_platform_default_model(
+    alembic_config, migrations_pg_dsn: str
+) -> None:
+    """Una instalación limpia con Ollama como único proveedor arranca con (1) la fila
+    de `llm_providers` que el instalador prometía y nunca creaba, con `/v1`, y (2) el
+    modelo por defecto de plataforma apuntando a ese proveedor — sin eso los agentes
+    sembrados heredan el `claude_sdk` de `DEFAULT_MODEL_CONFIG` y mueren
+    `model_unresolved`."""
+    command.upgrade(alembic_config, "head")
+    dsn = _as_async_dsn(migrations_pg_dsn)
+    asyncio.run(_truncate(migrations_pg_dsn))
+    asyncio.run(_truncate_providers_and_settings(migrations_pg_dsn))
+    result = asyncio.run(_run_init(dsn, **_ARGS))
+
+    seeded = asyncio.run(
+        _run_seed_providers(dsn, settings=_ollama_settings(), actor_user_id=result.user_id)
+    )
+
+    assert seeded.created_provider is True
+    assert asyncio.run(_providers(migrations_pg_dsn)) == [
+        ("ollama", "ollama", "http://ollama:11434/v1", True)
+    ]
+    default = asyncio.run(_read_default_model(dsn))
+    assert default is not None
+    assert default["provider"] == "ollama"
+    assert default["model"] == "qwen2.5:3b"
+
+
+def test_seed_of_providers_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
+    command.upgrade(alembic_config, "head")
+    dsn = _as_async_dsn(migrations_pg_dsn)
+    asyncio.run(_truncate(migrations_pg_dsn))
+    asyncio.run(_truncate_providers_and_settings(migrations_pg_dsn))
+    result = asyncio.run(_run_init(dsn, **_ARGS))
+
+    asyncio.run(_run_seed_providers(dsn, settings=_ollama_settings(), actor_user_id=result.user_id))
+    second = asyncio.run(
+        _run_seed_providers(dsn, settings=_ollama_settings(), actor_user_id=result.user_id)
+    )
+
+    assert second.created_provider is False
+    assert len(asyncio.run(_providers(migrations_pg_dsn))) == 1
+
+
+def test_seed_does_nothing_when_ollama_is_not_enabled(
+    alembic_config, migrations_pg_dsn: str
+) -> None:
+    """Sin proveedor configurado no se inventa ninguno, y el modelo por defecto se
+    deja en manos de `DEFAULT_MODEL_CONFIG` (el operador lo cambiará desde el panel)."""
+    command.upgrade(alembic_config, "head")
+    dsn = _as_async_dsn(migrations_pg_dsn)
+    asyncio.run(_truncate(migrations_pg_dsn))
+    asyncio.run(_truncate_providers_and_settings(migrations_pg_dsn))
+    result = asyncio.run(_run_init(dsn, **_ARGS))
+
+    seeded = asyncio.run(
+        _run_seed_providers(
+            dsn, settings=_ollama_settings(llm_ollama_enabled=False), actor_user_id=result.user_id
+        )
+    )
+
+    assert seeded.created_provider is False
+    assert asyncio.run(_providers(migrations_pg_dsn)) == []
+    assert asyncio.run(_read_default_model(dsn)) is None

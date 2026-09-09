@@ -80,8 +80,13 @@ def test_no_settings_field_is_emitted_bare(service_name: str) -> None:
     """The secrets-2 bug: a key named like a Settings field but WITHOUT the
     service prefix (``DATABASE_URL`` instead of ``API_SERVER_DATABASE_URL``) is
     silently ignored by the app — it reads ``<PREFIX><FIELD>``. Cross-cutting
-    wiring that is NOT a Settings field (e.g. the ``LLM_*`` provider toggles read
-    by shared-llm) is exempt by construction."""
+    wiring that is NOT a Settings field is exempt by construction — con una
+    salvedad que costó una tarde (2026-09-09): esta exención decía que las
+    ``LLM_*`` «las lee shared-llm», y no las leía NADIE. El instalador emitía
+    ``LLM_OLLAMA_ENABLED`` durante meses y una instalación limpia arrancaba sin
+    proveedor. Hoy esas claves llevan prefijo (``API_SERVER_LLM_OLLAMA_*``) y por
+    tanto SÍ pasan por la comprobación de abajo. Una exención escrita sobre una
+    creencia no verificada es un agujero con nombre bonito."""
     settings_cls = _APP_SERVICES[service_name]
     fields = set(settings_cls.model_fields)
     compose = generate_compose(_prod_config())

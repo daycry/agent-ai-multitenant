@@ -46,6 +46,7 @@ from api_server.auth.deps import (
 from api_server.db.llm_providers import (
     PROVIDER_SYNCED_MODELS_KEY,
     LlmProvider,
+    LLMProviderKind,
     get_llm_provider,
     get_llm_provider_by_slug,
     list_llm_providers,
@@ -64,6 +65,7 @@ from api_server.schemas.llm_providers import (
     LLMProviderResponse,
     LLMProviderTestResponse,
     LLMProviderUpdateRequest,
+    normalize_ollama_base_url,
     to_provider_response,
 )
 
@@ -286,7 +288,12 @@ async def update_provider(
     if "display_name" in fields and fields["display_name"] is not None:
         provider.display_name = fields["display_name"]
     if "base_url" in fields:
-        provider.base_url = fields["base_url"]
+        # El `kind` no viaja en el PUT (es inmutable), así que la normalización
+        # del `/v1` de Ollama se aplica aquí, donde la fila lo conoce.
+        new_url = fields["base_url"]
+        if new_url and provider.kind == LLMProviderKind.OLLAMA.value:
+            new_url = normalize_ollama_base_url(new_url)
+        provider.base_url = new_url
     if "is_active" in fields and fields["is_active"] is not None:
         provider.is_active = fields["is_active"]
     if "config" in fields and fields["config"] is not None:

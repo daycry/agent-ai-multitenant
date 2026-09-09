@@ -1873,12 +1873,20 @@ def _ollama_bootstrap_service(
     """
 
     model = cfg.resources.embedding_model
+    pulls = [f"ollama pull {model}"]
+    # `task_inst_02` (G4): el modelo de CHAT también, detrás del de embeddings. Hasta
+    # el 2026-09-09 sólo se bajaba el de embeddings y una instalación limpia con
+    # Ollama como único proveedor no tenía con qué pensar: el primer run moría en
+    # `plan`. El `&&` es a propósito — si el primero falla, el one-shot sale
+    # distinto de cero y `up --wait` lo cuenta como lo que es.
+    if cfg.providers.ollama.enabled:
+        pulls.append(f"ollama pull {cfg.providers.ollama.chat_model}")
     svc: dict[str, Any] = {
         "image": IMAGE_OLLAMA,
         "depends_on": {OLLAMA_SERVICE: {"condition": "service_healthy"}},
         "environment": {"OLLAMA_HOST": "http://ollama:11434"},
         "entrypoint": ["/bin/sh", "-c"],
-        "command": [f"ollama pull {model}"],
+        "command": [" && ".join(pulls)],
         "networks": ["agentic-net"],
     }
     # Same hardening posture as the long-lived services, but a one-shot must not
@@ -2211,22 +2219,23 @@ def _provider_env_for(cfg: InstallerConfig) -> dict[str, str]:
 
     env: dict[str, str] = {}
     providers = cfg.providers
-    if providers.claude_sdk.enabled:
-        env["LLM_CLAUDE_SDK_ENABLED"] = "true"
-    if providers.copilot.enabled:
-        env["LLM_COPILOT_ENABLED"] = "true"
-    if providers.azure_foundry.enabled:
-        env["LLM_AZURE_FOUNDRY_ENABLED"] = "true"
-        if providers.azure_foundry.apim_endpoint:
-            env["LLM_AZURE_FOUNDRY_ENDPOINT"] = providers.azure_foundry.apim_endpoint
+    # `task_inst_03` (G1): sólo lo que el api-server LEE. Hasta el 2026-09-09 este
+    # bloque emitía `LLM_<KIND>_ENABLED` para los cuatro kinds y nadie las leía (el
+    # api-server sólo lee `API_SERVER_*`), así que una instalación limpia arrancaba
+    # sin ninguna fila de proveedor. Ollama es el único kind que se puede sembrar
+    # sin credencial; los otros tres se configuran desde el panel, y una variable
+    # que promete lo contrario es peor que ninguna. Mismo contrato que
+    # `config_generators.build_env_vars` (el `.env`), y `test_compose_env_contract`
+    # comprueba que cada clave mapea a un campo real de `Settings`.
     if providers.ollama.enabled:
-        env["LLM_OLLAMA_ENABLED"] = "true"
+        env["API_SERVER_LLM_OLLAMA_ENABLED"] = "true"
         # Prefer an explicit endpoint; default to the in-stack service when one
         # is deployed (cpu or gpu), otherwise leave the wizard-provided endpoint.
         if providers.ollama.endpoint:
-            env["LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
+            env["API_SERVER_LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
         elif cfg.resources.ollama_mode != "none":
-            env["LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+            env["API_SERVER_LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+        env["API_SERVER_LLM_OLLAMA_CHAT_MODEL"] = providers.ollama.chat_model
 
     # Embedder wiring (ADR 0056): when the in-stack Ollama is deployed, point the
     # api-server embedder (and the memory back-fill worker) at it and pin the

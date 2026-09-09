@@ -73,6 +73,9 @@ providers:
   ollama:
     enabled: true
     endpoint: http://ollama:11434
+    # Modelo de CHAT que baja el bootstrap y queda como default de plataforma
+    # (task_inst_02/_04). Tiene que soportar tool-calling; qwen2.5:3b lo hace.
+    chat_model: qwen2.5:3b
 
 # Paso 6 — tenant inicial + usuario administrador.
 tenant:

@@ -216,6 +216,11 @@ def test_minio_user_is_not_the_dev_default() -> None:
 
 
 def test_env_includes_enabled_provider_wiring_only() -> None:
+    """`task_inst_03` (G1): el `.env` sólo lleva el cableado de proveedor que el
+    api-server LEE. Este test fijaba `LLM_CLAUDE_SDK_ENABLED` y compañía —variables
+    que ningún proceso leía— y con ello la promesa falsa de que el proveedor quedaba
+    configurado. Ollama es el único kind sembrable sin credencial y viaja con el
+    prefijo `API_SERVER_`; los demás se configuran desde el panel."""
     providers = ProvidersConfig(
         claude_sdk=ClaudeSdkProvider(enabled=True, oauth_token="tok"),
         azure_foundry=AzureFoundryProvider(
@@ -223,10 +228,16 @@ def test_env_includes_enabled_provider_wiring_only() -> None:
         ),
     )
     env = build_env_vars(_config(providers=providers), generate_secrets())
-    assert env["LLM_CLAUDE_SDK_ENABLED"] == "true"
-    assert env["LLM_AZURE_FOUNDRY_ENDPOINT"] == "https://apim.example.com"
-    assert "LLM_COPILOT_ENABLED" not in env
-    assert "LLM_OLLAMA_ENABLED" not in env
+    assert not [k for k in env if k.startswith("LLM_")], "claves LLM_* que nadie lee"
+    assert not [k for k in env if "LLM_OLLAMA" in k], "Ollama no está habilitado"
+
+    only_ollama = ProvidersConfig(
+        ollama=OllamaProvider(enabled=True, endpoint="http://o:11434", chat_model="qwen2.5:3b")
+    )
+    env = build_env_vars(_config(providers=only_ollama), generate_secrets())
+    assert env["API_SERVER_LLM_OLLAMA_ENABLED"] == "true"
+    assert env["API_SERVER_LLM_OLLAMA_ENDPOINT"] == "http://o:11434"
+    assert env["API_SERVER_LLM_OLLAMA_CHAT_MODEL"] == "qwen2.5:3b"
 
 
 def test_env_monitoring_adds_grafana_password() -> None:

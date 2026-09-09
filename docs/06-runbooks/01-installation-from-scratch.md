@@ -339,6 +339,13 @@ los generadores de Fase B son las tareas 15_07/15_08/15_09):
 - **`docker-compose.yml`** — el stack según las opciones elegidas
   (`compose_generator.py`, task 15_07): servicios, perfiles (`gpu`,
   monitoring), `security_opt` con los perfiles seccomp/AppArmor de Fase C.
+- **El proveedor LLM y su modelo** — si `providers.ollama` está habilitado, el
+  compose lleva `API_SERVER_LLM_OLLAMA_*` (las únicas variables de proveedor que
+  el api-server lee), `ollama-bootstrap` baja el modelo de embeddings **y** el
+  `chat_model` (default `qwen2.5:3b`, con tool-calling), y el seed del tenant
+  crea la fila de `llm_providers` y el modelo por defecto de plataforma. Sin eso
+  una instalación limpia arrancaba sin proveedor (2026-09-09,
+  `remediacion-instalador-runs-de-serie`).
 - **`.env`** — todas las variables que leen los servicios (DSNs derivadas,
   secretos de PostgreSQL/MinIO/JWT/SSO/notificaciones/webhooks, marcadores
   de `ENVIRONMENT`). Escrito con permisos `0600`, **nunca** comiteado ni
@@ -441,6 +448,20 @@ Sigue [health-check.md](./health-check.md) y confirma:
    sección «Desellar»).
 5. **Login del administrador** — entra al panel admin con las credenciales
    del revelado único; el tenant inicial existe.
+   5-bis. **El proveedor LLM existe y los agentes pueden pensar** — desde el
+   2026-09-09 (`remediacion-instalador-runs-de-serie`) el seed del instalador
+   crea la fila de `llm_providers` del Ollama del `install.yaml` (slug `ollama`,
+   `base_url` acabado en `/v1`) y fija el modelo por defecto de plataforma a su
+   `chat_model` si nadie lo había fijado. Compruébalo en
+   `/admin/llm-providers` (Ollama activo, URL con `/v1`) y con un run: una
+   tarea `ready` de cualquier agente sembrado debe llegar a
+   `awaiting_human_approval` o `done`. Si acaba `failed` con `steps_log`
+   vacío, **el motivo está en la columna `output` de `executions`**
+   (`SELECT status, abort_code, left(output, 300) FROM executions ORDER BY
+created_at DESC LIMIT 1`), no en ningún log. Antes de esa fecha una
+   instalación limpia arrancaba sin proveedor y todo run moría
+   `model_unresolved`; los otros tres kinds (Claude, Copilot, Azure) siguen
+   configurándose desde el panel porque necesitan credencial.
 6. **Installer autodestruido** — el contenedor del instalador ya no
    existe (`docker compose -f apps/installer/docker-compose.installer.yml ps`
    no lo muestra).

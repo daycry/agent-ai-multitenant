@@ -155,6 +155,8 @@ class LLMProviderCreateRequest(BaseModel):
             api_key=self.api_key,
             require_credential=True,
         )
+        if self.kind == LLMProviderKind.OLLAMA and self.base_url:
+            self.base_url = normalize_ollama_base_url(self.base_url)
         return self
 
     def credential_fields(self) -> dict[str, str]:
@@ -250,6 +252,29 @@ class LLMProviderModelsSyncResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Shared per-kind validation + credential extraction.
 # ---------------------------------------------------------------------------
+#: El sufijo OpenAI-compatible de Ollama. `shared_llm.providers.ollama.OllamaProvider`
+#: hace `POST {base_url}/chat/completions` y la sonda de vida asume que `base_url`
+#: «ya acaba en /v1»: la fila TIENE que llevarlo, y hasta el 2026-09-09 eso lo tenía
+#: que saber quien rellenaba el formulario o el `install.yaml`. El síntoma de no
+#: saberlo era un run que llegaba a `plan` y moría con `ollama: HTTP 404`, tres
+#: pasos después de arrancar y sin ninguna pista de que fuera la URL.
+OLLAMA_OPENAI_SUFFIX = "/v1"
+
+
+def normalize_ollama_base_url(base_url: str) -> str:
+    """Devuelve el `base_url` de un proveedor Ollama con `/v1` exactamente una vez.
+
+    Sólo para `kind == ollama`: `/v1` es la convención de Ollama, no un sufijo
+    universal — un gateway APIM tiene su propia forma y añadírselo lo rompería.
+    Idempotente: `http://h:11434`, `http://h:11434/`, `http://h:11434/v1` y
+    `http://h:11434/v1/` acaban todos en `http://h:11434/v1`.
+    """
+    url = base_url.strip().rstrip("/")
+    if url.endswith(OLLAMA_OPENAI_SUFFIX):
+        return url
+    return url + OLLAMA_OPENAI_SUFFIX
+
+
 def _validate_kind_fields(
     *,
     kind: LLMProviderKind,

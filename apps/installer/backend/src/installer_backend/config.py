@@ -357,13 +357,29 @@ class AzureFoundryProvider(BaseModel):
         return value
 
 
+#: El modelo de chat que baja `ollama-bootstrap` y que queda como modelo por defecto
+#: de plataforma cuando Ollama es el único proveedor (`task_inst_02`/`_04`). Tiene
+#: que soportar **tool-calling**: el runtime es un bucle LangGraph que llama tools,
+#: y un modelo sin ello (`orca-mini` responde «does not support tools») deja al
+#: agente mudo en `plan`. `qwen2.5:3b` lo soporta — verificado el 2026-09-09 con
+#: `tool_calls` reales contra Ollama— y cabe en CPU con ~2 GB.
+DEFAULT_OLLAMA_CHAT_MODEL = "qwen2.5:3b"
+
+
 class OllamaProvider(BaseModel):
-    """Ollama (local or cloud). Endpoint URL only; no secret for local."""
+    """Ollama (local or cloud). Endpoint URL only; no secret for local.
+
+    ``chat_model`` es el modelo con el que pensarán los agentes en una instalación
+    donde Ollama sea el único proveedor: se baja en el bootstrap y se fija como
+    default de plataforma. Hasta el 2026-09-09 el instalador sólo bajaba el modelo
+    de embeddings, y una instalación limpia no tenía con qué ejecutar un run.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     endpoint: str | None = None
+    chat_model: str = Field(default=DEFAULT_OLLAMA_CHAT_MODEL, min_length=1, max_length=120)
 
     @field_validator("endpoint")
     @classmethod
@@ -373,6 +389,17 @@ class OllamaProvider(BaseModel):
         value = value.strip()
         if value and not _HTTP_URL_RE.match(value):
             raise ValueError("El endpoint de Ollama debe ser una URL http(s) válida.")
+        return value
+
+    @field_validator("chat_model")
+    @classmethod
+    def _validate_chat_model(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError(
+                "El modelo de chat de Ollama no puede estar vacío: sin él ningún run "
+                "podría ejecutarse (mejor un error aquí que un run que muere en `plan`)."
+            )
         return value
 
 

@@ -461,22 +461,26 @@ def build_env_vars(
         "PLATFORM_REGISTRY": "ghcr.io/daycry",
     }
 
-    # Provider wiring (non-secret toggles + endpoints). Credentials go to Vault.
+    # Provider wiring que el api-server SÍ lee (`task_inst_03`, G1).
+    #
+    # Hasta el 2026-09-09 aquí se emitían `LLM_CLAUDE_SDK_ENABLED`,
+    # `LLM_OLLAMA_ENABLED`, `LLM_OLLAMA_ENDPOINT`… y NADIE las leía: el api-server
+    # sólo lee variables con prefijo `API_SERVER_` (su `env_prefix`), shared-llm no
+    # lee entorno e `init_tenant` no creaba proveedores. Una instalación limpia
+    # arrancaba con `llm_providers` vacía y todo run moría `model_unresolved`.
+    #
+    # Sólo se emite Ollama, que es el único kind cuya fila se puede sembrar sin
+    # credencial: los otros tres necesitan un secreto que el instalador no escribe
+    # en Vault, y una fila sin credencial mentiría igual que la variable huérfana.
+    # Se configuran desde el panel (`/admin/llm-providers`).
     providers = cfg.providers
-    if providers.claude_sdk.enabled:
-        env["LLM_CLAUDE_SDK_ENABLED"] = "true"
-    if providers.copilot.enabled:
-        env["LLM_COPILOT_ENABLED"] = "true"
-    if providers.azure_foundry.enabled:
-        env["LLM_AZURE_FOUNDRY_ENABLED"] = "true"
-        if providers.azure_foundry.apim_endpoint:
-            env["LLM_AZURE_FOUNDRY_ENDPOINT"] = providers.azure_foundry.apim_endpoint
     if providers.ollama.enabled:
-        env["LLM_OLLAMA_ENABLED"] = "true"
+        env["API_SERVER_LLM_OLLAMA_ENABLED"] = "true"
         if providers.ollama.endpoint:
-            env["LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
+            env["API_SERVER_LLM_OLLAMA_ENDPOINT"] = providers.ollama.endpoint
         elif cfg.resources.ollama_mode != "none":
-            env["LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+            env["API_SERVER_LLM_OLLAMA_ENDPOINT"] = "http://ollama:11434"
+        env["API_SERVER_LLM_OLLAMA_CHAT_MODEL"] = providers.ollama.chat_model
 
     # In-stack Ollama service (ADR 0056 — cpu or gpu).
     if cfg.resources.ollama_mode != "none":

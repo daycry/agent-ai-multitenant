@@ -590,6 +590,27 @@ class Settings(BaseSettings):
             " yields `model not found`. Overridable via API_SERVER_EMBEDDING_MODEL."
         ),
     )
+    # --- Proveedor Ollama sembrado por el instalador (`task_inst_03`/`_04`) -------
+    # El instalador emite estas tres al `.env` (con prefijo API_SERVER_, el único
+    # que este Settings lee) y `init_tenant` las convierte en la fila de
+    # `llm_providers` y en el modelo por defecto de plataforma. Hasta el 2026-09-09
+    # se emitían como `LLM_OLLAMA_*` sin prefijo: nadie las leía y una instalación
+    # limpia arrancaba sin proveedor, con todo run en `model_unresolved`.
+    llm_ollama_enabled: bool = Field(
+        default=False,
+        description="El instalador configuró Ollama como proveedor: `init_tenant` siembra su "
+        "fila en `llm_providers` (idempotente por slug `ollama`).",
+    )
+    llm_ollama_endpoint: str | None = Field(
+        default=None,
+        description="Host de Ollama para la fila sembrada (p. ej. `http://ollama:11434`). El "
+        "`/v1` OpenAI-compatible se añade al sembrar si no viene.",
+    )
+    llm_ollama_chat_model: str = Field(
+        default="qwen2.5:3b",
+        description="Modelo de chat que queda como default de plataforma cuando Ollama es el "
+        "único proveedor habilitado. Tiene que soportar tool-calling.",
+    )
     clamav_host: str = Field(default="localhost", description="ClamAV TCP host.")
     clamav_port: int = Field(default=3310, description="ClamAV TCP port (INSTREAM).")
     # egress-proxy (ADR 0019). En prod la api-server vive en

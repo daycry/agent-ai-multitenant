@@ -194,6 +194,15 @@ async def _amain(argv: list[str]) -> int:
             admin_password=password,
             full_name=args.full_name,
         )
+        # `task_inst_03`/`_04`: el proveedor que el instalador configuró y el modelo
+        # por defecto, en la MISMA transacción — sin esto una instalación limpia
+        # arrancaba con `llm_providers` vacía y todo run moría `model_unresolved`.
+        from api_server.config import get_settings
+        from api_server.seeds.init_llm_providers import ensure_llm_providers_from_settings
+
+        providers = await ensure_llm_providers_from_settings(
+            session, settings=get_settings(), actor_user_id=result.user_id
+        )
 
     log.info(
         "init_tenant.completed",
@@ -204,6 +213,8 @@ async def _amain(argv: list[str]) -> int:
         created_membership=result.created_membership,
         is_system_admin=result.is_system_admin,
         is_system_owner=result.is_system_owner,
+        created_llm_provider=providers.created_provider,
+        set_default_model=providers.set_default_model,
     )
     return 0
 
