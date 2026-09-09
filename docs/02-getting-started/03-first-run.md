@@ -4,6 +4,22 @@ Cómo arrancar el sistema vacío y registrar un primer System Admin.
 
 ## Vía rápida — `up.ps1` / `up.sh`
 
+> **Esto es un atajo de DESARROLLO, no el camino del producto.** `up.ps1` deja la
+> infra en Docker pero corre la aplicación —api-server, admin-panel, y con `-Runs`
+> el worker y el orchestrator— **como procesos en tu máquina**, para poder editar
+> código y verlo sin reconstruir imágenes. Y para que un run funcione así relaja
+> dos cosas que en un despliegue no se tocan: la red del sandbox deja de ser
+> `internal` y no se carga el perfil seccomp estricto.
+>
+> **El producto corre entero en Docker**: el instalador (`apps/installer`) genera
+> el compose con los ocho servicios de aplicación como contenedores, admin-panel
+> incluido. Para tener esa misma forma en desarrollo sin pasar por el instalador,
+> el overlay [`docker/docker-compose.manuals.yml`](../../docker/docker-compose.manuals.yml)
+> levanta la aplicación completa en Docker
+> ([runbook](../06-runbooks/generate-user-manuals.md)). **Las validaciones humanas
+> de un plan se dan sobre uno de esos dos, no sobre `up.ps1`**: lo que se firma es
+> el despliegue real, con su aislamiento real.
+
 Si ya hiciste el bootstrap (Python + `npm install` en `apps/admin-panel`),
 un solo comando levanta todo, deja los servicios corriendo en background
 y te imprime las URLs:

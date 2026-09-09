@@ -81,10 +81,13 @@ dev)** está en la referencia:
 [`docs/04-reference/stack-services.md`](../04-reference/stack-services.md).
 GPU (CUDA) opcional: [runbook Ollama](../06-runbooks/ollama-gpu-setup.md).
 
-> **Atajo:** `scripts/dev/up.ps1` (Windows) / `up.sh` (Linux/macOS) levanta
-> docker + api-server + admin-panel de una vez y **al terminar imprime las URLs
-> y credenciales de acceso**. Añade `-Monitoring` / `--monitoring` para incluir
+> **Atajo (sólo desarrollo):** `scripts/dev/up.ps1` (Windows) / `up.sh` (Linux/macOS)
+> levanta docker + api-server + admin-panel de una vez y **al terminar imprime las
+> URLs y credenciales de acceso**. Añade `-Monitoring` / `--monitoring` para incluir
 > Prometheus/Alertmanager/Grafana. Parar: `down.ps1 -Docker` / `down.sh --docker`.
+> Ojo: la aplicación corre **en tu máquina**, no en contenedores — el producto va
+> entero en Docker vía el instalador (o el overlay `docker-compose.manuals.yml`
+> en desarrollo). Detalle en [Primer arranque](./03-first-run.md#vía-rápida--upps1--upsh).
 
 Si Vault se queda en `Restarting`, mira
 [`docs/03-guides/gotchas/vault-dev-mode-port-conflict.md`](../03-guides/gotchas/vault-dev-mode-port-conflict.md).
