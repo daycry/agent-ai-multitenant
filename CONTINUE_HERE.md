@@ -14,6 +14,44 @@
 > Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
+## 0-bis. Lo más reciente (2026-09-10): el instalador arreglado y la instalación desde cero en WSL
+
+- **Plan nuevo, ya entregado en código**:
+  [`remediacion-instalador-runs-de-serie-2026-09-09`](docs/roadmap/remediacion-instalador-runs-de-serie-2026-09-09.md)
+  (`pending_human_validation`; rama `plan/instalador-runs-de-serie-2026-09-09`,
+  commit `3dd03fb6`, empujada). Cierra los cuatro huecos por los que **una
+  instalación limpia con Ollama no podía ejecutar ni un run**: variables `LLM_*`
+  que nadie leía (ahora `API_SERVER_LLM_OLLAMA_*` + `seeds/init_llm_providers.py`),
+  default `claude_sdk` hardcodeado (la siembra fija `model.default_config`),
+  `base_url` sin `/v1` (`normalize_ollama_base_url`), y sin modelo de chat con
+  tool-calling (`chat_model: qwen2.5:3b` en el `install.yaml` y en el bootstrap).
+  Su test humano `human_inst_01` **es** la instalación desde cero de abajo.
+- **La instalación desde cero va en WSL2 (Ubuntu-22.04) con Docker Engine
+  nativo**, no en Docker Desktop: el compose generado monta el `data_root` del
+  worker como bind a la misma ruta, que bajo Desktop apunta al disco de la VM
+  `docker-desktop` y deja los worktrees vacíos (gotcha
+  `worktree-bind-dood-empty-vs-named-volume`). Receta y estado en
+  `.dev/wsl-01-sudo-docker-engine.sh`, `.dev/wsl-01b-sudo-remate.sh`,
+  `.dev/wsl-02-install-desde-cero.sh` (fases `clone → images → build → python →
+install`) e `.dev/install-local.yaml` (perfil `minimal`, dominio
+  `agentic.example.com`, imágenes desde un `registry:2` local en
+  `localhost:5000` con tag `local`, como el e2e de CI).
+- **Dos trampas de la máquina que costaron una noche**: (1) `.wslconfig` con
+  `memory=12GB` dejó a Windows con <1 GB y **la VM se congeló** (`vmmemWSL` a 7 GB
+  con 0 % CPU, `wsl -l -v` sin responder, `WslService` en `StopPending`; sólo se
+  destrabó matando `wslservice.exe` y `vmmemWSL` como administrador). Ahora
+  `memory=10GB`, `swap=8GB`, `autoMemoryReclaim=gradual`, y **una fase a la vez**
+  dentro de WSL — construir `browser-runtime` en paralelo con un `--dry-run` y
+  pushes fue lo que la tumbó. (2) Ubuntu 22.04 trae Python 3.10 y el instalador
+  exige ≥ 3.12: el venv se hace con `uv` (`uv venv --python 3.12`). Y WSL
+  regenera `/etc/hosts` en cada arranque: la línea de `agentic.example.com` hay
+  que reponerla (o `generateHosts=false` en `/etc/wsl.conf`).
+- **Después de instalar**, las tres pruebas acordadas con el operador, todas con
+  `qwen2.5:3b`: una tarea que el agente no sabe resolver (debe parar en
+  `ask_human`), una que sí (crear `hola.txt` en el worktree) y una que instala
+  CodeIgniter 4 con composer (necesita proyecto con repo y el runtime
+  `php-phpunit`, que el script construye).
+
 ## 0. Ahora mismo (2026-09-09): arrancó la reestructuración de la UI
 
 Plan **activo**:
