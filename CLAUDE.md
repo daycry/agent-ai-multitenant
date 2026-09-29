@@ -330,6 +330,30 @@ tengan `status: completed`.
 6. Al cerrar la fase: genera entrada en `/docs/07-changelog/`, actualiza `/docs/04-reference/` afectados, actualiza el frontmatter, activa la siguiente fase.
 7. Si tienes dudas que el documento de especificaciones no resuelve: NO inventes, genera un ADR en `/docs/05-architecture-decisions/` con opciones para que el humano decida.
 
+### Siempre con el plugin `custom-agents` (decisión del operador, 2026-09-29)
+
+Todo trabajo de implementación en este repo se hace con el método y los agentes del
+plugin `custom-agents`, no «a mano» desde la conversación principal. La configuración
+vive en `.claude/dev.json` (`tdd: true`, `subagentes: true`, `worktree: false`).
+
+- **Implementar**: cada tarea la ejecuta el agente `implementer` o un subagente de
+  contexto fresco con su brief, siguiendo la skill `tdd` (rojo visto y anotado antes
+  del código).
+- **Revisar**: antes de marcar un plan como entregado, la skill `adversarial-review`
+  sobre el diff del plan, con sus lentes en paralelo (agente `reviewer`). Sus gaps
+  Critical e Important se corrigen o se rebaten con evidencia; como mucho tres intentos.
+- **Probar la UI**: el agente `qa` para los E2E, cuando el plan toque el panel.
+- **Documentar y depurar**: `documenter` al cierre; `debug-root-cause` cuando un rojo
+  sobreviva a dos intentos.
+
+**El ledger sigue siendo el plan del repo.** El plugin propone su propio
+`docs/roadmap/<fecha>-<slug>/tasks.md`; aquí **no se crea**, porque sería una copia del
+estado y este protocolo lo prohíbe (§«Protocolo de Trabajo con el Roadmap»). El fichero
+del plan en `docs/roadmap/*.md`, con sus casillas y notas de cierre, es el único ledger:
+el orquestador le pasa a cada agente la tarea y sus criterios desde ahí, y las piezas
+del plugin que exigen su formato de ledger (`scope-check`, `task-brief`) corren en su
+modo sin ledger. Si un día se quiere adoptar el formato del plugin, eso es un ADR.
+
 ## Cosas que NO Hacer
 
 - ❌ Escribir queries SQL sin filtro por `tenant_id` o sin middleware que lo inyecte.

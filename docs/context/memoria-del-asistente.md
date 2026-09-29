@@ -76,6 +76,15 @@ español (`docs_language: es`) y el producto soporta solo ES+EN (principio 12).
 Código, identificadores y términos técnicos siguen en inglés cuando es lo idiomático
 del repo.
 
+### Implementar siempre con el plugin `custom-agents`
+
+Orden del 2026-09-29. Todo trabajo de implementación usa los agentes y skills del
+plugin (`implementer` o subagente fresco con `tdd`, `adversarial-review` antes de dar un
+plan por entregado, `qa` para E2E de UI). Está en `CLAUDE.md` §«Siempre con el plugin
+`custom-agents`», con la regla que evita el choque con el protocolo: el ledger sigue
+siendo el plan de `docs/roadmap/*.md`, no el `tasks.md` del plugin. Copia literal en
+[`memoria-asistente/usar-plugin-custom-agents-siempre.md`](memoria-asistente/usar-plugin-custom-agents-siempre.md).
+
 ### Los entregables van a `docs/roadmap/`
 
 Auditorías, planes y diseños se escriben en `docs/roadmap/<nombre>.md`. **No** crear
