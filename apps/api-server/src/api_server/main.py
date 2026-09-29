@@ -56,6 +56,7 @@ from api_server.routers.cortex_mind import router as cortex_mind_router
 from api_server.routers.cortex_voice import router as cortex_voice_router
 from api_server.routers.cortex_ws import router as cortex_ws_router
 from api_server.routers.cross_tenant_stats import router as cross_tenant_stats_router
+from api_server.routers.dashboard import router as dashboard_router
 from api_server.routers.dep_cache import router as dep_cache_router
 from api_server.routers.docs_viewer import router as docs_viewer_router
 from api_server.routers.egress import admin_router as egress_admin_router
@@ -288,6 +289,7 @@ def _register_routers(app: FastAPI) -> None:
         executions_router,
         runs_router,
         human_queue_router,
+        dashboard_router,
         evals_router,
         eval_quality_router,
         tenant_stats_router,

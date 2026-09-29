@@ -178,13 +178,24 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_02` — `GET /tenant/dashboard` y el dashboard tenant-céntrico
 
-- [ ] **Título**: endpoint agregado (`routers/dashboard.py`, `require_tenant_member`, caché Redis 30 s por
+- [x] **Título**: endpoint agregado (`routers/dashboard.py`, `require_tenant_member`, caché Redis 30 s por
       tenant, mismas consultas que aprobaciones, inbox, planes, runs, costes, agentes y `mcp_server_warnings`);
       `app/admin/dashboard/page.tsx` se reescribe con las seis secciones en el orden acordado, cada una con
       enlace a su destino, y la salud sólo cuando duele. Los tres contadores globales desaparecen.
       **Test**: integración del endpoint (cifras coherentes con las pantallas de origen; cross-tenant); vitest
       del dashboard con las seis secciones y con el caso «nada pendiente»; e2e del dashboard.
       **Coste**: 2 d.
+  - ✅ **Entregada el 2026-09-29.** Backend: la lógica vive en `api_server/dashboard/tenant.py` y el router
+    es fino. Los pendientes salen de `collect_human_queue`, extraída de `/human-queue` para que las dos cifras
+    no puedan divergir; el gasto, de `tenant_budget_summary`; los avisos de MCP, de
+    `egress_warnings_for_servers`. Panel: `lib/dashboard/tenant-dashboard.ts` (tipos y cálculos puros) y cinco
+    piezas en `components/dashboard/`; la salud del stack sólo se pinta si algo no está `ok` y si el usuario
+    puede leer `/admin/system-health`. Tests: `tests/integration/test_tenant_dashboard.py` 8 passed, con
+    cross-tenant, y `test_human_queue.py` sigue verde; vitest 7 passed. **No vistos en rojo antes del
+    código**: la BD de tests estaba ocupada por otra tanda. Se comprobó que muerden con mutaciones: quitar el
+    filtro de «proyectos en curso» pone rojo su test, y pintar la salud siempre pone rojo el caso «nada
+    pendiente». El e2e (`e2e/admin-login.spec.ts`, ahora contra `dashboard-grid`) necesita el stack completo
+    y no se ejecutó.
 
 ### `task_ui_03` — Bandeja humana unificada
 

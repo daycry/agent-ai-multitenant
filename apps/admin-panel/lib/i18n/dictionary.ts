@@ -7178,6 +7178,88 @@ export const dictionary = {
     creating: { es: "Creando…", en: "Creating…" },
     submit: { es: "Añadir tarea", en: "Add task" },
   },
+  /**
+   * `app/admin/dashboard` — el dashboard del tenant (`task_ui_02`). Seis secciones,
+   * en el orden que fijó el operador: lo que espera a un humano, el trabajo por
+   * proyecto, el dinero, la salud sólo cuando duele, la actividad y los MCP.
+   */
+  tenantDashboard: {
+    title: { es: "Inicio", en: "Home" },
+    description: {
+      es: "Lo que espera una decisión tuya y cómo va el trabajo del tenant.",
+      en: "What is waiting for your decision and how the tenant's work is going.",
+    },
+    error: {
+      es: "No se pudo cargar el dashboard: {detail}",
+      en: "Could not load the dashboard: {detail}",
+    },
+    loading: { es: "Cargando el dashboard…", en: "Loading the dashboard…" },
+    // --- 1. pendientes -------------------------------------------------------
+    pendingTitle: { es: "Espera a un humano", en: "Waiting for a human" },
+    pendingEmpty: {
+      es: "Nada espera a un humano ahora mismo.",
+      en: "Nothing is waiting for a human right now.",
+    },
+    pendingMore: { es: "y {count} más", en: "and {count} more" },
+    pendingAll: { es: "Abrir la bandeja", en: "Open the inbox" },
+    kindPlanValidation: { es: "Plan para validar", en: "Plan to validate" },
+    kindPlanUnblock: { es: "Plan para desbloquear", en: "Plan to unblock" },
+    kindApprovalRequest: { es: "Aprobación pendiente", en: "Pending approval" },
+    kindRunReview: { es: "Run para revisar", en: "Run to review" },
+    kindRunApproval: { es: "Run esperando aprobación", en: "Run awaiting approval" },
+    kindOther: { es: "Pendiente", en: "Pending" },
+    ageMinutes: { es: "hace {value} min", en: "{value} min ago" },
+    ageHours: { es: "hace {value} h", en: "{value} h ago" },
+    ageDays: { es: "hace {value} d", en: "{value} d ago" },
+    // --- 2. trabajo por proyecto ----------------------------------------------
+    projectsTitle: { es: "Trabajo en curso", en: "Work in progress" },
+    projectsEmpty: {
+      es: "Ningún proyecto tiene trabajo en marcha.",
+      en: "No project has work in progress.",
+    },
+    projectPlans: { es: "{count} planes activos", en: "{count} active plans" },
+    projectTasks: { es: "{done} de {total} tareas", en: "{done} of {total} tasks" },
+    projectRunning: { es: "{count} runs en marcha", en: "{count} runs in progress" },
+    // --- 3. dinero ---------------------------------------------------------------
+    spendTitle: { es: "Gasto del periodo", en: "Spend this period" },
+    spendNoBudget: {
+      es: "No hay presupuesto configurado para el tenant ni para sus proyectos.",
+      en: "No budget is configured for the tenant or its projects.",
+    },
+    spendUsed: { es: "{spent} USD de {budget} USD", en: "{spent} USD of {budget} USD" },
+    spendPercent: { es: "{percent} % consumido", en: "{percent} % used" },
+    spendOver: { es: "Por encima del presupuesto", en: "Over budget" },
+    spendScopeTenant: { es: "Presupuesto del tenant", en: "Tenant budget" },
+    spendScopeProject: { es: "Presupuesto de {name}", en: "{name} budget" },
+    // --- 4. salud -------------------------------------------------------------------
+    issuesTitle: { es: "Necesita atención", en: "Needs attention" },
+    issueMcpEgress: {
+      es: "{project}: {count} servidor(es) MCP fuera de la allowlist de egress",
+      en: "{project}: {count} MCP server(s) outside the egress allowlist",
+    },
+    issueProjectPaused: {
+      es: "{project}: pausado por presupuesto",
+      en: "{project}: paused by budget",
+    },
+    issueTenantPaused: {
+      es: "El tenant está pausado por presupuesto",
+      en: "The tenant is paused by budget",
+    },
+    issueService: { es: "Servicio {name}: {status}", en: "Service {name}: {status}" },
+    // --- 5. actividad ------------------------------------------------------------------
+    activityTitle: { es: "Actividad reciente", en: "Recent activity" },
+    activityEmpty: { es: "Todavía no ha corrido ningún agente.", en: "No agent has run yet." },
+    activityUnknownAgent: { es: "agente sin nombre", en: "unnamed agent" },
+    // --- 6. MCP ---------------------------------------------------------------------------
+    mcpTitle: { es: "Servidores MCP", en: "MCP servers" },
+    mcpEmpty: {
+      es: "Ningún proyecto declara servidores MCP.",
+      en: "No project declares MCP servers.",
+    },
+    mcpServers: { es: "{count} servidores", en: "{count} servers" },
+    mcpWarnings: { es: "{count} avisos", en: "{count} warnings" },
+    mcpOk: { es: "sin avisos", en: "no warnings" },
+  },
 } as const satisfies Dictionary;
 
 /** La forma exacta del diccionario, para derivar las claves válidas. */

@@ -71,7 +71,15 @@ async def human_queue(
     profundidad) proyectadas al mismo shape. El campo `age_seconds` usa el
     último `updated_at`/`requested_at` de cada fila: cuánto lleva ESPERANDO.
     """
-    tenant_id = str(require_tenant_id(principal))
+    return await collect_human_queue(session, str(require_tenant_id(principal)))
+
+
+async def collect_human_queue(session: AsyncSession, tenant_id: str) -> list[HumanQueueItem]:
+    """Lo que espera decisión humana en el tenant, lo más viejo primero.
+
+    Separado del endpoint para que el dashboard (`task_ui_02`) cuente la MISMA cola
+    que la bandeja: dos consultas distintas para lo mismo acabarían dando dos cifras.
+    """
     now = datetime.now(tz=UTC)
     items: list[HumanQueueItem] = []
 

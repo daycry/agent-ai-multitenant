@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 /**
  * Phase-0 happy path: login as a pre-seeded System Admin, land on the
- * dashboard, see at least the postgres service card.
+ * dashboard and see its pending section (task_ui_02).
  *
  * Pre-conditions (caller's responsibility):
  *   - docker compose stack is up.
@@ -23,8 +23,10 @@ test("login + dashboard happy path", async ({ page }) => {
   await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
 
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
-  await expect(page.getByTestId("services-grid")).toBeVisible();
-  await expect(page.getByTestId("service-postgres")).toBeVisible();
+  // task_ui_02: el dashboard del tenant sustituye a la rejilla de servicios; la salud
+  // del stack sólo se pinta cuando algo no está ok, así que no se puede exigir aquí.
+  await expect(page.getByTestId("dashboard-grid")).toBeVisible();
+  await expect(page.getByTestId("dashboard-pending")).toBeVisible();
 });
 
 test("wrong password shows inline error", async ({ page }) => {
