@@ -1,9 +1,9 @@
 ---
 plan_id: prod-13-rendimiento-y-datos
 title: Rendimiento y gestión de datos — event loop, pool, retención e índices
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-07-31
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 21

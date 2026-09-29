@@ -145,48 +145,20 @@ def test_at_most_one_phase_in_progress() -> None:
 #: etiquetados `pending_approval`, que en el enum de CLAUDE.md significa «plan
 #: definido pero **no empezado**». Inventario medido el 2026-08-12.
 #:
-#: No es una allowlist: es deuda con una salida escrita. A cada uno de estos
-#: ocho sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
-#: `pending_human_validation` — el guarda que la exige es
-#: `test_every_started_phase_has_changelog`, así que cambiar el estado sin
-#: escribirla pone la suite roja, que es exactamente lo que debe pasar.
+#: No es una allowlist: es deuda con una salida escrita. A la entrada que queda
+#: le falta su changelog y, además, un `gate_override`: su `blocking_plan`
+#: (`prod-01-despliegue-ejecutable`) no está `completed`, así que pasarla a
+#: `pending_human_validation` sin override pone roja `test_started_phase_declares_its_gate`.
+#: El override exige un `reason` firmado por un humano (ADR 0138).
 #:
-#: **Y ojo con la población, porque el titular es peor que estos ocho**: los
-#: CATORCE planes en `pending_approval` tienen casillas marcadas, o sea que
-#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos ocho
-#: son sólo los que además no tienen NADA abierto, que es lo que los hace
-#: accionables sin emitir un juicio sobre trabajo a medias. El resto exige
-#: decidir si lo hecho vale, y eso no lo cierra un test.
+#: El inventario llegó a tener 8 entradas; 7 salieron el 2026-09-29, en la
+#: consolidación del roadmap: se volvieron a ejecutar sus tests declarados, se
+#: escribió su changelog y pasaron a `pending_human_validation`. Queda uno.
 _DELIVERED_BUT_UNSTARTED_2026_08_12 = frozenset(
     {
-        "cadena-pr-plan",
-        "prod-03-guardrails-validacion-humana",
         # Se unió el 2026-08-12, al cerrarse su última casilla
-        # (`task_prod_04_06`, quiesce del ADR 0149). Se anota aquí en vez de
-        # cambiarle el estado porque pasar a `pending_human_validation` exige
-        # su entrada de changelog, y escribirla es auditar catorce tareas.
+        # (`task_prod_04_06`, quiesce del ADR 0149).
         "prod-04-backup-dr-restaurable",
-        "prod-05-rotacion-claves",
-        "prod-07-fiabilidad-llm-costes",
-        "prod-09-sesiones-autorizacion-frontend",
-        # Se unió el 2026-08-19, y por la vía (3) que este propio guarda ofrece: su
-        # última casilla abierta (`task_prod14_10`) NO se cerró implementando nada, se
-        # cerró al comprobar que el trabajo llevaba hecho desde la migración
-        # `20260730_0126_perf_indexes_uniqueness` y que el checkbox era lo único que
-        # seguía diciendo lo contrario — cuatro notas del propio plan (08-01, 08-02,
-        # 08-10, 08-12) ya lo habían constatado sin tocarlo. Cambiarle el estado exige
-        # su entrada de changelog, o sea auditar las cuarenta y pico tareas del plan, y
-        # eso no lo decide el carril que reparó un checkbox.
-        "prod-14-tenancy-defensa-profundidad",
-        # Se unió el 2026-08-19, por la misma vía (3). Su última casilla abierta era
-        # `task_prod13_01` (las puertas del marketplace fuera del event loop), que
-        # llevaba tres pasadas aplazada a propósito y se cerró al caducar el motivo
-        # del aplazamiento: `marketplace-v2-despliegue` quedó entregado. Cerrar UNA
-        # casilla no autoriza a declarar el plan entregado — pasar a
-        # `pending_human_validation` exige su entrada de changelog, o sea auditar las
-        # veintitrés tareas de prod-13, incluidas las de particionado y pool que
-        # cerraron otros carriles.
-        "prod-13-rendimiento-y-datos",
     }
 )
 
@@ -214,8 +186,8 @@ def test_no_new_plan_is_delivered_while_still_labelled_unstarted() -> None:
     El estado es lo primero que se lee al retomar el trabajo, y un plan con
     16/16 casillas marcadas etiquetado «no empezado» manda a quien lo lea a
     reimplementar lo que ya existe — el modo de fallo nº1 de
-    `verificar-antes-de-implementar.md`. Este guarda no arregla los ocho que
-    ya están así (necesitan changelog); impide que aparezca el noveno.
+    `verificar-antes-de-implementar.md`. Este guarda no arregla el uno que
+    sigue así (necesita changelog y override); impide que aparezca otro.
     """
     new_drift = sorted(_delivered_but_labelled_unstarted() - _DELIVERED_BUT_UNSTARTED_2026_08_12)
 
@@ -254,6 +226,7 @@ def test_the_delivered_but_unstarted_inventory_has_no_dead_entries() -> None:
 #: población (los «CATORCE planes en `pending_approval`») y los ordinales («el
 #: séptimo»), que no cuentan entradas de este frozenset y no deben colisionar.
 _CARDINALES_ES = {
+    "uno": 1,
     "cuatro": 4,
     "cinco": 5,
     "seis": 6,

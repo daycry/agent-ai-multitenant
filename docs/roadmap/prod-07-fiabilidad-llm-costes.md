@@ -1,9 +1,9 @@
 ---
 plan_id: prod-07-fiabilidad-llm-costes
 title: Capa LLM fiable y contabilidad de costes exacta
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-07-31
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 14

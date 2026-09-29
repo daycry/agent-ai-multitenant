@@ -1,9 +1,9 @@
 ---
 plan_id: cadena-pr-plan
 title: Cadena auto-PR del cierre de plan — identidad git de fuente única, push incremental y persistencia del PR
-status: pending_approval
+status: pending_human_validation
 blocking_plan: []
-started_at: null
+started_at: 2026-07-04
 completed_at: null
 estimated_duration_calendar: 3-4 días
 estimated_effort_person_days: 3

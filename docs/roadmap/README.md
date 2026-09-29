@@ -252,7 +252,10 @@ Informes previos a un plan: exploran el problema y proponen opciones. No llevan 
 
 ## Cola de validación humana
 
-41 planes están en `pending_human_validation`: **código mergeado en `master` sin sign-off humano**
+48 planes están en `pending_human_validation`: **código mergeado en `master` sin sign-off humano**
+(siete de ellos se sumaron el 2026-09-29 al salir del inventario de «entregados pero etiquetados
+como no empezados»: `cadena-pr-plan`, `prod-03`, `prod-05`, `prod-07`, `prod-09`, `prod-13` y
+`prod-14`, con sus tests declarados vueltos a ejecutar y su changelog escrito)
 (los dos últimos son `remediacion-marketplace-mcp-2026-09-02`, que cerró sus quince casillas el
 2026-09-09 y cuyo código vive en el PR #183, aún sin mergear, y
 `remediacion-instalador-runs-de-serie-2026-09-09`, cuyo test humano ES la instalación desde cero).

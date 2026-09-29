@@ -1,29 +1,25 @@
 ---
 plan_id: prod-07-fiabilidad-llm-costes
 title: Capa LLM fiable y contabilidad de costes exacta
-started_at: null
+started_at: 2026-07-31
 completed_at: null
-status: pending_approval
-tasks_done: 14
+status: pending_human_validation
+tasks_done: 16
 tasks_total: 16
-tasks_pending_local:
-  - task_prod07_10
 docs_language: es
 ---
 
-> **Estado: el plan NO está cerrado.** Esta entrada se escribe por adelantado
-> (`task_prod07_16` la pide «para el cierre») y se mantiene al día conforme
-> caen las tareas. **14 de 16** están entregadas con sus tests en verde; queda
-> abierta `task_prod07_10` (sacar la credencial del env del contenedor a un
-> mount tmpfs), que toca `apps/workers/execution.py`, `container.py` y la
-> imagen `agent-runtime`. Los **6 tests humanos** del plan siguen sin validar y
-> el `status: completed` no se fija hasta ellos.
+> **Estado: entregado, pendiente de validación humana.** Las 16 tareas están
+> cerradas: la última, `task_prod07_10`, el 2026-08-10. Esta entrada se escribió
+> por adelantado y se dejó de actualizar en 14 de 16; se corrige el 2026-09-29,
+> en la consolidación del roadmap, tras volver a ejecutar los tests declarados.
+> Los **6 tests humanos** del plan siguen sin validar y el `status: completed`
+> no se fija hasta ellos.
 
 # Changelog — Plan prod-07 · Capa LLM fiable y contabilidad de costes exacta
 
-Cierra 13 de los 14 hallazgos de la auditoría de producción (2026-06) sobre
-`shared-llm` y su contabilidad: `llm-1`…`llm-10`, `llm-12`, `llm-13` y
-`workers-8`. Queda `llm-11` (la credencial en el env del contenedor).
+Cierra los 14 hallazgos de la auditoría de producción (2026-06) sobre
+`shared-llm` y su contabilidad: `llm-1`…`llm-13` y `workers-8`.
 
 ## Resultado por fases
 
@@ -83,12 +79,17 @@ Cierra 13 de los 14 hallazgos de la auditoría de producción (2026-06) sobre
   plan (reintentos, streaming, capacidades por kind, costes, Vault) y lleva una
   §8 con lo que **no** está.
 
+- **Credencial fuera del env del contenedor (task 10, cerrada el 2026-08-10).**
+  El worker separa el spec resuelto en parte pública y credenciales
+  (`workers/model_secret.py`), escribe las credenciales en un fichero 0444 bajo
+  `{data_root}/run-secrets/` y lo monta **read-only** en `/run/secrets`. En
+  `AGENT_TASK_SPEC` sólo queda el puntero `model.credentials_file`, que el
+  runtime hidrata en `_load_spec` (`agent_runtime/spec_secrets.py`). No es un
+  `--tmpfs` de Docker, pese al título de la tarea: un tmpfs nace vacío y no hay
+  forma de pre-cargarlo desde el worker.
+
 ## Lo que NO entra, y por qué
 
-- **`task_prod07_10`** (`llm-11`, severidad `low`) — la credencial sigue
-  viajando dentro de `AGENT_TASK_SPEC`. Exige tocar el lanzador del contenedor
-  y **reconstruir la imagen `agent-runtime`** con un formato de spec versionado
-  que acepte los dos durante una versión; hacerlo a medias rompe runs en vuelo.
 - **Enforcement de budgets** sobre el coste ya exacto — es **prod-06**. Este
   plan garantiza que la cifra que consume es correcta.
 - **Operabilidad de Vault** (HA, unseal, AppRole) — es **prod-10**. Aquí solo
@@ -103,3 +104,21 @@ Cierra 13 de los 14 hallazgos de la auditoría de producción (2026-06) sobre
 - **Un porcentaje de presupuesto redondeado a 0,0 no distingue nada.** Con un
   run de juguete (0,0015 USD) el test no podía separar «budgets consume la
   cifra corregida» de «budgets sigue en cero».
+- **No mezcles árboles de test en una sola sesión de pytest.** Al volver a
+  ejecutar los tests del plan el 2026-09-29, lanzar `packages/shared-llm/tests`
+  y `tests/integration` en la MISMA invocación dejó 6 fallos y 8 errores
+  (`ConnectionDoesNotExistError` a mitad de las migraciones del fixture). Por
+  separado, que es como los corre CI, pasan todos.
+
+## Verificación (2026-09-29)
+
+Los ficheros de test que declara el plan, cada árbol en su propia invocación:
+
+| Árbol                                        | Ficheros | Resultado            |
+| -------------------------------------------- | -------: | -------------------- |
+| `tests/` (unit + integration)                |       13 | 108 passed           |
+| `packages/`                                  |        4 | 88 passed, 1 skipped |
+| `docker/agent-runtimes/agent-runtime/tests/` |        3 | 28 passed            |
+
+El salto es `test_claude_agent_provider.py`, que exige `claude_agent_sdk`
+instalado; en local no lo está. En CI y en la imagen del runtime sí.

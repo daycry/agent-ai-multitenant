@@ -1,9 +1,9 @@
 ---
 plan_id: prod-09-sesiones-autorizacion-frontend
 title: Sesiones y autorización de producción — admin hardening, SSO, 401 global y cookies
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-06-15
 completed_at: null
 estimated_duration_calendar: 4-5 semanas
 estimated_effort_person_days: 20

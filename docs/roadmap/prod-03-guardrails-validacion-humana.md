@@ -1,9 +1,9 @@
 ---
 plan_id: prod-03-guardrails-validacion-humana
 title: Guardrails cableados y validación humana operativa
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-07-04
 completed_at: null
 estimated_duration_calendar: 4 semanas
 estimated_effort_person_days: 18.5

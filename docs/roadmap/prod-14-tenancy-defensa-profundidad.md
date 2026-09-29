@@ -1,9 +1,9 @@
 ---
 plan_id: prod-14-tenancy-defensa-profundidad
 title: Multi-tenancy — defensa en profundidad (junctions, service_user, meta-test)
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-07-30
 completed_at: null
 estimated_duration_calendar: 7-10 días
 estimated_effort_person_days: 7
