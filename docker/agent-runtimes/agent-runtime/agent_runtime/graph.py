@@ -52,7 +52,7 @@ from agent_runtime.nudges import (
     _sterile_hard_limit,
 )
 from agent_runtime.prompt_version import prompt_version
-from agent_runtime.providers import ProviderTimeout
+from agent_runtime.providers import ContextTruncated, ProviderTimeout
 from agent_runtime.review_harvest import (
     _harvest_worktree_files,
     _referenced_paths,
@@ -348,6 +348,8 @@ def _provider_abort_code(exc: LLMError) -> str:
     """
     if isinstance(exc, ProviderTimeout):
         return str(SafeguardCode.PROVIDER_TIMEOUT)
+    if isinstance(exc, ContextTruncated):
+        return str(SafeguardCode.CONTEXT_TRUNCATED)
     return str(SafeguardCode.PROVIDER_ERROR)
 
 

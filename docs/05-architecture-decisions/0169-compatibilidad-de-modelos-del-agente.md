@@ -90,12 +90,18 @@ llamadas de reflexión y review, que sólo emiten un veredicto, usan el suyo má
 - Los bloques `<think>…</think>` se retiran del contenido antes de interpretarlo.
 
 **D6 — Contexto de Ollama.** El compose y el instalador fijan
-`OLLAMA_CONTEXT_LENGTH` (default 32768, configurable). Y como un Ollama externo o
-cloud no lo controlamos, el runtime **detecta el recorte**: si el servidor informa
-de muchos menos tokens de entrada de los que el prompt enviado tiene como mínimo, el
-run se detiene con `abort_code=context_truncated` y un mensaje que nombra la
-variable. Seguir con el prompt de sistema recortado produce trabajo que parece
-válido y no lo es.
+`OLLAMA_CONTEXT_LENGTH` (default 32768, configurable). Y como un Ollama externo no lo
+controlamos, el runtime **detecta el recorte**: tras la primera respuesta pregunta a
+`/api/ps` con qué contexto cargó el servidor el modelo, y si una cota inferior del
+prompt —cinco caracteres por token, holgada a propósito— no cabe, detiene el run con
+`abort_code=context_truncated` y un mensaje que nombra la variable. Seguir con el
+prompt de sistema recortado produce trabajo que parece válido y no lo es.
+
+**Corrección durante la implementación (2026-09-29).** El borrador de esta decisión
+comparaba con `usage.prompt_tokens`. No sirve: Ollama informa ahí de los tokens que
+EVALÚA, no de los que reutiliza de su caché de prefijos, así que en el segundo turno
+de un run el número sale bajo sin que haya recorte y la guarda saltaría en falso.
+Sin `/api/ps` (Ollama cloud, por ejemplo) no hay dato y la guarda no actúa.
 
 ## Opciones descartadas
 

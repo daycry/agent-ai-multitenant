@@ -70,6 +70,9 @@ class SafeguardCode(enum.StrEnum):
     # ends cleanly aborted instead of crashing to execution.error.
     PROVIDER_ERROR = "provider_error"
     PROVIDER_TIMEOUT = "provider_timeout"
+    # ADR 0169 D6: el servidor recorta el prompt en silencio (Ollama sin contexto
+    # suficiente). No es del agente: se corrige subiendo OLLAMA_CONTEXT_LENGTH.
+    CONTEXT_TRUNCATED = "context_truncated"
     # AUD16-20: N fallos de TRANSPORTE consecutivos de stack_exec (el worker /
     # docker-socket-proxy no responde — 5xx/timeout). Es infraestructura rota,
     # no estrategia del agente: cortar en vez de quemar el presupuesto entero

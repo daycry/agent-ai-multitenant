@@ -1184,6 +1184,64 @@ class ProviderTimeout(LLMError):  # noqa: N818 — stable typed name
     """
 
 
+class ContextTruncated(LLMError):  # noqa: N818 — nombre tipado estable
+    """El servidor recorta el prompt en silencio (ADR 0169 D6, `task_cm_08`).
+
+    Ollama, cuando el prompt no cabe en la ventana con la que cargó el modelo, descarta
+    el principio de la conversación —el prompt de sistema— y contesta igual. Seguir
+    produce trabajo que parece válido y no lo es, así que el run se detiene con
+    ``abort_code=context_truncated`` y un mensaje que dice qué tocar.
+    """
+
+
+#: Cota inferior de caracteres por token para decidir que un prompt NO cabe. Cinco es
+#: holgado a propósito: el texto y el código reales rondan tres o cuatro, así que la
+#: guarda sólo salta cuando el recorte es seguro, nunca por una estimación optimista.
+_CHARS_PER_TOKEN_FLOOR = 5
+
+
+def _prompt_token_floor(messages: list[Message], tools: list[dict[str, Any]] | None) -> int:
+    """Los tokens que el prompt ocupa COMO MÍNIMO: mensajes más esquemas de tools."""
+    chars = sum(len(m.content or "") for m in messages) + len(json.dumps(tools or []))
+    return chars // _CHARS_PER_TOKEN_FLOOR
+
+
+def ollama_loaded_context(ps: Any, model: str) -> int | None:
+    """La ventana de contexto con la que Ollama tiene cargado ``model``, o ``None``.
+
+    Lee la respuesta de ``GET /api/ps``. Un nombre sin etiqueta (``llama3.1``) casa con
+    ``:latest``, que es como Ollama lo lista. Cualquier forma inesperada, un modelo que
+    no aparece o una entrada sin ``context_length`` se leen como «no se sabe».
+    """
+    if not isinstance(ps, dict) or not isinstance(ps.get("models"), list):
+        return None
+    wanted = {model, f"{model}:latest"} if ":" not in model else {model}
+    for entry in ps["models"]:
+        if not isinstance(entry, dict):
+            continue
+        if {str(entry.get("name") or ""), str(entry.get("model") or "")} & wanted:
+            ctx = entry.get("context_length")
+            return int(ctx) if isinstance(ctx, int) and ctx > 0 else None
+    return None
+
+
+def _probe_ollama_context(base_url: str, model: str, api_key: str | None) -> int | None:
+    """Pregunta a ``/api/ps`` del servidor Ollama. ``None`` ante cualquier fallo.
+
+    Ollama cloud y los servidores sin esa ruta contestan con un error: se lee como
+    «no se sabe» y la guarda no actúa, que es lo único prudente sin dato.
+    """
+    root = base_url.rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        resp = httpx.get(f"{root}/api/ps", headers=headers, timeout=5.0)
+        resp.raise_for_status()
+        return ollama_loaded_context(resp.json(), model)
+    except Exception:
+        _log.info("ollama /api/ps not available; context guard disabled for this run")
+        return None
+
+
 # Per-call budget + retry policy (F25/F30). Defaults are generous (slow reasoning
 # models can take minutes) and overridable via env for ops, without a redeploy.
 _DEFAULT_CALL_TIMEOUT_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_TIMEOUT_S") or 900.0)
@@ -1528,17 +1586,28 @@ class _ProviderModelClient:
                 )
             )
             self._record_thread_turn(sent_user, resp)
+            self._guard_context(messages, tools)
             return _decision_from(self._salvaged(resp, tools), model=self.model)
+        decide_messages = _decide_messages(state)
         resp = self._retrying(
             lambda: self.provider.complete(
-                _decide_messages(state),
+                decide_messages,
                 model=self.model,
                 tools=tools,
                 **self._cap_kwargs(),
                 **self._extra_call_kwargs,
             )
         )
+        self._guard_context(decide_messages, tools)
         return _decision_from(self._salvaged(resp, tools), model=self.model)
+
+    def _guard_context(
+        self,
+        messages: list[Message],  # noqa: ARG002
+        tools: list[dict[str, Any]] | None,  # noqa: ARG002
+    ) -> None:
+        """ADR 0169 D6: sólo el cliente de Ollama comprueba el recorte del contexto."""
+        return None
 
     def _salvaged(
         self, resp: CompletionResponse, tools: list[dict[str, Any]] | None
@@ -1619,14 +1688,16 @@ class _ProviderModelClient:
         }
         if self._forces_verdict_choice:
             kwargs["tool_choice"] = _SUBMIT_VERDICT_TOOL_CHOICE
+        review_messages = _review_messages(state)
         resp = self._retrying(
             lambda: self.provider.complete(
-                _review_messages(state),
+                review_messages,
                 model=self.model,
                 tools=[_SUBMIT_VERDICT_TOOL],  # ADR 0086: verdict as a tool call
                 **kwargs,
             )
         )
+        self._guard_context(review_messages, [_SUBMIT_VERDICT_TOOL])
         return _review_from(resp, model=self.model)
 
 
@@ -1702,7 +1773,11 @@ class CopilotModelClient(_ProviderModelClient):
 
 
 class OllamaModelClient(_ProviderModelClient):
-    """Ollama (local or cloud). Pass the right base_url + api_key."""
+    """Ollama (local or cloud). Pass the right base_url + api_key.
+
+    ADR 0169 D6: comprueba, una vez por run, con qué contexto cargó Ollama el modelo, y
+    detiene el run si un prompt no cabe (`ContextTruncated`).
+    """
 
     def __init__(
         self,
@@ -1731,6 +1806,32 @@ class OllamaModelClient(_ProviderModelClient):
             },
             max_output_tokens=max_output_tokens,
         )
+        self._context_probe: Callable[[], int | None] = lambda: _probe_ollama_context(
+            base_url, model, api_key
+        )
+        self._loaded_context: int | None = None
+        self._context_probed = False
+
+    def _guard_context(self, messages: list[Message], tools: list[dict[str, Any]] | None) -> None:
+        if not self._context_probed:
+            # Una vez por run, DESPUÉS de la primera respuesta: `/api/ps` sólo lista
+            # un modelo cuando ya está cargado. Si falla, no se vuelve a preguntar.
+            self._context_probed = True
+            try:
+                self._loaded_context = self._context_probe()
+            except Exception:
+                self._loaded_context = None
+        ctx = self._loaded_context
+        if not ctx:
+            return
+        floor = _prompt_token_floor(messages, tools)
+        if floor > ctx:
+            raise ContextTruncated(
+                f"el prompt de este turno ocupa al menos {floor} tokens y Ollama tiene "
+                f"cargado {self.model} con {ctx} de contexto: recorta el principio sin "
+                "avisar, que es el prompt de sistema. Sube OLLAMA_CONTEXT_LENGTH en el "
+                "servidor de Ollama o usa un modelo con más contexto."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1990,10 +2091,12 @@ def build_provider_client(
 __all__ = [
     "AzureFoundryModelClient",
     "ClaudeSDKModelClient",
+    "ContextTruncated",
     "CopilotModelClient",
     "OllamaModelClient",
     "ProviderConfigResolver",
     "ProviderTimeout",
     "ResolvedProviderConfig",
     "build_provider_client",
+    "ollama_loaded_context",
 ]

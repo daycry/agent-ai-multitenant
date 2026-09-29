@@ -163,12 +163,18 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_08` — El recorte silencioso del contexto se detecta
 
-- [ ] **Título**: tras cada llamada de Ollama, el runtime compara los tokens de
-      entrada que informa el servidor con una cota inferior del prompt enviado. Si el
-      servidor informa de menos de la mitad, el run se detiene con
+- [x] **Título**: tras la primera respuesta de Ollama, el runtime pregunta a
+      `/api/ps` con qué contexto cargó el modelo y, si una cota inferior del prompt
+      (cinco caracteres por token) no cabe, detiene el run con
       `abort_code=context_truncated` y un mensaje que nombra `OLLAMA_CONTEXT_LENGTH`.
       **Test**: `docker/agent-runtimes/agent-runtime/tests/test_context_truncation_guard.py`.
       **Coste**: 0,75 d.
+  - ✅ **Entregada el 2026-09-29, con el método corregido.** El enunciado original
+    comparaba con `usage.prompt_tokens`, y no sirve: Ollama cuenta ahí sólo los tokens
+    que evalúa, no los que reutiliza de su caché, así que saltaría en falso desde el
+    segundo turno. Queda anotado en el ADR 0169 D6. Vista en rojo (faltaban el error
+    y el parser); 9 casos, incluidos los dos de «sin dato no hay veredicto». Runtime:
+    778 passed.
 
 ### Ola 4 — Verificación
 
