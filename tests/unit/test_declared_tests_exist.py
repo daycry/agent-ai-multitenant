@@ -170,6 +170,12 @@ siguen vigilando las dos direcciones — que no aparezca una casilla marcada nue
 con un test que no existe, y que nadie vuelva a meter aquí una entrada muerta. El
 por qué de cada caso NO vive en este fichero: vive en la nota de cierre de su
 casilla, que es donde mira quien va a implementarla.
+
+Cuarta pieza, 2026-09-29 (``task_h00_04``): los planes ``harness-*`` NO usan
+bloques ``command:``, declaran su prueba en linea (``**Test**: `ruta.py` ...``),
+asi que la guarda no vigilaba ninguna de sus casillas. ``_declarados_harness``
+lee ese formato, solo en ``harness-*`` (ampliarlo a todo el roadmap romperia
+planes antiguos con otro formato).
 """
 
 from __future__ import annotations
@@ -219,6 +225,10 @@ _PREFIJOS = (
     "apps/admin-panel/e2e/",
     "apps/api-server/",
     "apps/installer/",
+    # Los planes harness nombran los tests del runtime relativos a su arbol
+    # (``tests/test_x.py`` no; ``docker/agent-runtimes/...`` completo). Se deja el
+    # prefijo por si un plan los nombra a secas, como se hace con el testDir.
+    "docker/agent-runtimes/agent-runtime/",
 )
 
 
@@ -246,11 +256,61 @@ def test_the_playwright_test_dir_is_still_e2e() -> None:
     )
 
 
-def _declarados_que_faltan() -> set[tuple[str, str, str]]:
-    """(plan, tarea, camino) de cada comando de una casilla MARCADA cuyo fichero
-    no existe."""
+_TEST_DECL = re.compile(r"\*\*Test\*\*:(.*)")
+_FIN_TRAMO = re.compile(r"\*\*(?:Coste|Depende de|Requiere)\*\*")
+
+
+def _tramos_test(md: Path) -> list[tuple[str, str, str]]:
+    """(tarea, estado, texto) de cada ``**Test**:`` de un plan ``harness-*``.
+
+    El tramo empieza tras ``**Test**:`` y sigue por las lineas indentadas de
+    continuacion hasta ``**Coste**:``/``**Depende de**:``, una linea en blanco o el
+    siguiente item de lista (nota de cierre, casilla).
+    """
+    salida: list[tuple[str, str, str]] = []
+    tarea, estado = "?", None
+    lineas = md.read_text(encoding="utf-8").split("\n")
+    i = 0
+    while i < len(lineas):
+        linea = lineas[i]
+        m_t = _TAREA.match(linea)
+        if m_t:
+            tarea, estado = m_t.group(1), None
+        else:
+            m_c = _CASILLA.match(linea)
+            if m_c and estado is None:
+                estado = "x" if m_c.group(1).lower() == "x" else " "
+            m_d = _TEST_DECL.search(linea)
+            if m_d:
+                partes = [m_d.group(1)]
+                while not _FIN_TRAMO.search(partes[-1]) and i + 1 < len(lineas):
+                    sig = lineas[i + 1]
+                    if not sig.strip() or sig.lstrip().startswith(("-", "#")):
+                        break
+                    partes.append(sig)
+                    i += 1
+                texto = " ".join(partes)
+                texto = _FIN_TRAMO.split(texto)[0]
+                salida.append((tarea, estado or " ", texto))
+        i += 1
+    return salida
+
+
+def _faltan_en_harness(roadmap: Path) -> set[tuple[str, str, str]]:
     faltan: set[tuple[str, str, str]] = set()
-    for md in sorted(_ROADMAP.glob("*.md")):
+    for md in sorted(roadmap.glob("harness-*.md")):
+        for tarea, estado, texto in _tramos_test(md):
+            if estado != "x":
+                continue
+            for token in _TOKEN.findall(texto):
+                if not _existe(token):
+                    faltan.add((md.name, tarea, token))
+    return faltan
+
+
+def _faltan_en_commands(roadmap: Path) -> set[tuple[str, str, str]]:
+    faltan: set[tuple[str, str, str]] = set()
+    for md in sorted(roadmap.glob("*.md")):
         tarea, estado = "?", None
         for linea in md.read_text(encoding="utf-8").split("\n"):
             m_t = _TAREA.match(linea)
@@ -270,6 +330,43 @@ def _declarados_que_faltan() -> set[tuple[str, str, str]]:
                 if not _existe(token):
                     faltan.add((md.name, tarea, token))
     return faltan
+
+
+def _declarados_que_faltan(roadmap: Path = _ROADMAP) -> set[tuple[str, str, str]]:
+    """(plan, tarea, camino) de cada test de una casilla MARCADA cuyo fichero
+    no existe: los ``command:`` de todo el roadmap y los ``**Test**:`` de los
+    planes ``harness-*``."""
+    return _faltan_en_harness(roadmap) | _faltan_en_commands(roadmap)
+
+
+def test_the_harness_plans_declarations_are_actually_parsed() -> None:
+    """No-vacuidad de la via ``**Test**:``: si el parser se rompe, la guarda
+    de los planes harness pasaria sola."""
+    decl = [t for md in _ROADMAP.glob("harness-*.md") for t in _tramos_test(md)]
+    con_fichero = [t for t in decl if _TOKEN.search(t[2])]
+    assert len(decl) >= 60, f"esperaba >= 60 declaraciones **Test**, encontre {len(decl)}"
+    assert len(con_fichero) >= 50, f"con fichero nombrado: {len(con_fichero)}"
+
+
+def test_a_marked_harness_task_with_a_missing_test_is_caught(tmp_path: Path) -> None:
+    """Autotest: la guarda muerde. Marcada+inexistente da rojo; sin marcar, no."""
+    plan = tmp_path / "harness-99-sintetico.md"
+    lineas = [
+        "#### `task_h99_01` — marcada",
+        "",
+        "- [x] **Titulo**: algo",
+        "      **Test**: `tests/unit/test_que_no_existe_jamas.py`;",
+        "      `tests/unit/test_declared_tests_exist.py`. **Coste**: 1 d.",
+        "",
+        "#### `task_h99_02` — sin marcar",
+        "",
+        "- [ ] **Titulo**: algo",
+        "      **Test**: `tests/unit/tampoco_existe.py`. **Coste**: 1 d.",
+    ]
+    plan.write_text(chr(10).join(lineas), encoding="utf-8")
+    assert _declarados_que_faltan(tmp_path) == {
+        ("harness-99-sintetico.md", "task_h99_01", "tests/unit/test_que_no_existe_jamas.py")
+    }
 
 
 def test_the_discovery_actually_finds_the_declared_commands() -> None:

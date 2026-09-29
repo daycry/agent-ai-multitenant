@@ -146,13 +146,21 @@ harness-03 + harness-04 + harness-05
 
 #### `task_h00_04` — Registro de evidencia por tarea
 
-- [ ] **Título**: cada plan hijo cierra sus casillas con la nota de cierre que ya usa
+- [x] **Título**: cada plan hijo cierra sus casillas con la nota de cierre que ya usa
       el repo («Entregada el …», test visto en rojo) **y** un enlace al JUnit del
       commit. Se añade a `tests/unit/test_declared_tests_exist.py` la comprobación
       de que los `command:` de las casillas `[x]` de los planes `harness-*` existen
       (ya lo hace para todo el roadmap; aquí sólo se confirma que los nuevos
       ficheros entran en su barrido). No se inventa un formato nuevo de evidencia.
       **Test**: `tests/unit/test_declared_tests_exist.py`. **Coste**: 0,5 d.
+      **Entregada el 2026-09-29**, con el agente `implementer` del plugin. La premisa «ya lo hace para
+      todo el roadmap» era falsa para estos planes: la guarda sólo leía líneas `command:` y los
+      `harness-*` declaran su test en línea (`**Test**: …`), así que no vigilaba ninguna casilla
+      harness. Ahora lee también el tramo `**Test**:` con su continuación, sólo en `harness-*.md`
+      (ampliarlo a todo el roadmap rompería planes antiguos con otro formato), y exige que existan
+      los ficheros que nombra una casilla `[x]`. No-vacuidad: 61 declaraciones, 59 con fichero.
+      Rojo verificado por el orquestador: con el barrido harness neutralizado, el autotest del plan
+      sintético falla.
 
 ### Fase C — Cierre del programa
 
