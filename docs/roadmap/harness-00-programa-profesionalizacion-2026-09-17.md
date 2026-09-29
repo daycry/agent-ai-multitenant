@@ -161,6 +161,11 @@ harness-03 + harness-04 + harness-05
       los ficheros que nombra una casilla `[x]`. No-vacuidad: 61 declaraciones, 59 con fichero.
       Rojo verificado por el orquestador: con el barrido harness neutralizado, el autotest del plan
       sintético falla.
+      **La otra mitad, «enlace al JUnit del commit», no se mecaniza** (revisión adversarial del
+      2026-09-29, lente A): es la regla de redacción de las notas de cierre de los hijos, y el JUnit
+      sale del baseline de `task_h00_03` en `.artifacts/harness-baseline/`, ignorado por git y
+      adjunto al PR. Un test no puede comprobar un enlace a un artefacto que no está en el repo, así
+      que lo vigila quien cierra cada casilla harness, igual que la nota «test visto en rojo».
 
 ### Fase C — Cierre del programa
 

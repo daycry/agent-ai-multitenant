@@ -45,6 +45,14 @@ export function RequestsTab({ kind }: { kind: "approvals" | "questions" }) {
           ))}
         </ul>
       </StateBlock>
+      {!isQuestions && (
+        <StateBlock
+          isError={queue.isError}
+          error={queue.error}
+          errorTitle={t("queueLoadError")}
+          errorTestId="human-queue-error"
+        />
+      )}
       <HumanQueueList items={extra} />
     </div>
   );

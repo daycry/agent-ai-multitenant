@@ -35,16 +35,18 @@ const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
   pending: "muted",
   processing: "warning",
   indexed: "success",
+  indexed_empty: "muted",
   failed: "danger",
 };
 
 const STATUS_LABEL_KEY: Record<
   DocumentStatus,
-  "statusPending" | "statusProcessing" | "statusIndexed" | "statusFailed"
+  "statusPending" | "statusProcessing" | "statusIndexed" | "statusIndexedEmpty" | "statusFailed"
 > = {
   pending: "statusPending",
   processing: "statusProcessing",
   indexed: "statusIndexed",
+  indexed_empty: "statusIndexedEmpty",
   failed: "statusFailed",
 };
 
@@ -100,49 +102,63 @@ function DocumentRow({
   });
 
   const variant = STATUS_VARIANT[doc.status];
-  const canReindex = doc.status === "failed" || doc.status === "indexed";
+  const canReindex =
+    doc.status === "failed" || doc.status === "indexed" || doc.status === "indexed_empty";
 
   return (
     <li
-      className="border-muted flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm"
+      className="border-muted flex items-start justify-between gap-3 rounded border px-3 py-2 text-sm"
       data-testid={`kb-doc-${doc.id}`}
       data-status={doc.status}
     >
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
+        <div className="flex items-center gap-2">
           <Badge variant={variant} data-testid={`kb-doc-status-${doc.id}`}>
             {t(STATUS_LABEL_KEY[doc.status])}
           </Badge>
-          <span className="text-muted-foreground">
-            {doc.source_mime_type} · {formatBytes(doc.source_size_bytes)}
-            {doc.page_count > 0 ? ` · ${doc.page_count} pp.` : ""}
-          </span>
+          <span className="min-w-0 truncate">{doc.title}</span>
         </div>
-        <p className="mt-0.5 truncate">{doc.title}</p>
-        {doc.error_message ? (
-          <p className="text-destructive mt-0.5 text-xs">{doc.error_message}</p>
-        ) : null}
+        {/* Ids, mime, error crudo, progreso de ingesta y reindexado: sólo en el
+            detalle plegado, como en el asistente. */}
+        <details
+          className="text-muted-foreground mt-1 text-xs"
+          data-testid={`kb-doc-detail-${doc.id}`}
+        >
+          <summary className="cursor-pointer">{t("technicalDetail")}</summary>
+          <div className="mt-1 space-y-1">
+            <p className="font-mono">
+              {doc.source_mime_type} · {formatBytes(doc.source_size_bytes)}
+              {doc.page_count > 0 ? ` · ${doc.page_count} pp.` : ""}
+            </p>
+            {doc.error_message ? (
+              <p className="text-destructive break-all font-mono">{doc.error_message}</p>
+            ) : null}
+            <p className="font-mono">id: {doc.id}</p>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/admin/documents/${doc.id}/ingestion`}
+                data-testid={`kb-doc-ingestion-link-${doc.id}`}
+                className="hover:text-foreground underline"
+              >
+                {t("progress")}
+              </Link>
+              {canReindex ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => reindexMutation.mutate()}
+                  disabled={reindexMutation.isPending}
+                  data-testid={`kb-doc-reindex-${doc.id}`}
+                  title={t("reindexTitle")}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </details>
       </div>
       <div className="flex items-center gap-1">
-        <Link
-          href={`/admin/documents/${doc.id}/ingestion`}
-          data-testid={`kb-doc-ingestion-link-${doc.id}`}
-          className="text-muted-foreground hover:text-foreground text-xs underline"
-        >
-          {t("progress")}
-        </Link>
-        {canReindex ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => reindexMutation.mutate()}
-            disabled={reindexMutation.isPending}
-            data-testid={`kb-doc-reindex-${doc.id}`}
-            title={t("reindexTitle")}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
         <Button
           variant="outline"
           size="sm"

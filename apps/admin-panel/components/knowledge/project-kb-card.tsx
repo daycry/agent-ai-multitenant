@@ -35,12 +35,17 @@ export function ProjectKbCard({
   const [expanded, setExpanded] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
+  // Los documentos se piden al DESPLEGAR la tarjeta; las cifras vienen del listado.
   const docsQuery = useQuery({
     queryKey: ["kb-documents", kb.id],
     queryFn: () => apiFetch<KbDocument[]>(`/knowledge-bases/${kb.id}/documents`),
     refetchOnWindowFocus: false,
+    enabled: expanded,
   });
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["kb-documents", kb.id] });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["project-kbs", projectId] });
+    return queryClient.invalidateQueries({ queryKey: ["kb-documents", kb.id] });
+  };
 
   const remove = useMutation({
     mutationFn: () =>
@@ -73,7 +78,7 @@ export function ProjectKbCard({
           <p className="text-muted-foreground mt-1 text-xs" data-testid={`kb-category-${kb.id}`}>
             {t("categoryLabel")}: {kb.category ? kb.category.name : t("noCategory")}
           </p>
-          <KbStats kbId={kb.id} />
+          <KbStats kbId={kb.id} stats={kb.document_stats} />
           {kb.embedding_model_stale ? (
             // ADR 0155: sello ≠ modelo activo → no aporta al camino vectorial y
             // rechaza documentos nuevos. Se dice donde el usuario sube documentos.
@@ -106,7 +111,9 @@ export function ProjectKbCard({
       </CardHeader>
       {expanded ? (
         <CardContent>
-          {docs.length === 0 ? (
+          {docsQuery.isLoading ? (
+            <p className="text-muted-foreground text-sm">{t("loadingDocs")}</p>
+          ) : docs.length === 0 ? (
             <p
               className="text-muted-foreground text-sm italic"
               data-testid={`kb-docs-empty-${kb.id}`}

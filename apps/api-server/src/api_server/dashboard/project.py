@@ -11,6 +11,8 @@ textos los pone el panel. Y sólo hay avisos de lo que el dominio **guarda**:
 
 * ``mcp_not_connected`` — servidor OAuth sin token en Vault (mismo criterio que
   ``GET .../oauth/status``).
+* ``vault_unavailable`` — no se pudo leer el estado OAuth (Vault sellado o caído, o entrada
+  ilegible): es «no lo sé», no «no conectado», y no invita a reconectar.
 * ``mcp_no_tools`` — servidor declarado sin ninguna tool importada.
 * ``mcp_egress_blocked`` — host externo fuera de la allowlist de la plataforma.
 * ``repo_not_synced`` — el proyecto tiene remoto git y el último sondeo del worker
@@ -25,8 +27,7 @@ Todas las consultas llevan ``tenant_id`` además de la RLS de la sesión (princi
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -39,14 +40,18 @@ from api_server.db.platform_settings import get_platform_setting
 from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
 from api_server.egress.mcp_discovery import egress_warnings_for_servers
 from api_server.mcp.import_tools import count_imported_tools
+from api_server.mcp.oauth_probe import OAuthConnected, probe_many
 
 #: Planes activos que se enseñan con nombre, y runs recientes de la actividad.
 PLANS_LIMIT = 10
 ACTIVITY_LIMIT = 10
 _ACTIVE_PLAN_STATUSES = ACTIVE_PLAN_STATUSES
 
-#: ¿Tiene este servidor OAuth de este proyecto un token en Vault?
-OAuthConnected = Callable[[str], Awaitable[bool]]
+#: Ventana de las consultas sobre `executions` (último fallo y actividad). La tabla está
+#: particionada por `created_at`: sin un predicado sobre esa columna Postgres no puede
+#: podar particiones y recorre todas. 90 días cubre de sobra «el último fallo» y «los
+#: runs recientes» de un Resumen; un proyecto sin runs en 90 días enseña vacío.
+EXECUTIONS_WINDOW = timedelta(days=90)
 
 
 async def _plans(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> list[dict[str, Any]]:
@@ -81,6 +86,7 @@ async def _plans(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> li
 
 async def _runs(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> dict[str, Any]:
     params = {"tid": tenant_id, "pid": project_id}
+    since = datetime.now(tz=UTC) - EXECUTIONS_WINDOW
     running = (
         await session.execute(
             sa_text(
@@ -97,10 +103,10 @@ async def _runs(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> dic
                 "SELECT e.id, t.title AS task_title FROM executions e"
                 " JOIN tasks t ON t.id = e.task_id"
                 " WHERE e.tenant_id = :tid AND t.tenant_id = :tid AND t.project_id = :pid"
-                " AND e.status IN ('failed', 'aborted')"
+                " AND e.status IN ('failed', 'aborted') AND e.created_at >= :since"
                 " ORDER BY e.created_at DESC LIMIT 1"
             ),
-            params,
+            {**params, "since": since},
         )
     ).first()
     return {
@@ -114,7 +120,7 @@ async def _runs(session: AsyncSession, tenant_id: UUID, project_id: UUID) -> dic
             if failure is not None
             else None
         ),
-        "url_path": f"/admin/projects/{project_id}/tasks",
+        "url_path": f"/admin/projects/{project_id}/runs",
     }
 
 
@@ -128,9 +134,15 @@ async def _activity(
             " FROM executions e JOIN tasks t ON t.id = e.task_id"
             " LEFT JOIN agents a ON a.id = e.agent_id"
             " WHERE e.tenant_id = :tid AND t.tenant_id = :tid AND t.project_id = :pid"
+            " AND e.created_at >= :since"
             " ORDER BY e.created_at DESC LIMIT :limit"
         ),
-        {"tid": tenant_id, "pid": project_id, "limit": ACTIVITY_LIMIT},
+        {
+            "tid": tenant_id,
+            "pid": project_id,
+            "limit": ACTIVITY_LIMIT,
+            "since": datetime.now(tz=UTC) - EXECUTIONS_WINDOW,
+        },
     )
     return [
         {
@@ -161,21 +173,32 @@ async def _warnings(
     servers = project.mcp_servers if isinstance(project.mcp_servers, list) else []
     if servers:
         names = _server_names(servers)
-        unconnected = [
+        oauth_names = [
             str(s["name"])
             for s in servers
             if isinstance(s, dict)
             and s.get("name")
             and uses_oauth(s.get("url") if isinstance(s.get("url"), str) else None)
-            and not await oauth_connected(str(s["name"]))
         ]
+        states = await probe_many(oauth_connected, oauth_names) if oauth_names else {}
+        unconnected = [n for n in oauth_names if states.get(n) is False]
+        unknown = [n for n in oauth_names if states.get(n) is None]
         if unconnected:
             warnings.append(
                 {
                     "kind": "mcp_not_connected",
                     "count": len(unconnected),
                     "names": unconnected,
-                    "url_path": f"{base}/mcp-servers",
+                    "url_path": f"{base}/capabilities",
+                }
+            )
+        if unknown:
+            warnings.append(
+                {
+                    "kind": "vault_unavailable",
+                    "count": len(unknown),
+                    "names": unknown,
+                    "url_path": f"{base}/capabilities",
                 }
             )
         imported = await count_imported_tools(session, tenant_id=tenant_id, server_names=names)
@@ -186,7 +209,7 @@ async def _warnings(
                     "kind": "mcp_no_tools",
                     "count": len(empty),
                     "names": empty,
-                    "url_path": f"{base}/mcp-servers",
+                    "url_path": f"{base}/capabilities",
                 }
             )
         allowed = await get_platform_setting(session, MCP_ALLOWLIST_KEY, default=[])
@@ -199,7 +222,7 @@ async def _warnings(
                     "kind": "mcp_egress_blocked",
                     "count": len(egress),
                     "names": [],
-                    "url_path": f"{base}/mcp-servers",
+                    "url_path": f"{base}/capabilities",
                 }
             )
     git = project.git_config if isinstance(project.git_config, dict) else {}

@@ -239,3 +239,25 @@ describe("SSO vive en Plataforma, no en el tenant (human_menu_01 v3, ADR 0028)",
     expect(tenantHrefs).toContain("/admin/settings");
   });
 });
+
+describe("Inicio tiene UNA entrada de bandeja (task_ui_03)", () => {
+  const trabajo = WORK_GROUPS.find((g) => g.id === "trabajo");
+  const hrefs = WORK_GROUPS.flatMap((g) => g.items.map((i) => i.href));
+
+  it("«Bandeja humana» apunta al hub y se llama así en ES y EN", () => {
+    const inbox = trabajo?.items.find((i) => i.href === "/admin/inbox");
+    expect(inbox).toBeDefined();
+    expect(translate("es", "nav", inbox!.labelKey)).toBe("Bandeja humana");
+    expect(translate("en", "nav", inbox!.labelKey)).toBe("Human inbox");
+  });
+
+  it("ninguna entrada apunta a una ruta que ahora redirige al hub", () => {
+    for (const redirected of [
+      "/admin/approvals",
+      "/admin/human-queue",
+      "/admin/notifications/inbox",
+    ]) {
+      expect(hrefs).not.toContain(redirected);
+    }
+  });
+});

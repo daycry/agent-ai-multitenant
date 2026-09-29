@@ -3,6 +3,8 @@
 // categoría (built-ins primero, «Sin categoría» al final) es un helper puro sin
 // JSX ni hooks; la gestión de categorías vive en /knowledge-bases/categories.
 
+import type { KbDocumentStats, KbGrantedProject } from "@/components/knowledge/kb-types";
+
 interface KbCategorySummary {
   id: string;
   slug: string;
@@ -31,6 +33,9 @@ export interface KnowledgeBase {
   updated_at: string;
   is_builtin: boolean;
   category: KbCategorySummary | null;
+  /** Agregados y proyectos concedidos: los trae el LISTADO, calculados en el backend. */
+  document_stats?: KbDocumentStats | null;
+  granted_projects?: KbGrantedProject[] | null;
 }
 
 // `DEFAULT_EMBEDDING_MODEL` vivía aquí y el alta de KB lo mandaba en el cuerpo

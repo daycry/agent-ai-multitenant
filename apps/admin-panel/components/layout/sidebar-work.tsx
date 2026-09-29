@@ -32,17 +32,14 @@
 import {
   BarChart3,
   Bell,
-  BellRing,
   BookOpen,
   Bot,
   Briefcase,
   Building2,
-  DoorOpen,
   FileText,
   FolderKanban,
   Gauge,
   HelpCircle,
-  Inbox,
   LayoutDashboard,
   LayoutGrid,
   Library,
@@ -72,17 +69,16 @@ export const WORK_GROUPS: NavGroup[] = [
     Icon: Briefcase,
     items: [
       { href: "/admin/dashboard", labelKey: "dashboard", Icon: LayoutDashboard },
+      // Bandeja humana unificada (task_ui_03): aprobaciones, preguntas, revisiones,
+      // notificaciones y tareas asignadas. `/admin/approvals`, `/admin/human-queue`
+      // y `/admin/notifications/inbox` redirigen aquí y ya no tienen entrada propia.
       { href: "/admin/inbox", labelKey: "inbox", Icon: ListChecks },
-      // ADR 0123: todo lo que espera decisión humana, por antigüedad.
-      { href: "/admin/human-queue", labelKey: "humanQueue", Icon: DoorOpen },
       { href: "/admin/board", labelKey: "board", Icon: LayoutGrid },
       // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
       { href: "/admin/office", labelKey: "office", Icon: Building2 },
       { href: "/admin/runs", labelKey: "runs", Icon: Activity },
       // ADR 0121: ranking modelo×agente con la carga real del tenant.
       { href: "/admin/leaderboard", labelKey: "leaderboard", Icon: Trophy },
-      { href: "/admin/approvals", labelKey: "approvals", Icon: BellRing },
-      { href: "/admin/notifications/inbox", labelKey: "notificationsInbox", Icon: Inbox },
       { href: "/admin/assistant", labelKey: "assistant", Icon: Bot, adminOnly: true },
     ],
   },

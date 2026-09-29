@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { seedSession } from "./helpers/session";
+import { waitForHydration } from "./helpers/hydration";
 
 /**
  * E2E for the navigable tool catalog at /admin/tools (Plan 06.18
@@ -119,6 +120,7 @@ async function setupCatalog(page: Page): Promise<void> {
 test("lists the catalog with the three facets and the shared card-row", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("tools-catalog-page")).toBeVisible();
 
@@ -147,6 +149,7 @@ test("lists the catalog with the three facets and the shared card-row", async ({
 test("built-in tools are read-only and custom tools are editable", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   // Built-in: read-only badge, no edit/delete.
   await expect(page.getByTestId(`tool-readonly-badge-${READ_FILE_ID}`)).toBeVisible();
@@ -164,6 +167,7 @@ test("built-in tools are read-only and custom tools are editable", async ({ page
 test("a tool without a runtime engine is flagged 'No disponible aún'", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId(`tool-unwired-badge-${GIT_COMMIT_ID}`)).toBeVisible();
   await expect(page.getByTestId(`tool-unwired-badge-${GIT_COMMIT_ID}`)).toContainText(
@@ -179,6 +183,7 @@ test("a tool without a runtime engine is flagged 'No disponible aún'", async ({
 test("filtering by the Function facet narrows the catalog", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   // Narrow to Git → only git_commit remains.
   await page.getByTestId("tools-facet-category").selectOption("git");
@@ -190,6 +195,7 @@ test("filtering by the Function facet narrows the catalog", async ({ page }) => 
 test("free-text search filters by name", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await page.getByTestId("tools-search").fill("deploy");
   await expect(page.getByTestId(`tool-row-${CUSTOM_DEPLOY_ID}`)).toBeVisible();
@@ -212,6 +218,7 @@ test("rejects a custom tool whose name collides with a built-in (no duplicate ro
   });
 
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await page.getByTestId("tools-create-button").click();
   await expect(page.getByTestId("tool-form-dialog")).toBeVisible();
@@ -229,6 +236,7 @@ test("rejects a custom tool whose name collides with a built-in (no duplicate ro
 test("the sidebar exposes a Catálogo item linking to /admin/tools", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   const item = page.getByTestId("nav-tools");
   await expect(item).toBeVisible();
@@ -280,6 +288,7 @@ test("the agent-tools empty state links to the catalog (clickable, not plain tex
   );
 
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("agent-tab-skills").click();
 
   await page.getByTestId("agent-tools-tab-advanced").click();
@@ -294,6 +303,7 @@ test("the agent-tools empty state links to the catalog (clickable, not plain tex
 test("the same tool shows the same label in catalog and assignment", async ({ page }) => {
   await setupCatalog(page);
   await page.goto("/admin/tools", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   const catalogImpl = await page.getByTestId(`tool-impl-badge-${RUN_TESTS_ID}`).innerText();
   expect(catalogImpl).toContain("Contenedor");
 });

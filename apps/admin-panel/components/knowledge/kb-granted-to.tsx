@@ -6,7 +6,7 @@
  * siendo el botón de la tarjeta (`KbGrantDialog`); los dos comparten endpoint.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 
 import { RoleGuard } from "@/components/ui/role-guard";
@@ -14,26 +14,31 @@ import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
-interface ProjectGrant {
-  project_id: string;
-  name: string;
-}
+import type { KbGrantedProject } from "./kb-types";
 
-export function KbGrantedTo({ kbId }: { kbId: string }) {
+/**
+ * `grants` viene en el listado de bases (una consulta por lotes en el backend),
+ * no de una petición por fila.
+ */
+export function KbGrantedTo({
+  kbId,
+  grants = [],
+}: {
+  kbId: string;
+  grants?: KbGrantedProject[] | null;
+}) {
   const t = useT("knowledgeWizard");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
-  const grantsQuery = useQuery({
-    queryKey: ["kb-projects", kbId],
-    queryFn: () => apiFetch<ProjectGrant[]>(`/knowledge-bases/${kbId}/projects`),
-    refetchOnWindowFocus: false,
-  });
   const revoke = useMutation({
     mutationFn: (projectId: string) =>
       apiFetch<void>(`/knowledge-bases/${kbId}/projects/${projectId}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["kb-projects", kbId] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["kb-projects", kbId] });
+      void queryClient.invalidateQueries({ queryKey: ["knowledge-bases"] });
+    },
   });
-  const grants = grantsQuery.data ?? [];
+  const list = grants ?? [];
 
   return (
     <div
@@ -41,12 +46,12 @@ export function KbGrantedTo({ kbId }: { kbId: string }) {
       data-testid={`kb-granted-${kbId}`}
     >
       <span className="text-muted-foreground">{t("grantedTo")}</span>
-      {grants.length === 0 ? (
+      {list.length === 0 ? (
         <span className="text-muted-foreground italic" data-testid={`kb-granted-none-${kbId}`}>
           {t("grantedNone")}
         </span>
       ) : (
-        grants.map((g) => (
+        list.map((g) => (
           <span
             key={g.project_id}
             className="bg-muted inline-flex items-center gap-1 rounded px-1.5 py-0.5"

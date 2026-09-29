@@ -2,17 +2,15 @@
 
 /**
  * Cifras de una base para su tarjeta (`task_ui_21`): documentos, estado de
- * indexado y última actualización. Comparte la caché `["kb-documents", id]` con
- * la lista de documentos de la propia tarjeta, así que no cuesta una petición más.
+ * indexado y última actualización. Vienen AGREGADAS en el listado de bases
+ * (calculadas en SQL sobre todos sus documentos): no hay petición por fila ni se
+ * pierde un fallo que no cabía en la primera página.
  */
 
-import { useQuery } from "@tanstack/react-query";
-
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
-import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
-import { summarizeDocuments, type IndexingState, type KbDocument } from "./kb-types";
+import { summarizeStats, type IndexingState, type KbDocumentStats } from "./kb-types";
 
 const STATE_VARIANT: Record<IndexingState, BadgeVariant> = {
   empty: "muted",
@@ -28,14 +26,9 @@ const STATE_KEY = {
   failed: "stateFailed",
 } as const;
 
-export function KbStats({ kbId }: { kbId: string }) {
+export function KbStats({ kbId, stats }: { kbId: string; stats?: KbDocumentStats | null }) {
   const t = useT("knowledgeWizard");
-  const docsQuery = useQuery({
-    queryKey: ["kb-documents", kbId],
-    queryFn: () => apiFetch<KbDocument[]>(`/knowledge-bases/${kbId}/documents`),
-    refetchOnWindowFocus: false,
-  });
-  const summary = summarizeDocuments(docsQuery.data ?? []);
+  const summary = summarizeStats(stats);
   const date = summary.lastUpdate ? new Date(summary.lastUpdate).toLocaleDateString() : null;
 
   return (

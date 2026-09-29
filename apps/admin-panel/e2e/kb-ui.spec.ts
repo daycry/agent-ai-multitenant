@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -44,6 +45,9 @@ const KB_FIXTURE = {
   created_by: null,
   created_at: "2026-05-25T10:00:00Z",
   updated_at: "2026-05-25T10:00:00Z",
+  // Los agregados los trae el LISTADO (no `…/documents`), calculados en el backend.
+  document_stats: { total: 1, by_status: { indexed: 1 }, last_updated_at: "2026-05-25T10:15:00Z" },
+  granted_projects: [],
 };
 
 const DOC_FIXTURE: DocFixture = {
@@ -149,7 +153,20 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
   await page.route(
     new RegExp(`http://localhost:8001/knowledge-bases/${KB_ID}/documents/[0-9a-f-]+$`),
     (route) => {
-      if (route.request().method() !== "DELETE") return route.continue();
+      const method = route.request().method();
+      if (method === "GET") {
+        // El sondeo del asistente pide cada documento del lote por su id.
+        const id = route.request().url().split("/").pop();
+        const found = documents.find((d) => d.id === id);
+        return found
+          ? route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(found),
+            })
+          : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+      }
+      if (method !== "DELETE") return route.continue();
       capture.deleteCalls += 1;
       capture.lastDeletedId = route.request().url().split("/").pop() ?? null;
       documents = documents.filter((d) => d.id !== capture.lastDeletedId);
@@ -178,9 +195,11 @@ test("project with KBs renders the KB card and its docs", async ({ page }) => {
     waitUntil: "domcontentloaded",
   });
   await expect(page.getByTestId(`kb-card-${KB_ID}`)).toBeVisible();
+  await waitForHydration(page);
   await expect(page.getByTestId(`kb-card-${KB_ID}`)).toContainText("Manuales del producto");
   await expect(page.getByTestId(`kb-stats-count-${KB_ID}`)).toContainText("1 documentos");
   await expect(page.getByTestId(`kb-stats-state-${KB_ID}`)).toContainText("Indexada");
+  await waitForHydration(page);
   await page.getByTestId(`kb-toggle-${KB_ID}`).click();
   await expect(page.getByTestId(`kb-doc-${DOC_FIXTURE.id}`)).toBeVisible();
   await expect(page.getByTestId(`kb-doc-status-${DOC_FIXTURE.id}`)).toContainText("Indexado");
@@ -192,6 +211,7 @@ test("uploading a document calls POST and the row appears", async ({ page }) => 
     waitUntil: "domcontentloaded",
   });
 
+  await waitForHydration(page);
   await page.getByTestId(`kb-upload-open-${KB_ID}`).click();
   await expect(page.getByTestId("kb-upload-dialog")).toBeVisible();
 
@@ -215,6 +235,7 @@ test("deleting a doc removes its row", async ({ page }) => {
     waitUntil: "domcontentloaded",
   });
 
+  await waitForHydration(page);
   await page.getByTestId(`kb-toggle-${KB_ID}`).click();
   await page.getByTestId(`kb-doc-delete-${DOC_FIXTURE.id}`).click();
   await expect.poll(() => capture.deleteCalls).toBe(1);
@@ -229,8 +250,13 @@ test("each doc row has a link to the live-ingestion page", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}/knowledge-bases`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
   await page.getByTestId(`kb-toggle-${KB_ID}`).click();
   const link = page.getByTestId(`kb-doc-ingestion-link-${DOC_FIXTURE.id}`);
+  // El enlace es vocabulario de ingesta: vive en el detalle técnico plegado
+  // (`task_ui_21`, revisión adversarial), no en la fila.
+  await expect(link).toBeHidden();
+  await page.getByTestId(`kb-doc-detail-${DOC_FIXTURE.id}`).locator("summary").click();
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("href", `/admin/documents/${DOC_FIXTURE.id}/ingestion`);
 });
@@ -243,6 +269,10 @@ test("Añadir conocimiento: elegir base, pegar texto e indexado; concede el proy
     waitUntil: "domcontentloaded",
   });
 
+  // Esperar a que el cliente haya pintado la lista y a la hidratación: un clic
+  // antes de ésta se pierde y el diálogo no se abre (intermitente).
+  await expect(page.getByTestId(`kb-card-${KB_ID}`)).toBeVisible();
+  await waitForHydration(page);
   await page.getByTestId("add-knowledge-button").click();
   await expect(page.getByTestId("kb-wizard")).toHaveAttribute("data-step", "1");
   await page.getByTestId(`kb-wizard-pick-${KB_ID}`).click();

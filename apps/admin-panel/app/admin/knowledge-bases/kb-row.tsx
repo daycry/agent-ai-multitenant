@@ -125,8 +125,8 @@ export function KbRow({
         </RoleGuard>
       </CardHeader>
       <CardContent className="pb-2 pl-10">
-        <KbStats kbId={kb.id} />
-        <KbGrantedTo kbId={kb.id} />
+        <KbStats kbId={kb.id} stats={kb.document_stats} />
+        <KbGrantedTo kbId={kb.id} grants={kb.granted_projects} />
       </CardContent>
       {kb.description && (
         <CardContent className="pb-2">

@@ -153,7 +153,7 @@ export const dictionary = {
 
     // --- grupo Trabajo ---
     dashboard: { es: "Dashboard", en: "Dashboard" },
-    inbox: { es: "Mis tareas", en: "My tasks" },
+    inbox: { es: "Bandeja humana", en: "Human inbox" },
     humanQueue: { es: "Esperan tu decisión", en: "Awaiting your decision" },
     security: { es: "Seguridad", en: "Security" },
     board: { es: "Tablero", en: "Board" },
@@ -3352,7 +3352,7 @@ export const dictionary = {
     runsRunning: { es: "{count} en curso", en: "{count} running" },
     runsIdle: { es: "Ningún run en curso.", en: "No runs in progress." },
     runsLastFailure: { es: "Último fallo: {task}", en: "Last failure: {task}" },
-    runsOpen: { es: "Ver tareas", en: "See tasks" },
+    runsOpen: { es: "Ver runs", en: "See runs" },
     spendTitle: { es: "Gasto", en: "Spend" },
     spendNoBudget: {
       es: "Este proyecto no tiene presupuesto configurado.",
@@ -3361,12 +3361,16 @@ export const dictionary = {
     spendPercent: { es: "{percent}% del presupuesto", en: "{percent}% of the budget" },
     spendUsed: { es: "{spent} USD de {budget} USD", en: "{spent} USD of {budget} USD" },
     spendOver: { es: "Presupuesto superado", en: "Budget exceeded" },
-    spendOpen: { es: "Estadísticas y costes", en: "Stats and costs" },
+    spendOpen: { es: "Ver costes", en: "See costs" },
     warningsTitle: { es: "Avisos", en: "Warnings" },
     warningsNone: { es: "Sin avisos: todo en orden.", en: "No warnings: all in order." },
     warnMcpNotConnected: {
       es: "MCP sin conectar (OAuth): {names}",
       en: "MCP not connected (OAuth): {names}",
+    },
+    warnVaultUnavailable: {
+      es: "No se pudo comprobar la conexión OAuth (Vault no disponible): {names}",
+      en: "Could not check the OAuth connection (Vault unavailable): {names}",
     },
     warnMcpNoTools: {
       es: "MCP sin tools importadas: {names}",
@@ -4566,7 +4570,9 @@ export const dictionary = {
     statusPending: { es: "Pendiente", en: "Pending" },
     statusProcessing: { es: "Procesando", en: "Processing" },
     statusIndexed: { es: "Indexado", en: "Indexed" },
-    statusFailed: { es: "Fallido", en: "Failed" },
+    statusIndexedEmpty: { es: "Indexado sin contenido", en: "Indexed with no content" },
+    statusFailed: { es: "Falló", en: "Failed" },
+    technicalDetail: { es: "Detalle técnico", en: "Technical detail" },
     progress: { es: "Progreso", en: "Progress" },
     reindexTitle: {
       es: "Reindexar (vuelve a procesar el documento)",
@@ -4980,6 +4986,10 @@ export const dictionary = {
     allClear: { es: "Nada pendiente. 🎉", en: "Nothing pending. 🎉" },
     loading: { es: "Cargando…", en: "Loading…" },
     loadError: { es: "No se pudo cargar", en: "Could not load" },
+    queueLoadError: {
+      es: "No se pudo cargar la cola humana: puede haber más decisiones pendientes",
+      en: "Could not load the human queue: there may be more pending decisions",
+    },
     assignedHint: {
       es: "Las tareas humanas que tienes asignadas. Acéptalas, recházalas con una justificación, márcalas como completadas o escálalas a un administrador.",
       en: "The human tasks assigned to you. Accept them, reject them with a justification, mark them as completed or escalate them to an administrator.",
@@ -7635,6 +7645,20 @@ export const dictionary = {
     docProcessing: { es: "Indexando", en: "Indexing" },
     docIndexed: { es: "Indexado", en: "Indexed" },
     docFailed: { es: "Ha fallado", en: "Failed" },
+    docIndexedEmpty: { es: "Indexado sin contenido", en: "Indexed with no content" },
+    docGone: { es: "Borrado", en: "Deleted" },
+    loadingDocs: { es: "Cargando documentos…", en: "Loading documents…" },
+    activateTitle: { es: "Activar una base existente", en: "Activate an existing base" },
+    activateHint: {
+      es: "Da a este proyecto acceso a una base que ya existe (también las del catálogo global), sin subir nada.",
+      en: "Give this project access to a base that already exists (global catalog ones too), without uploading anything.",
+    },
+    activate: { es: "Activar", en: "Activate" },
+    builtinBadge: { es: "Catálogo global", en: "Global catalog" },
+    stillIndexing: {
+      es: "Sigue indexando en segundo plano; puedes cerrar el asistente y volver luego.",
+      en: "Still indexing in the background; you can close the wizard and come back later.",
+    },
     stateEmpty: { es: "Sin documentos", en: "No documents" },
     stateIndexed: { es: "Indexada", en: "Indexed" },
     stateIndexing: { es: "Indexando", en: "Indexing" },
@@ -7698,6 +7722,7 @@ export const dictionary = {
     agentsCount: { es: "{count} agentes", en: "{count} agents" },
     oauthConnected: { es: "OAuth conectado", en: "OAuth connected" },
     oauthNotConnected: { es: "OAuth sin conectar", en: "OAuth not connected" },
+    oauthUnknown: { es: "OAuth: estado desconocido", en: "OAuth: status unknown" },
     egressBlocked: {
       es: "Host {host} sin abrir en el egress",
       en: "Host {host} not opened in egress",

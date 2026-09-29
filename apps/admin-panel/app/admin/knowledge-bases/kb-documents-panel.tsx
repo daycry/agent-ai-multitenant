@@ -96,7 +96,10 @@ export function KbDocumentsPanel({ kbId }: { kbId: string }) {
     refetchOnWindowFocus: false,
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["kb-documents", kbId] });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["knowledge-bases"] }); // cifras del listado
+    return queryClient.invalidateQueries({ queryKey: ["kb-documents", kbId] });
+  };
 
   const docs = docsQuery.data ?? [];
 

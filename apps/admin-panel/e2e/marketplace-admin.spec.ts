@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { seedSession } from "./helpers/session";
+import { waitForHydration } from "./helpers/hydration";
 
 /**
  * E2E for /admin/marketplace — the cohesive Tenant-Admin marketplace
@@ -181,6 +182,7 @@ test("catalog tab lists global + private listings, offers install and no install
 }) => {
   await setup(page);
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("marketplace-admin-page")).toBeVisible();
   await expect(page.getByTestId("catalog-list")).toBeVisible();
@@ -257,6 +259,7 @@ test("installing from the catalog posts the listing and lands where the flow con
   );
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`catalog-install-${PRIVATE_ID}`).click();
 
   // Manda el listing correcto y NO pide el camino asíncrono, que sin worker en
@@ -298,6 +301,7 @@ test("installed tab links consent and revokes / uninstalls", async ({ page }) =>
   );
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("marketplace-tab-installed").click();
 
   await expect(page.getByTestId(`installed-${INSTALL_ID}`)).toBeVisible();
@@ -323,6 +327,7 @@ test("installed tab uninstalls a listing", async ({ page }) => {
   });
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("marketplace-tab-installed").click();
 
   await page.getByTestId(`installed-uninstall-${INSTALL_ID}`).click();
@@ -368,6 +373,7 @@ test("shares tab creates an explicit cross-tenant share grant", async ({ page })
   );
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("marketplace-tab-publish").click();
 
   await expect(page.getByTestId("share-create-card")).toBeVisible();
@@ -394,6 +400,7 @@ test("shares tab revokes a grant", async ({ page }) => {
   });
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("marketplace-tab-publish").click();
 
   await expect(page.getByTestId(`share-${SHARE_ID}`)).toBeVisible();

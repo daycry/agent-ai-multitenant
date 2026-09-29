@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { seedSession } from "./helpers/session";
+import { waitForHydration } from "./helpers/hydration";
 
 /**
  * E2E del sidebar global (Plan 06.6 `task_06_6_10`), REPARADA para el menú
@@ -61,7 +62,7 @@ const PROJECT_ID = "8f14e45f-ceea-467a-9f0a-1a2b3c4d5e6f";
 const EXPECTED_ENTRIES: { label: string; group: string }[] = [
   { label: "Dashboard", group: "trabajo" },
   { label: "Tablero", group: "trabajo" },
-  { label: "Aprobaciones", group: "trabajo" },
+  { label: "Bandeja humana", group: "trabajo" },
   { label: "Agentes", group: "recursos" },
   { label: "Equipos", group: "recursos" },
   { label: "Proyectos", group: "recursos" },
@@ -108,6 +109,7 @@ test("el sidebar conserva las 10 entradas históricas (con sus grupos abiertos)"
 }) => {
   await setup(page, { openGroups: GROUPS_WITH_ENTRIES });
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   const nav = page.getByTestId("sidebar-nav");
   await expect(nav).toBeVisible();
@@ -121,6 +123,7 @@ test("un grupo colapsado no renderiza sus enlaces; al abrirlo aparecen", async (
   // Sin sembrar nada: "recursos" arranca cerrado (no contiene la ruta activa).
   await setup(page);
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   const nav = page.getByTestId("sidebar-nav");
   const header = page.getByTestId("nav-group-recursos");
@@ -146,6 +149,7 @@ test("un grupo colapsado no renderiza sus enlaces; al abrirlo aparecen", async (
 test("un tenant_admin no ve el grupo Plataforma (ADR 0028)", async ({ page }) => {
   await setup(page, { openGroups: ["plataforma"] });
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("sidebar-nav")).toBeVisible();
   // Ni la cabecera del grupo ni su entrada de SSO, ni forzando el abierto.
@@ -160,6 +164,7 @@ test("un tenant_admin no ve el grupo Plataforma (ADR 0028)", async ({ page }) =>
 test("un tenant_admin no tiene selector de área: sólo tiene Trabajo", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("sidebar-nav")).toHaveAttribute("data-area", "work");
   // Un selector de una sola opción no informa de nada: no se pinta.
@@ -169,6 +174,7 @@ test("un tenant_admin no tiene selector de área: sólo tiene Trabajo", async ({
 test("el System Admin cambia de área y la barra cambia con él", async ({ page }) => {
   await setup(page, { me: SYSTEM_ADMIN, openGroups: ["plataforma"] });
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   const nav = page.getByTestId("sidebar-nav");
   await expect(nav).toHaveAttribute("data-area", "work");
@@ -188,6 +194,7 @@ test("el System Admin cambia de área y la barra cambia con él", async ({ page 
 test("dentro de un proyecto la barra es la del proyecto, con su vuelta", async ({ page }) => {
   await setup(page);
   await page.goto(`/admin/projects/${PROJECT_ID}/plans`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   const nav = page.getByTestId("sidebar-nav");
   await expect(nav).toHaveAttribute("data-area", "project");
@@ -207,6 +214,7 @@ test("el portfolio de proyectos sigue siendo área Trabajo", async ({ page }) =>
   // listado es del tenant, y sólo entrar en UNO cambia de barra.
   await setup(page);
   await page.goto("/admin/projects", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("sidebar-nav")).toHaveAttribute("data-area", "work");
   await expect(page.getByTestId("nav-back-to-projects")).toHaveCount(0);
@@ -217,6 +225,7 @@ test("la seguridad de la cuenta vive en el menú de usuario, no en el lateral", 
   // ajuste del tenant. La ruta no cambió.
   await setup(page);
   await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("sidebar-nav").getByTestId("nav-security")).toHaveCount(0);
   await page.getByTestId("user-menu").click();

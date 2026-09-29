@@ -181,3 +181,55 @@ describe("bandeja humana unificada", () => {
     expect(pushMock).toHaveBeenCalledWith("/admin/plans/pv");
   });
 });
+
+describe("bandeja humana: carga y error no son «nada pendiente»", () => {
+  function failing(failPaths: string[], data: Record<string, unknown> = {}) {
+    apiFetchMock.mockImplementation((path: string) => {
+      if (failPaths.some((f) => path.startsWith(f))) return Promise.reject(new Error("boom"));
+      const key = Object.keys(data).find((k) => path.startsWith(k));
+      return Promise.resolve(key ? data[key] : []);
+    });
+  }
+
+  it("si /inbox/reviews da 500, su contador no es 0 y no hay «Nada pendiente»", async () => {
+    failing(["/inbox/reviews"], { "/notifications/logs": NOTIFS(0) });
+    mount();
+    await waitFor(() => expect(count("reviews")).toBe("!"));
+    expect(count("approvals")).toBe("0");
+    expect(screen.queryByTestId("inbox-all-clear")).toBeNull();
+  });
+
+  it("mientras cargan las consultas no hay «Nada pendiente» ni contadores a 0", async () => {
+    apiFetchMock.mockImplementation(() => new Promise(() => undefined));
+    mount();
+    expect(count("approvals")).toBe("…");
+    expect(count("reviews")).toBe("…");
+    expect(screen.queryByTestId("inbox-all-clear")).toBeNull();
+  });
+
+  it("si falla /human-queue, Aprobaciones lo dice en vez de esconderlo", async () => {
+    failing(["/human-queue"], { "/approvals": [APPROVAL], "/notifications/logs": NOTIFS(0) });
+    mount();
+    expect(await screen.findByTestId("human-queue-error")).toBeTruthy();
+    expect(screen.getByTestId("approval-card-ap1")).toBeTruthy();
+    expect(count("approvals")).toBe("!");
+  });
+
+  it("las Revisiones muestran su error, no una lista vacía", async () => {
+    tabParam = "reviews";
+    failing(["/inbox/reviews"], { "/notifications/logs": NOTIFS(0) });
+    mount();
+    expect(await screen.findByTestId("reviews-error")).toBeTruthy();
+  });
+
+  it("sin nada por aprobar y con tareas asignadas, abre en «Asignadas a mí»", async () => {
+    routes({
+      "/inbox/assignments": [{ id: "a1" }],
+      "/notifications/logs": NOTIFS(0),
+    });
+    mount();
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-tab-assigned").getAttribute("data-state")).toBe("active"),
+    );
+  });
+});

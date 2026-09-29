@@ -38,22 +38,27 @@ import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
-import { isTerminal, type DocumentStatus, type KbDocument, type KbRef } from "./kb-types";
+import { type DocumentStatus, type KbDocument, type KbRef } from "./kb-types";
+import { useIndexingBatch } from "./use-indexing-batch";
 
-const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
+type ShownStatus = DocumentStatus | "gone";
+
+const STATUS_VARIANT: Record<ShownStatus, BadgeVariant> = {
   pending: "muted",
   processing: "warning",
   indexed: "success",
+  indexed_empty: "muted",
   failed: "danger",
+  gone: "muted",
 };
 const STATUS_KEY = {
   pending: "docPending",
   processing: "docProcessing",
   indexed: "docIndexed",
+  indexed_empty: "docIndexedEmpty",
   failed: "docFailed",
+  gone: "docGone",
 } as const;
-
-const POLL_MS = 1500;
 
 type Choice = { kind: "existing"; id: string } | { kind: "new" } | null;
 
@@ -105,7 +110,7 @@ export function AddKnowledgeWizard({
   const [textTitle, setTextTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [kbId, setKbId] = useState<string | null>(null);
-  const [docIds, setDocIds] = useState<string[]>([]);
+  const [uploaded, setUploaded] = useState<KbDocument[]>([]);
 
   const catalogQuery = useQuery({
     queryKey: ["kb-catalog"],
@@ -118,22 +123,17 @@ export function AddKnowledgeWizard({
     (k) => !k.is_builtin && !k.embedding_model_stale,
   );
 
-  const docsQuery = useQuery({
-    queryKey: ["kb-documents", kbId],
-    queryFn: () => apiFetch<KbDocument[]>(`/knowledge-bases/${kbId}/documents`),
-    enabled: step === 3 && kbId !== null,
-    refetchOnWindowFocus: false,
-    refetchInterval: (query) => {
-      const seen = (query.state.data ?? []).filter((d) => docIds.includes(d.id));
-      const pending = seen.length < docIds.length || seen.some((d) => !isTerminal(d.status));
-      return pending ? POLL_MS : false;
-    },
+  // Sondea los ids concretos del lote, sólo con el diálogo abierto y con tope.
+  const batch = useIndexingBatch({
+    kbId,
+    docIds: uploaded.map((d) => d.id),
+    enabled: open && step === 3,
   });
-  const tracked = docIds.map(
-    (id) =>
-      (docsQuery.data ?? []).find((d) => d.id === id) ??
-      ({ id, title: "…", status: "pending", error_message: null } as KbDocument),
-  );
+  const tracked = uploaded.map((u) => {
+    const seen = batch.docs[u.id];
+    if (seen === null) return { ...u, status: "gone" as ShownStatus, error_message: null };
+    return seen ?? u;
+  });
 
   const step1Valid =
     choice?.kind === "existing" || (choice?.kind === "new" && newName.trim().length > 0);
@@ -162,7 +162,7 @@ export function AddKnowledgeWizard({
       }
       for (const file of files) {
         const created = await uploadFile(target, file);
-        setDocIds((prev) => [...prev, created.id]);
+        setUploaded((prev) => [...prev, created]);
         // Lo ya subido no se re-sube si el usuario reintenta tras un fallo.
         setFiles((prev) => prev.slice(1));
       }
@@ -172,7 +172,7 @@ export function AddKnowledgeWizard({
           target,
           new File([text], `${base}.md`, { type: "text/markdown" }),
         );
-        setDocIds((prev) => [...prev, created.id]);
+        setUploaded((prev) => [...prev, created]);
         setText("");
       }
       return target;
@@ -187,7 +187,10 @@ export function AddKnowledgeWizard({
   const retry = useMutation({
     mutationFn: (documentId: string) =>
       apiFetch(`/knowledge-bases/${kbId}/documents/${documentId}/reindex`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["kb-documents", kbId] }),
+    onSuccess: (_data, documentId) => {
+      batch.restart(documentId);
+      void queryClient.invalidateQueries({ queryKey: ["kb-documents", kbId] });
+    },
   });
 
   function finish() {
@@ -202,7 +205,9 @@ export function AddKnowledgeWizard({
       open={open}
       onOpenChange={(next) => {
         if (!submit.isPending) {
-          if (!next && step === 3) onDone();
+          // Si ya se creó o concedió una base (aunque la subida fallase a medias),
+          // quien abrió el asistente tiene que refrescarse al cerrarlo.
+          if (!next && kbId !== null) onDone();
           onOpenChange(next);
         }
       }}
@@ -311,6 +316,11 @@ export function AddKnowledgeWizard({
             </>
           ) : null}
 
+          {step === 3 && batch.timedOut ? (
+            <p className="text-muted-foreground text-xs" data-testid="kb-wizard-still-indexing">
+              {t("stillIndexing")}
+            </p>
+          ) : null}
           {step === 3 ? (
             <ul className="space-y-2" data-testid="kb-wizard-docs">
               {tracked.map((d) => (

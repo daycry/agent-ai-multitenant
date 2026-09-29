@@ -53,6 +53,23 @@ class KbCategorySummary(BaseModel):
     is_builtin: bool
 
 
+class KbDocumentStats(BaseModel):
+    """Agregados de los documentos de una base (calculados en SQL en el listado)."""
+
+    model_config = _BASE_CONFIG
+
+    total: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    last_updated_at: datetime | None = None
+
+
+class KbGrantedProject(BaseModel):
+    model_config = _BASE_CONFIG
+
+    project_id: UUID
+    name: str
+
+
 class KnowledgeBaseResponse(BaseModel):
     model_config = _BASE_CONFIG
 
@@ -81,6 +98,9 @@ class KnowledgeBaseResponse(BaseModel):
     # Plan 06.10: categoría embebida (puede ser null si la KB no
     # está categorizada o si la categoría fue borrada).
     category: KbCategorySummary | None = None
+    # Sólo los LISTADOS los rellenan (una consulta agrupada, no una por base).
+    document_stats: KbDocumentStats | None = None
+    granted_projects: list[KbGrantedProject] | None = None
 
 
 def to_kb_response(

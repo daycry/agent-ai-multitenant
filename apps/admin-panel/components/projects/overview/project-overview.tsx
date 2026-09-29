@@ -50,7 +50,7 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
               <div className="lg:col-span-2">
                 <WarningsBlock warnings={data.warnings} />
               </div>
-              <SpendBlock spend={data.spend} />
+              <SpendBlock spend={data.spend} base={base} />
               <div className="lg:col-span-2">
                 <PlansBlock plans={data.plans} base={base} />
               </div>

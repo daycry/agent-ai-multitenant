@@ -59,23 +59,24 @@ function wire(documentSequence: Record<string, unknown>[][]) {
       return Promise.resolve({ ...KB, id: "kb-new", name: (init.body as { name: string }).name });
     if (path.endsWith("/projects") && init?.method === "POST") return Promise.resolve({});
     if (path.endsWith("/reindex")) return Promise.resolve(doc("pending"));
-    if (path.endsWith("/documents")) {
+    // El sondeo pide cada documento del lote por su id, no la página del listado.
+    if (/\/documents\/doc-1$/.test(path)) {
       const seq = documentSequence[Math.min(call, documentSequence.length - 1)];
       call += 1;
-      return Promise.resolve(seq);
+      return Promise.resolve(seq[0]);
     }
     return Promise.resolve([]);
   });
 }
 
-function mount(onDone = vi.fn()) {
+function mount(onDone = vi.fn(), onOpenChange = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <LanguageProvider>
       <QueryClientProvider client={client}>
         <AddKnowledgeWizard
           open
-          onOpenChange={vi.fn()}
+          onOpenChange={onOpenChange}
           projectId={PROJECT_ID}
           grantedKbIds={new Set()}
           onDone={onDone}
@@ -183,5 +184,51 @@ describe("AddKnowledgeWizard", () => {
         method: "POST",
       }),
     );
+  });
+
+  it("indexed_empty es un estado terminal con su texto: el sondeo acaba", async () => {
+    wire([[doc("indexed_empty")]]);
+    mount();
+    fireEvent.click(await screen.findByTestId("kb-wizard-pick-kb-1"));
+    fireEvent.click(screen.getByTestId("kb-wizard-next"));
+    fireEvent.change(screen.getByTestId("kb-wizard-text"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("kb-wizard-submit"));
+
+    const row = await screen.findByTestId("kb-wizard-doc-doc-1");
+    await waitFor(() => expect(row.getAttribute("data-status")).toBe("indexed_empty"));
+    expect(row.textContent).toContain("Indexado sin contenido");
+    const polls = () =>
+      apiFetchMock.mock.calls.filter(([p]) => String(p).endsWith("/documents/doc-1")).length;
+    const before = polls();
+    await new Promise((r) => setTimeout(r, 1800));
+    expect(polls()).toBe(before);
+    // Nunca pide la página entera del listado.
+    expect(
+      apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/knowledge-bases/kb-1/documents")),
+    ).toBe(false);
+  });
+
+  it("cerrar el asistente tras un fallo parcial avisa con onDone (la base creada aparece)", async () => {
+    wire([[doc("indexed")]]);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+      text: async () => "boom",
+    });
+    const onDone = vi.fn();
+    const onOpenChange = vi.fn();
+    mount(onDone, onOpenChange);
+    fireEvent.click(await screen.findByTestId("kb-wizard-create-new"));
+    fireEvent.change(screen.getByTestId("kb-wizard-new-name"), { target: { value: "Legal" } });
+    fireEvent.click(screen.getByTestId("kb-wizard-next"));
+    fireEvent.change(screen.getByTestId("kb-wizard-text"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("kb-wizard-submit"));
+    await screen.findByTestId("kb-wizard-error");
+    expect(screen.getByTestId("kb-wizard").getAttribute("data-step")).toBe("2");
+
+    fireEvent.keyDown(screen.getByTestId("kb-wizard"), { key: "Escape" });
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(onDone).toHaveBeenCalled();
   });
 });

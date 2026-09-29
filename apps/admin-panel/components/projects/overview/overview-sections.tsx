@@ -15,7 +15,7 @@ import type {
 
 const LINK = "text-xs font-medium hover:underline";
 
-/** Planes activos con su progreso; enlaza a la pestaña de planes. */
+/** Planes activos con su progreso; enlaza al tablero de planes del proyecto. */
 export function PlansBlock({ plans, base }: { plans: OverviewPlan[]; base: string }) {
   const t = useT("projectOverview");
   return (
@@ -23,7 +23,7 @@ export function PlansBlock({ plans, base }: { plans: OverviewPlan[]; base: strin
       title={t("plansTitle")}
       testid="overview-plans"
       action={
-        <Link href={`${base}/plans`} className={LINK} data-testid="overview-plans-link">
+        <Link href={`${base}/board`} className={LINK} data-testid="overview-plans-link">
           {t("plansOpen")}
         </Link>
       }
@@ -60,7 +60,7 @@ export function PlansBlock({ plans, base }: { plans: OverviewPlan[]; base: strin
   );
 }
 
-/** Runs en curso y último fallo; enlaza a las tareas del proyecto. */
+/** Runs en curso y último fallo; enlaza a la pestaña Runs del proyecto. */
 export function RunsBlock({ runs }: { runs: OverviewRuns }) {
   const t = useT("projectOverview");
   return (
@@ -92,7 +92,7 @@ export function RunsBlock({ runs }: { runs: OverviewRuns }) {
 }
 
 /** El gasto del proyecto contra su presupuesto. Sin permiso para verlo, no se pinta. */
-export function SpendBlock({ spend }: { spend: OverviewSpend }) {
+export function SpendBlock({ spend, base }: { spend: OverviewSpend; base: string }) {
   const t = useT("projectOverview");
   if (spend.reason === "forbidden") return null;
   return (
@@ -112,7 +112,7 @@ export function SpendBlock({ spend }: { spend: OverviewSpend }) {
           )}
         </div>
       )}
-      <Link href="/admin/tenant-stats" className={LINK} data-testid="overview-spend-link">
+      <Link href={`${base}/costs`} className={LINK} data-testid="overview-spend-link">
         {t("spendOpen")}
       </Link>
     </SectionCard>
@@ -126,6 +126,8 @@ function warningText(t: Translator<"projectOverview">, w: OverviewWarning): stri
       return t("warnMcpNotConnected", { names });
     case "mcp_no_tools":
       return t("warnMcpNoTools", { names });
+    case "vault_unavailable":
+      return t("warnVaultUnavailable", { names });
     case "mcp_egress_blocked":
       return t("warnMcpEgress", { count: w.count });
     case "repo_not_synced":

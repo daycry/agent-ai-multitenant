@@ -187,6 +187,7 @@ export default function KnowledgeBasesPage() {
           onOpenChange={(v) => {
             if (!v) {
               void queryClient.invalidateQueries({ queryKey: ["kb-projects", assignmentsFor.id] });
+              refetch(); // los «concedida a» de las filas vienen en el listado
               setAssignmentsFor(null);
             }
           }}
@@ -245,6 +246,7 @@ export default function KnowledgeBasesPage() {
           onGranted={() => {
             setGranting(null);
             void queryClient.invalidateQueries({ queryKey: ["kb-projects", granting.id] });
+            refetch();
           }}
         />
       )}

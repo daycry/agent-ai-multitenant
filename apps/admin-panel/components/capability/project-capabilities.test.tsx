@@ -164,6 +164,18 @@ describe("pestaña Capacidades del proyecto", () => {
     expect(docs).toContain("1.2.0");
   });
 
+  it("con Vault caído la tarjeta dice «desconocido» y no ofrece Conectar", async () => {
+    const unknown = MCP.map((s) =>
+      s.oauth.required ? { ...s, oauth: { required: true, connected: null } } : s,
+    );
+    wireApi({ "/projects/proj-1/capabilities": { ...CAPABILITIES, mcp: unknown } });
+    mount();
+    await waitFor(() => expect(screen.getByTestId("capability-card-docs")).toBeTruthy());
+    const badge = screen.getByTestId("capability-oauth-atlassian").textContent ?? "";
+    expect(badge).toContain("desconocido");
+    expect(badge).not.toContain("sin conectar");
+  });
+
   it("enseña la conexión OAuth, las tools importadas y el egress de cada servidor", async () => {
     wireApi();
     mount();

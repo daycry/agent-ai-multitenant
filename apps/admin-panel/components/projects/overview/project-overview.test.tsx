@@ -47,7 +47,7 @@ const FULL: ProjectOverviewData = {
       execution_id: "e9",
       url_path: "/admin/executions/e9",
     },
-    url_path: `${BASE}/tasks`,
+    url_path: `${BASE}/runs`,
   },
   spend: {
     available: true,
@@ -62,9 +62,9 @@ const FULL: ProjectOverviewData = {
     period: "monthly",
   },
   warnings: [
-    { kind: "mcp_not_connected", count: 1, names: ["atlassian"], url_path: `${BASE}/mcp-servers` },
-    { kind: "mcp_no_tools", count: 1, names: ["atlassian"], url_path: `${BASE}/mcp-servers` },
-    { kind: "mcp_egress_blocked", count: 2, names: [], url_path: `${BASE}/mcp-servers` },
+    { kind: "mcp_not_connected", count: 1, names: ["atlassian"], url_path: `${BASE}/capabilities` },
+    { kind: "mcp_no_tools", count: 1, names: ["atlassian"], url_path: `${BASE}/capabilities` },
+    { kind: "mcp_egress_blocked", count: 2, names: [], url_path: `${BASE}/capabilities` },
     { kind: "repo_not_synced", count: 1, names: [], url_path: BASE },
     { kind: "role_without_agent", count: 1, names: ["qa"], url_path: `${BASE}/team` },
   ],
@@ -107,17 +107,15 @@ describe("ProjectOverview", () => {
     const plans = await screen.findByTestId("overview-plans");
     expect(plans.textContent).toContain("Migrar login");
     expect(plans.textContent).toContain("1 de 4 tareas");
-    expect(screen.getByTestId("overview-plans-link").getAttribute("href")).toBe(`${BASE}/plans`);
+    expect(screen.getByTestId("overview-plans-link").getAttribute("href")).toBe(`${BASE}/board`);
 
     const runs = screen.getByTestId("overview-runs");
     expect(runs.textContent).toContain("2 en curso");
     expect(runs.textContent).toContain("Tarea rota");
-    expect(screen.getByTestId("overview-runs-link").getAttribute("href")).toBe(`${BASE}/tasks`);
+    expect(screen.getByTestId("overview-runs-link").getAttribute("href")).toBe(`${BASE}/runs`);
 
     expect(screen.getByTestId("overview-spend-percent").textContent).toContain("42%");
-    expect(screen.getByTestId("overview-spend-link").getAttribute("href")).toBe(
-      "/admin/tenant-stats",
-    );
+    expect(screen.getByTestId("overview-spend-link").getAttribute("href")).toBe(`${BASE}/costs`);
 
     const activity = screen.getByTestId("overview-activity");
     expect(activity.textContent).toContain("Escribir tests");
@@ -138,9 +136,29 @@ describe("ProjectOverview", () => {
       `${BASE}/team`,
     );
     expect(screen.getByTestId("overview-warning-mcp_not_connected").getAttribute("href")).toBe(
-      `${BASE}/mcp-servers`,
+      `${BASE}/capabilities`,
     );
     expect(screen.getByTestId("overview-warning-repo_not_synced").getAttribute("href")).toBe(BASE);
+  });
+
+  it("Vault no disponible es «no lo sé», no «sin conectar»", async () => {
+    renderOverview({
+      ...FULL,
+      warnings: [
+        {
+          kind: "vault_unavailable",
+          count: 1,
+          names: ["atlassian"],
+          url_path: `${BASE}/capabilities`,
+        },
+      ],
+    });
+    const warnings = await screen.findByTestId("overview-warnings");
+    expect(warnings.textContent).toContain("Vault no disponible): atlassian");
+    expect(warnings.textContent).not.toContain("sin conectar");
+    expect(screen.getByTestId("overview-warning-vault_unavailable").getAttribute("href")).toBe(
+      `${BASE}/capabilities`,
+    );
   });
 
   it("dice que no hay avisos en vez de callar", async () => {
@@ -165,7 +183,7 @@ describe("ProjectOverview", () => {
     renderOverview({
       ...FULL,
       plans: [],
-      runs: { running: 0, last_failure: null, url_path: `${BASE}/tasks` },
+      runs: { running: 0, last_failure: null, url_path: `${BASE}/runs` },
       activity: [],
     });
     expect(await screen.findByTestId("overview-plans-empty")).toBeTruthy();

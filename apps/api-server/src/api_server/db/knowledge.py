@@ -161,6 +161,14 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Sof
             "status",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Sirve el listado paginado `created_at DESC, id` por base (migración 0150).
+        Index(
+            "ix_documents_kb_created",
+            "kb_id",
+            literal_column("created_at DESC"),
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_documents_tenant_id", "tenant_id"),
         # Lease de encolado de la ingesta (migración 0097): el barrido del beat
         # reclama documentos `pending` cuyo lease venció. Parcial a propósito —

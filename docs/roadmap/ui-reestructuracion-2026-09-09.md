@@ -119,6 +119,10 @@ Documentación. Un enlace a una ruta de Sistema desde Trabajo abre el área Sist
 | `GET /projects/{id}/capabilities`           | MCP (con procedencia, conexión, tools importadas, egress), tools y skills desplegadas en el proyecto, unificando `mcp_servers`, `mcp_server_warnings`, despliegues del marketplace y el catálogo                                                                                                                                                                                               |
 | `GET /memories` (ampliado)                  | Filtros por ámbito, proyecto, agente, categoría y fecha; cada fila con `created_by` (persona o agente), `execution_id`, `project_id`/`team_id`, `recall_count`. Lo que el dominio no tenga registrado sale `null` y la UI dice «desconocida»                                                                                                                                                   |
 | `GET /marketplace/installations` (ampliado) | `deployments: [{project_id, project_name}]` y el nombre del listing, para «dónde está desplegado» sin UUID                                                                                                                                                                                                                                                                                     |
+| `GET /projects/{id}/team`                   | Equipo del proyecto: miembros por rol, agentes humanos y huecos de rol (`role_gaps`, la misma regla que el aviso del Resumen); cualquier miembro (`task_ui_12`)                                                                                                                                                                                                                                |
+| `GET /projects/{id}/costs`                  | Gasto de IA del proyecto por plan, agente y modelo contra su presupuesto, con la pausa; sólo `tenant_admin` (`task_ui_12`)                                                                                                                                                                                                                                                                     |
+| `GET /runs?project_id=` (filtro nuevo)      | El listado de runs acotado a un proyecto; también en `tenant_stats` (`task_ui_12`)                                                                                                                                                                                                                                                                                                             |
+| `GET /memories/counts` y `/memories/search` | Contador por ámbito y buscador híbrido con la misma regla de privadas que el listado (`task_ui_31`)                                                                                                                                                                                                                                                                                            |
 
 Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
@@ -288,6 +292,9 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
     creyó que el dominio no guarda roles requeridos, pero sí los guarda: cada tarea del `specification` de
     un plan lleva su `role` (ADR 0091), y `team_role_agents` dice qué roles cubre el equipo. Lo añade
     `task_ui_12`, que necesita el mismo cálculo para los huecos de rol de la pestaña Equipo.
+  - **Actualizado el 2026-09-29.** El aviso `role_without_agent` ya existe (entregado con `task_ui_12`, una
+    sola definición en `dashboard/project_team.role_gaps`), y Runs, Equipo y Costes ya tienen pestaña. La casilla
+    sigue abierta por la revisión adversarial de las olas 2 y 3 (ver §«Revisión adversarial de las olas 2 y 3»).
 
 ### `task_ui_11` — Tablero dentro del proyecto y portfolio del tenant
 
@@ -377,6 +384,56 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Coste**: 3 d.
 
 ---
+
+## Revisión adversarial de las olas 2 y 3
+
+**Intento 1 (2026-09-29)**, skill `adversarial-review` del plugin sobre `828ddb4f..aa1cc4e8`, lentes A+B+C+D
+en paralelo con el agente `reviewer`. La C y la D las activó el selector: SQL con `format` en
+`project_costs.py`, la ruta OAuth y `await` dentro de bucles. Correcciones con el agente `implementer`.
+
+| #   | Grado     | Lente | Gap                                                                                                                       | Tarea        | Estado                                                                                                                                 |
+| --- | --------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Important | D, B  | La sonda OAuth lee Vault en síncrono, en serie y sin caché en un endpoint con polling de 30 s, y un token corrupto da 500 | ui_10, ui_20 | corregido                                                                                                                              |
+| 2   | Important | B, D  | Los contadores de cada base se calculan sobre la primera página, y se hacen dos peticiones por fila                       | ui_21        | corregido: agregados en SQL en el listado e índice `ix_documents_kb_created` (migración 0150, reversible)                              |
+| 3   | Important | D, B  | El sondeo del asistente no acaba con `indexed_empty`, con más de 100 ficheros ni al cerrar el diálogo                     | ui_21        | corregido                                                                                                                              |
+| 4   | Important | A     | Una base del catálogo o una ya existente no se puede conceder desde el proyecto sin subir un documento                    | ui_21        | corregido: «activar una base existente», incluidas las built-in                                                                        |
+| 5   | Important | B     | La bandeja pinta «Nada pendiente» y contador 0 cuando una consulta falla o está cargando                                  | ui_03        | corregido                                                                                                                              |
+| 6   | Important | A, B  | `e2e/approval-request.spec.ts` busca un testid retirado                                                                   | ui_03        | corregido                                                                                                                              |
+| 7   | Important | A     | La URL del enunciado se cae sin decisión escrita                                                                          | ui_21        | ADR 0170 `proposed`: decide el operador. La mitad URL queda abierta                                                                    |
+| 8   | Minor     | D     | Resumen sin ventana en `executions.created_at` y sin caché                                                                | ui_10        | corregido                                                                                                                              |
+| 9   | Minor     | A     | Los bloques del Resumen enlazan a las pantallas antiguas y no a las pestañas                                              | ui_10        | corregido                                                                                                                              |
+| 10  | Minor     | A, C  | La consulta de categorías sin predicado de tenant (CWE-639, defensa en profundidad)                                       | ui_21        | corregido                                                                                                                              |
+| 11  | Minor     | B     | La pestaña Equipo oculta a los miembros built-in que `/teams/{id}` sí enseña                                              | ui_12        | corregido                                                                                                                              |
+| 12  | Minor     | A, B  | El menú de Trabajo mantiene cuatro entradas que llevan a la misma bandeja                                                 | ui_03        | corregido                                                                                                                              |
+| 13  | Minor     | A     | Vocabulario de ingesta en la tarjeta, fuera del detalle del fallo                                                         | ui_21        | corregido                                                                                                                              |
+| 14  | Minor     | B     | Cerrar el asistente tras un fallo parcial no refresca la lista                                                            | ui_21        | corregido                                                                                                                              |
+| 15  | Minor     | A     | La casilla de `task_ui_11` estaba sin marcar y su nota decía «cerrada»                                                    | ui_11        | corregido                                                                                                                              |
+| 16  | Minor     | A     | La tabla «Endpoints nuevos» no recogía `/team`, `/costs` ni `/runs?project_id=`                                           | ui_12        | corregido                                                                                                                              |
+| 17  | Minor     | A     | «Probado» y «Responsable» se decidieron sólo en comentarios                                                               | ui_20, ui_11 | corregido: anotado abajo                                                                                                               |
+| 18  | Minor     | B     | «Conectar» desde Capacidades vuelve a la pantalla de configuración MCP                                                    | ui_20        | deuda aceptada: el callback OAuth es un contrato de ADR 0127; cambiarlo pide tocar su redirección                                      |
+| 19  | Minor     | C     | Un miembro puede sumar el coste por proyecto con `/runs?project_id=`, que `/costs` le niega                               | ui_12        | **decisión del operador**: el coste por run es visible a miembros desde `5211c8ac`; si pasa a ser sólo de admin, se recorta en `/runs` |
+
+Dos decisiones que el enunciado no fijaba y que se anotan aquí para que no vivan sólo en el código
+(gap 17). **«Probado»** (`task_ui_20`): el dominio no guarda el resultado de «Probar». La tarjeta
+enseña el de la última prueba de esta sesión y no persiste nada. **«Responsable»** del portfolio
+(`task_ui_11`): es el `created_by` del plan, porque el plan no tiene otro campo de responsable.
+
+Los e2e que clican antes de la hidratación (`sidebar-complete`, `kb-ui`, `marketplace-admin`,
+`marketplace-review`, `tools-catalog`) se corrigieron en la misma tanda con una espera de hidratación
+común (`e2e/helpers/hydration.ts`) sobre una señal real: `data-hydrated` en `<html>`, que pone
+`components/layout/hydration-marker.tsx`.
+
+**Verificación del intento 1**, hecha por el orquestador sobre el árbol con las tres tandas de corrección:
+vitest **1777 passed** (205 ficheros); integración de las zonas tocadas **89 passed**, con cross-tenant; `tsc`,
+eslint, `check-i18n`, `check-component-size`, `ruff` y `mypy_gate` (802 ficheros) limpios; guardas de docs y rutas
+**510 passed**. En e2e, el bloque del Resumen, Runs, Capacidades, Conocimiento, bandeja, menú, memorias y dashboard
+da **30 de 31**. El único rojo era el spec de `kb-ui`, que buscaba el enlace de ingesta en la fila cuando la
+corrección 13 lo movió al detalle. Ajustado, da **6 de 6**. Dos notas de corrección: el predicado de categorías es
+`tenant_id = :tid OR is_builtin` y no `tenant_id IS NULL`, porque desde la migración 0030 las categorías built-in
+viven bajo el tenant de plataforma (lo encontró el implementador y es correcto). Y queda una **incoherencia
+Minor nueva**: la pestaña Equipo ya enseña a los miembros built-in, pero `team_role_agents` (dispatch del
+ADR 0091) sigue sin contarlos, así que un built-in miembro no tapa su hueco de rol. Cambiar eso cambia a quién
+asigna el dispatch, así que se lleva al intento 2 en vez de tocarlo aquí.
 
 ## Tests humanos
 

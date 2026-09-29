@@ -88,7 +88,10 @@ async def _members(session: AsyncSession, tenant_id: UUID, team_id: UUID) -> lis
         sa_text(
             "SELECT a.id, a.name, a.role, a.agent_type, tm.is_team_leader"
             " FROM team_members tm JOIN agents a ON a.id = tm.agent_id"
-            " WHERE tm.team_id = :team AND tm.tenant_id = :tid AND a.tenant_id = :tid"
+            " WHERE tm.team_id = :team AND tm.tenant_id = :tid"
+            # Mismo criterio de visibilidad que `/teams/{id}` (RLS `agents_global_builtin_read`):
+            # los del tenant y los built-in de plataforma, nunca los de otro tenant.
+            " AND (a.tenant_id = :tid OR a.scope = 'global_builtin')"
             " AND a.deleted_at IS NULL"
             " ORDER BY a.role, tm.assignment_priority, a.name"
         ),

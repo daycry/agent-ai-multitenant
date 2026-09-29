@@ -54,10 +54,10 @@ const OVERVIEW = {
       url_path: `${BASE}/plans/pl1`,
     },
   ],
-  runs: { running: 1, last_failure: null, url_path: `${BASE}/tasks` },
+  runs: { running: 1, last_failure: null, url_path: `${BASE}/runs` },
   spend: { available: false, reason: "no_budget_configured" },
   warnings: [
-    { kind: "mcp_no_tools", count: 1, names: ["atlassian"], url_path: `${BASE}/mcp-servers` },
+    { kind: "mcp_no_tools", count: 1, names: ["atlassian"], url_path: `${BASE}/capabilities` },
   ],
   activity: [],
   generated_at: "2026-09-29T10:00:00+00:00",
@@ -99,7 +99,7 @@ test("el Resumen es la raíz del proyecto y enseña avisos, planes y runs", asyn
   await expect(page.getByTestId("overview-plans")).toContainText("Migrar login");
   await expect(page.getByTestId("overview-warning-mcp_no_tools")).toHaveAttribute(
     "href",
-    `${BASE}/mcp-servers`,
+    `${BASE}/capabilities`,
   );
   await expect(page.getByTestId("nav-project-overview")).toHaveAttribute("aria-current", "page");
 });
@@ -159,5 +159,5 @@ test("un bloque del Resumen lleva a su pestaña", async ({ page }) => {
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
 
   await page.getByTestId("overview-warning-mcp_no_tools").click();
-  await expect(page).toHaveURL(`${BASE}/mcp-servers`);
+  await expect(page).toHaveURL(`${BASE}/capabilities`);
 });

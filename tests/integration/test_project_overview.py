@@ -272,6 +272,7 @@ async def test_repo_warning_follows_last_git_sync(configured_app, migrations_pg_
 
     await set_sync({"at": "2026-09-29T10:00:00+00:00", "status": "ok"})
     assert "repo_not_synced" not in _by_kind(await _overview(configured_app, a["project"], token))
+    await _bust_overview_cache()
     await set_sync({"at": "2026-09-29T10:00:00+00:00", "status": "error", "error": "boom"})
     assert "repo_not_synced" in _by_kind(await _overview(configured_app, a["project"], token))
 
@@ -400,6 +401,7 @@ async def test_role_without_agent_warning_follows_the_team(
     assert warning["count"] == 2
     assert warning["url_path"] == f"/admin/projects/{a['project']}/team"
     # Equipo con backend_dev pero sin qa: sólo qa.
+    await _bust_overview_cache()
     await _add_team(migrations_pg_dsn, a, [("backend_dev", "ai")])
     warning = _by_kind(await _overview(configured_app, a["project"], token))["role_without_agent"]
     assert warning["names"] == ["qa"]
@@ -595,3 +597,176 @@ async def test_runs_can_be_filtered_by_project(configured_app, migrations_pg_dsn
     everything = await _api_get(configured_app, "/runs", token)
     assert len(mine) == 2 and len(other) == 1 and len(everything) == 3
     assert {r["plan_title"] for r in mine} == {"Plan activo"}
+
+
+# ---------------------------------------------------------------------------
+# Revisión adversarial (intento 1): sonda OAuth de tres estados, ventana y caché, enlaces.
+# ---------------------------------------------------------------------------
+async def _bust_overview_cache() -> None:
+    """La caché de 30 s del Resumen: los tests que mutan la BD entre dos lecturas la vacían."""
+    from api_server.auth.deps import get_redis
+
+    redis = get_redis()
+    async for key in redis.scan_iter(match="dashboard:project:*"):
+        await redis.delete(key)
+
+
+class _SealedVault:
+    def resolve(self, auth_ref: str) -> dict[str, str]:
+        from shared_mcp import MCPAuthError
+
+        raise MCPAuthError("Vault read failed") from RuntimeError("Vault is sealed")
+
+    def write(self, auth_ref: str, values: dict[str, str]) -> None: ...
+
+
+@pytest.mark.asyncio
+async def test_vault_down_is_unknown_not_unconnected(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    from api_server.mcp import oauth_probe
+    from api_server.routers.mcp import get_vault_resolver
+
+    oauth_probe.clear_oauth_probe_cache()
+    a = (await _seed(migrations_pg_dsn))["a"]
+    configured_app.dependency_overrides[get_vault_resolver] = _SealedVault
+    try:
+        body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    finally:
+        configured_app.dependency_overrides.pop(get_vault_resolver, None)
+    warnings = _by_kind(body)
+    assert "mcp_not_connected" not in warnings
+    assert warnings["vault_unavailable"]["names"] == ["atlassian"]
+    assert (
+        warnings["vault_unavailable"]["url_path"] == f"/admin/projects/{a['project']}/capabilities"
+    )
+
+
+@pytest.mark.asyncio
+async def test_corrupt_vault_entry_does_not_500(configured_app, migrations_pg_dsn: str) -> None:
+    from api_server.mcp import oauth_probe
+    from api_server.routers.mcp import get_vault_resolver
+    from shared_mcp import StaticVaultResolver, oauth_vault_path
+
+    oauth_probe.clear_oauth_probe_cache()
+    a = (await _seed(migrations_pg_dsn))["a"]
+    path = oauth_vault_path(
+        tenant_id=str(a["tenant"]), project_id=str(a["project"]), server_name="atlassian"
+    )
+    resolver = StaticVaultResolver({path: {"oauth_token": "{corrupto"}})
+    configured_app.dependency_overrides[get_vault_resolver] = lambda: resolver
+    try:
+        body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    finally:
+        configured_app.dependency_overrides.pop(get_vault_resolver, None)
+    assert "vault_unavailable" in _by_kind(body)
+
+
+@pytest.mark.asyncio
+async def test_overview_is_cached_per_project_and_trimmed_after(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    from api_server.auth.deps import get_redis
+
+    a = (await _seed(migrations_pg_dsn))["a"]
+    admin_token = await _token(a["admin"], a["tenant"])
+    first = await _overview(configured_app, a["project"], admin_token)
+    ttl = await get_redis().ttl(f"dashboard:project:{a['tenant']}:{a['project']}")
+    assert 0 < ttl <= 30
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("UPDATE projects SET name = 'Renombrado' WHERE id = $1", a["project"])
+    finally:
+        await conn.close()
+    again = await _overview(configured_app, a["project"], admin_token)
+    assert again["project"]["name"] == first["project"]["name"], "sirve la caché de 30 s"
+    # El recorte por rol es posterior a la caché: el miembro no hereda el gasto del admin.
+    member = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    assert member["spend"] == {"available": False, "reason": "forbidden"}
+
+
+def test_executions_queries_have_a_partition_pruning_window() -> None:
+    from datetime import timedelta
+
+    from api_server.dashboard import project
+
+    assert timedelta(days=30) <= project.EXECUTIONS_WINDOW <= timedelta(days=180)
+
+
+@pytest.mark.asyncio
+async def test_old_executions_fall_outside_the_window(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from api_server.dashboard import project
+
+    # Ventana de 1 h: con filas de hace 2 días (siempre hay partición) basta para fijar
+    # que el corte se aplica, sin depender de qué particiones antiguas existan.
+    monkeypatch.setattr(project, "EXECUTIONS_WINDOW", timedelta(hours=1))
+    a = (await _seed(migrations_pg_dsn))["a"]
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE executions SET created_at = now() - interval '2 days'"
+            " WHERE tenant_id = $1 AND status = 'failed'",
+            a["tenant"],
+        )
+    finally:
+        await conn.close()
+    body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    assert body["runs"]["last_failure"] is None
+    assert all(r["status"] != "failed" for r in body["activity"])
+
+
+@pytest.mark.asyncio
+async def test_blocks_link_to_the_project_tabs(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    base = f"/admin/projects/{a['project']}"
+    assert body["runs"]["url_path"] == f"{base}/runs"
+    warnings = _by_kind(body)
+    for kind in ("mcp_not_connected", "mcp_no_tools", "mcp_egress_blocked"):
+        assert warnings[kind]["url_path"] == f"{base}/capabilities"
+
+
+@pytest.mark.asyncio
+async def test_team_tab_lists_builtin_members_but_not_other_tenants_agents(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """`/teams/{id}` enseña los agentes built-in (scope `global_builtin`, bajo el tenant de
+    plataforma) que son miembros; la pestaña Equipo debe hacer lo mismo, sin abrir agentes
+    de otro tenant."""
+    seeded = await _seed(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    token = await _token(a["user"], a["tenant"])
+    await _add_team(migrations_pg_dsn, a, [("backend_dev", "ai")])
+    builtin, foreign = uuid4(), uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        team = await conn.fetchval("SELECT team_id FROM projects WHERE id = $1", a["project"])
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, agent_type, role, system_prompt, scope)"
+            " VALUES ($1, $2, 'Built-in QA', 'ai', 'qa', 'p', 'global_builtin')",
+            builtin,
+            _PLATFORM_TENANT_ID,
+        )
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, agent_type, role, system_prompt, scope)"
+            " VALUES ($1, $2, 'Ajeno', 'ai', 'qa', 'p', 'global_tenant_template')",
+            foreign,
+            b["tenant"],
+        )
+        for agent, tenant in ((builtin, a["tenant"]), (foreign, a["tenant"])):
+            await conn.execute(
+                "INSERT INTO team_members (team_id, agent_id, tenant_id) VALUES ($1, $2, $3)",
+                team,
+                agent,
+                tenant,
+            )
+    finally:
+        await conn.close()
+    body = await _api_get(configured_app, f"/projects/{a['project']}/team", token)
+    names = {m["name"] for m in body["members"]}
+    assert "Built-in QA" in names
+    assert "Ajeno" not in names

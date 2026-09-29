@@ -141,6 +141,13 @@ function routeApi(path: string): unknown {
         created_by: null,
         created_at: "2026-08-20T00:00:00Z",
         updated_at: "2026-08-20T00:00:00Z",
+        // Los agregados vienen en el listado (`task_ui_21`), no de `…/documents`.
+        document_stats: {
+          total: 1,
+          by_status: { indexed: 1 },
+          last_updated_at: "2026-08-20T00:00:00Z",
+        },
+        granted_projects: [],
       },
     ];
   }

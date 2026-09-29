@@ -6,15 +6,17 @@
  * Las bases de conocimiento concedidas al proyecto como tarjetas (nombre,
  * categoría, documentos, estado de indexado, última actualización) y el
  * asistente «Añadir conocimiento» de tres pasos, que concede la base al proyecto
- * sin preguntarlo. Crear bases sin proyecto y conceder una existente a otros
+ * sin preguntarlo, y «Activar una base existente» (catálogo global incluido) para
+ * concederla sin subir nada. Crear bases sin proyecto y conceder una existente a otros
  * proyectos vive en `/admin/knowledge-bases` (misma pantalla, a nivel tenant).
  */
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Library, Plus } from "lucide-react";
 
+import { ActivateExistingKb } from "@/components/knowledge/activate-existing-kb";
 import { AddKnowledgeWizard } from "@/components/knowledge/add-knowledge-wizard";
 import { ProjectKbCard } from "@/components/knowledge/project-kb-card";
 import type { KbRef } from "@/components/knowledge/kb-types";
@@ -36,6 +38,7 @@ export default function ProjectKnowledgeBasesPage() {
   const tKbs = useT("projectKbs");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
+  const queryClient = useQueryClient();
   const [wizardKey, setWizardKey] = useState(0);
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -100,13 +103,18 @@ export default function ProjectKnowledgeBasesPage() {
         </div>
       )}
 
+      <ActivateExistingKb projectId={projectId} grantedKbIds={new Set(kbs.map((k) => k.id))} />
+
       <AddKnowledgeWizard
         key={wizardKey}
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         projectId={projectId}
         grantedKbIds={new Set(kbs.map((k) => k.id))}
-        onDone={() => void kbsQuery.refetch()}
+        onDone={() => {
+          void kbsQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: ["kb-catalog"] });
+        }}
       />
     </div>
   );

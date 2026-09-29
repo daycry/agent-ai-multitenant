@@ -20,6 +20,7 @@ export interface McpServerCapability {
   transport: string | null;
   url: string | null;
   origin: McpOrigin;
+  /** `connected: null` con `required` = desconocido (Vault no disponible), no «sin conectar». */
   oauth: { required: boolean; connected: boolean | null };
   imported_tools: number;
   egress: { blocked: boolean; host: string | null; code: string | null };

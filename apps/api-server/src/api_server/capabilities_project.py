@@ -37,7 +37,7 @@ from api_server.db.platform_settings import get_platform_setting
 from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
 from api_server.egress.mcp_discovery import egress_warnings_for_servers
 from api_server.mcp.import_tools import count_imported_tools
-from api_server.mcp.oauth_probe import OAuthConnected
+from api_server.mcp.oauth_probe import OAuthConnected, probe_many
 
 __all__ = [
     "McpEgress",
@@ -67,7 +67,9 @@ class McpOAuth(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     required: bool
-    #: ``None`` cuando el servidor no usa OAuth (no hay conexión que medir).
+    #: ``None`` cuando el servidor no usa OAuth (no hay conexión que medir) o, con
+    #: ``required``, cuando se desconoce (Vault sellado o caído, entrada ilegible): no es
+    #: lo mismo que «no conectado» y el panel no invita a reconectar.
     connected: bool | None = None
 
 
@@ -141,6 +143,11 @@ def _ref_count(refs: dict[str, Any], key: str) -> int:
     return len(value) if isinstance(value, list) else 0
 
 
+def _url_of(server: dict[str, Any]) -> str | None:
+    url = server.get("url")
+    return url if isinstance(url, str) else None
+
+
 async def build_project_capability_extras(
     session: AsyncSession,
     *,
@@ -199,6 +206,10 @@ async def build_project_capability_extras(
         )
     }
 
+    oauth_states = await probe_many(
+        oauth_connected,
+        [str(s["name"]) for s in declared if uses_oauth(_url_of(s))],
+    )
     servers: list[McpServerCapability] = []
     for s in declared:
         name = str(s["name"])
@@ -213,7 +224,7 @@ async def build_project_capability_extras(
                 origin=origin_by_server.get(name, McpOrigin(kind="declared")),
                 oauth=McpOAuth(
                     required=needs_oauth,
-                    connected=await oauth_connected(name) if needs_oauth else None,
+                    connected=oauth_states.get(name) if needs_oauth else None,
                 ),
                 imported_tools=imported.get(name, 0),
                 egress=McpEgress(

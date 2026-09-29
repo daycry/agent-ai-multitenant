@@ -51,10 +51,16 @@ export function CapabilityMcpCard({
             </Badge>
             {oauth.required ? (
               <Badge
-                variant={oauth.connected ? "success" : "warning"}
+                variant={
+                  oauth.connected === null ? "muted" : oauth.connected ? "success" : "warning"
+                }
                 data-testid={`capability-oauth-${capability.name}`}
               >
-                {oauth.connected ? t("oauthConnected") : t("oauthNotConnected")}
+                {oauth.connected === null
+                  ? t("oauthUnknown")
+                  : oauth.connected
+                    ? t("oauthConnected")
+                    : t("oauthNotConnected")}
               </Badge>
             ) : null}
             {egress.blocked ? (
@@ -79,7 +85,7 @@ export function CapabilityMcpCard({
         </Link>
       </CardHeader>
       <CardContent className="pt-0">
-        {oauth.required ? (
+        {oauth.required && oauth.connected !== null ? (
           <McpOAuthConnect projectId={projectId} serverName={capability.name} />
         ) : null}
         {config ? (

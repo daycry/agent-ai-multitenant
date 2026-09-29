@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from redis.asyncio import Redis
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +52,7 @@ from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
 from api_server.routers._kb_embedding import stamp_for_kb_update, stamp_for_new_kb
+from api_server.routers._kb_listing import attach_aggregates
 from api_server.routers._pagination import (
     MAX_PAGE_SIZE,
     apply_pagination,
@@ -224,7 +225,7 @@ async def list_kbs(
     q: str | None = None,
     category: str | None = None,
     limit: int = 100,
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[KnowledgeBaseResponse]:
     """List KBs visible to the tenant.
@@ -268,19 +269,30 @@ async def list_kbs(
     result = await session.execute(stmt)
     kbs = list(result.scalars().all())
 
+    tenant_id = require_tenant_id(principal)
     # Una query batch para todas las categorías referenciadas (evita N+1).
     cat_ids = {kb.category_id for kb in kbs if kb.category_id is not None}
     cats_by_id: dict[UUID, KbCategory] = {}
     if cat_ids:
         cat_rows = await session.execute(
-            select(KbCategory).where(KbCategory.id.in_(cat_ids), KbCategory.deleted_at.is_(None))
+            select(KbCategory).where(
+                KbCategory.id.in_(cat_ids),
+                KbCategory.deleted_at.is_(None),
+                # Custom del tenant o built-in de plataforma (bajo PLATFORM_TENANT_ID con
+                # `is_builtin`, no `tenant_id IS NULL`: migración 0030). Igual que
+                # `routers/kb_categories.py`.
+                or_(KbCategory.tenant_id == tenant_id, KbCategory.is_builtin),
+            )
         )
         cats_by_id = {c.id: c for c in cat_rows.scalars().all()}
 
-    return [
+    responses = [
         to_kb_response(kb, cats_by_id.get(kb.category_id) if kb.category_id is not None else None)
         for kb in kbs
     ]
+    return await attach_aggregates(
+        session, responses, tenant_id=require_tenant_id(principal), with_grants=True
+    )
 
 
 @router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
@@ -585,7 +597,7 @@ async def list_agents_for_kb(
 @project_kb_router.get("", response_model=list[KnowledgeBaseResponse])
 async def list_kbs_for_project(
     project_id: UUID,
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[KnowledgeBaseResponse]:
     """List the KBs a project has been granted."""
@@ -601,19 +613,30 @@ async def list_kbs_for_project(
     )
     result = await session.execute(stmt)
     kbs = list(result.scalars().all())
+    tenant_id = require_tenant_id(principal)
     # La categoría va embebida (una query batch, como en `list_kbs`): la pestaña
     # Conocimiento del proyecto la pinta en la tarjeta de cada base.
     cat_ids = {kb.category_id for kb in kbs if kb.category_id is not None}
     cats_by_id: dict[UUID, KbCategory] = {}
     if cat_ids:
         cat_rows = await session.execute(
-            select(KbCategory).where(KbCategory.id.in_(cat_ids), KbCategory.deleted_at.is_(None))
+            select(KbCategory).where(
+                KbCategory.id.in_(cat_ids),
+                KbCategory.deleted_at.is_(None),
+                # Custom del tenant o built-in de plataforma (bajo PLATFORM_TENANT_ID con
+                # `is_builtin`, no `tenant_id IS NULL`: migración 0030). Igual que
+                # `routers/kb_categories.py`.
+                or_(KbCategory.tenant_id == tenant_id, KbCategory.is_builtin),
+            )
         )
         cats_by_id = {c.id: c for c in cat_rows.scalars().all()}
-    return [
+    responses = [
         to_kb_response(kb, cats_by_id.get(kb.category_id) if kb.category_id is not None else None)
         for kb in kbs
     ]
+    return await attach_aggregates(
+        session, responses, tenant_id=require_tenant_id(principal), with_grants=False
+    )
 
 
 # ===========================================================================

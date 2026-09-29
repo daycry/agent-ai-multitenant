@@ -14,7 +14,7 @@
  * `/admin/notifications/inbox` redirigen aquí a la suya.
  */
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Bell,
@@ -30,54 +30,42 @@ import { AssignmentsPanel } from "@/app/admin/inbox/assignments-panel";
 import { NotificationsPanel } from "@/components/inbox/notifications-panel";
 import { RequestsTab } from "@/components/inbox/requests-tab";
 import { ReviewsTab } from "@/components/inbox/reviews-tab";
-import { QUESTION_CATEGORY } from "@/components/inbox/approval-card";
 import {
-  useApprovals,
-  useAssignments,
-  useHumanQueue,
-  useReviews,
-  useUnreadNotifications,
-} from "@/components/inbox/use-inbox-data";
-import { otherDecisions } from "@/components/inbox/human-queue-list";
+  INBOX_TABS,
+  defaultTab,
+  isAllClear,
+  useInboxCounts,
+  type InboxTabId,
+  type TabCount,
+} from "@/components/inbox/use-inbox-counts";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useT } from "@/lib/i18n";
 
-const TABS = ["approvals", "questions", "reviews", "notifications", "assigned"] as const;
-type TabId = (typeof TABS)[number];
-
-function isTab(value: string | null | undefined): value is TabId {
-  return TABS.some((tab) => tab === value);
+function isTab(value: string | null | undefined): value is InboxTabId {
+  return INBOX_TABS.some((tab) => tab === value);
 }
 
-/** Contadores de cada pestaña, desde las mismas cachés que su contenido. */
-function useCounts(): Record<TabId, number> {
-  const approvals = useApprovals().data ?? [];
-  const queue = useHumanQueue().data;
-  const reviews = useReviews().data ?? [];
-  const unread = useUnreadNotifications().data?.unread ?? 0;
-  const assignments = useAssignments().data ?? [];
-  const questions = approvals.filter((r) => r.category === QUESTION_CATEGORY).length;
-  return {
-    approvals: approvals.length - questions + otherDecisions(queue).length,
-    questions,
-    reviews: reviews.length,
-    notifications: unread,
-    assigned: assignments.length,
-  };
+/** «…» mientras carga, «!» si la consulta falló: nunca un 0 inventado. */
+function countText(count: TabCount): string {
+  if (count.state === "loading") return "…";
+  if (count.state === "error") return "!";
+  return String(count.value);
 }
 
 function InboxHub() {
   const t = useT("inboxHub");
   const router = useRouter();
   const requested = useSearchParams()?.get("tab");
-  const counts = useCounts();
-  const initial: TabId = isTab(requested) ? requested : "approvals";
-  const allClear = TABS.every((tab) => counts[tab] === 0);
+  const counts = useInboxCounts();
+  // Lo que el usuario pulsa manda sobre el default calculado al llegar los datos.
+  const [picked, setPicked] = useState<InboxTabId | null>(null);
+  const initial: InboxTabId = isTab(requested) ? requested : (picked ?? defaultTab(counts));
+  const allClear = isAllClear(counts);
 
-  const labels: Record<TabId, { text: string; icon: React.ReactNode }> = {
+  const labels: Record<InboxTabId, { text: string; icon: React.ReactNode }> = {
     approvals: { text: t("tabApprovals"), icon: <ShieldCheck className="mr-1.5 h-4 w-4" /> },
     questions: { text: t("tabQuestions"), icon: <HelpCircle className="mr-1.5 h-4 w-4" /> },
     reviews: { text: t("tabReviews"), icon: <ClipboardCheck className="mr-1.5 h-4 w-4" /> },
@@ -109,20 +97,28 @@ function InboxHub() {
         // `key` re-monta al cambiar el `?tab=` desde fuera (p. ej. un enlace).
         key={initial}
         defaultValue={initial}
-        onValueChange={(next) => router.replace(`/admin/inbox?tab=${next}`, { scroll: false })}
+        onValueChange={(next) => {
+          if (isTab(next)) setPicked(next);
+          router.replace(`/admin/inbox?tab=${next}`, { scroll: false });
+        }}
         className="mt-6"
       >
         <TabsList data-testid="inbox-hub-tabs" aria-label={t("tabsAria")} className="flex-wrap">
-          {TABS.map((tab) => (
+          {INBOX_TABS.map((tab) => (
             <TabsTrigger key={tab} value={tab} data-testid={`inbox-tab-${tab}`}>
               {labels[tab].icon}
               {labels[tab].text}
               <Badge
-                variant={counts[tab] > 0 ? "warning" : "muted"}
+                variant={
+                  counts[tab].state === "error" ||
+                  (counts[tab].state === "ok" && counts[tab].value > 0)
+                    ? "warning"
+                    : "muted"
+                }
                 className="ml-1.5"
                 data-testid={`inbox-count-${tab}`}
               >
-                {counts[tab]}
+                {countText(counts[tab])}
               </Badge>
             </TabsTrigger>
           ))}

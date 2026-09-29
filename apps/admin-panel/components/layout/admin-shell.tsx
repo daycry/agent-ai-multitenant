@@ -43,6 +43,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { AdminHeader } from "@/components/layout/admin-header";
 import { GlobalProgress } from "@/components/layout/global-progress";
+import { HydrationMarker } from "@/components/layout/hydration-marker";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
 
@@ -137,6 +138,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   return (
     <div className="bg-background flex min-h-screen">
       <GlobalProgress />
+      <HydrationMarker />
       {/* ============================= Sidebar (desktop) ============================= */}
       <aside
         className={cn(

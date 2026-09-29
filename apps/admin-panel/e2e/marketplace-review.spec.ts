@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
+import { waitForHydration } from "./helpers/hydration";
 
 /**
  * E2E (subset mockeado, sin backend) de la cola de revisión del marketplace
@@ -67,6 +68,7 @@ async function setup(page: Page): Promise<{ approved: string[]; queue: unknown[]
 test("desde la pestaña Publicar se llega a la cola y se aprueba un listing", async ({ page }) => {
   const state = await setup(page);
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   // `task_ui_32`: la cola cuelga de «Publicar», junto al alta de listings.
   await page.getByTestId("marketplace-tab-publish").click();
@@ -88,6 +90,7 @@ test("desde la pestaña Publicar se llega a la cola y se aprueba un listing", as
 test("el sidebar de Plataforma tiene la entrada de la cola de revisión", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/marketplace/review", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await expect(page.getByTestId("review-status-filter")).toBeVisible();
 
   const link = page.getByTestId("nav-review");
@@ -106,6 +109,7 @@ test("un tenant admin ve Publicar pero no la cola de revisión, que no es suya",
     json(route, { ...SYSTEM_ADMIN, is_system_admin: false }),
   );
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await page.getByTestId("marketplace-tab-publish").click();
   await expect(page.getByTestId("marketplace-publish-tab-cta")).toBeVisible();
