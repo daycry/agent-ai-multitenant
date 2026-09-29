@@ -19,12 +19,15 @@ from typing import Any
 
 import httpx
 
+from shared_llm.providers._adaptive import AdaptationMemo, adapt_body
 from shared_llm.providers._openai_compat import (
+    build_chat_body,
     check_status,
     check_stream_status,
+    error_text,
     iter_sse_chunks,
     parse_chat_completion,
-    to_openai_messages,
+    post_adaptive,
     typed_transport_errors,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
@@ -48,6 +51,8 @@ class OllamaProvider:
         self.default_model = default_model
         self._api_key = api_key
         self._timeout = timeout
+        # ADR 0169 D2: lo que cada modelo rechazó, para no volver a pedírselo.
+        self._adapt = AdaptationMemo()
         if http_client is not None:
             self._client: httpx.AsyncClient | None = http_client
             self._owns_client = False
@@ -120,6 +125,12 @@ class OllamaProvider:
             http_client=http_client,
         )
 
+    async def _post_chat(self, body: dict[str, Any]) -> httpx.Response:
+        async with self._acquire() as client:
+            return await client.post(
+                f"{self.base_url}/chat/completions", json=body, headers=self._headers()
+            )
+
     # ------------------------------------------------------------------
     # LLMProvider Protocol
     # ------------------------------------------------------------------
@@ -129,24 +140,26 @@ class OllamaProvider:
         *,
         model: str | None = None,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         model_id = model or self.default_model
-        body: dict[str, Any] = {
-            "model": model_id,
-            "messages": to_openai_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
+        body = build_chat_body(
+            messages,
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=tools,
             **kwargs,
-        }
-        if tools:
-            body["tools"] = tools
-        async with self._acquire() as client, typed_transport_errors(provider=self.name):
-            resp = await client.post(
-                f"{self.base_url}/chat/completions", json=body, headers=self._headers()
+        )
+        async with typed_transport_errors(provider=self.name):
+            # ADR 0169 D2: Ollama cloud sirve modelos de terceros que pueden rechazar
+            # un parámetro igual que en Azure; no hay Responses API a la que saltar.
+            resp = await post_adaptive(
+                self._post_chat, body, self._adapt.for_model(model_id), may_switch_transport=False
             )
+            assert resp is not None
             check_status(resp, provider=self.name)
             return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
 
@@ -156,42 +169,42 @@ class OllamaProvider:
         *,
         model: str | None = None,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         model_id = model or self.default_model
-        body: dict[str, Any] = {
-            "model": model_id,
-            "messages": to_openai_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": True,
-            # prod-07 task_prod07_04: sin `stream_options.include_usage` el
-            # proveedor NO manda el chunk de usage y el turno se contabiliza a 0
-            # tokens / $0 (llm-6). Va ANTES de `**kwargs` a propósito: un caller
-            # con un endpoint que no soporte el campo puede pasar
-            # `stream_options=None` y desactivarlo sin tocar el provider.
-            "stream_options": {"include_usage": True},
-            **kwargs,
-        }
-        if tools:
-            body["tools"] = tools
-        async with (
-            self._acquire() as client,
-            client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                json=body,
-                headers=self._headers(),
-            ) as resp,
-        ):
-            # prod-07 task_prod07_03: lee el cuerpo antes de clasificar un no-2xx.
-            await check_stream_status(resp, provider=self.name)
-            # iter_sse_chunks wraps the body iteration so a mid-stream
-            # network/transport error becomes a typed ProviderError.
-            async for chunk in iter_sse_chunks(resp, provider=self.name):
-                yield chunk
+        adaptations = self._adapt.for_model(model_id)
+        body = adaptations.apply(
+            build_chat_body(
+                messages,
+                model=model_id,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                stream=True,
+                # prod-07 task_prod07_04: sin `stream_options.include_usage` el turno se
+                # contabiliza a 0 tokens. Antes de `**kwargs`, para poder desactivarlo.
+                **{"stream_options": {"include_usage": True}, **kwargs},
+            )
+        )
+        url = f"{self.base_url}/chat/completions"
+        for attempt in (0, 1):
+            async with (
+                self._acquire() as client,
+                client.stream("POST", url, json=body, headers=self._headers()) as resp,
+            ):
+                if resp.status_code == 400 and attempt == 0:
+                    await resp.aread()
+                    fixed = adapt_body(body, error_text(resp))
+                    if fixed is not None:
+                        adaptations.learn(body, fixed)
+                        body = fixed
+                        continue
+                await check_stream_status(resp, provider=self.name)
+                async for chunk in iter_sse_chunks(resp, provider=self.name):
+                    yield chunk
+                return
 
     async def aclose(self) -> None:
         # Owned clients are per-call (closed in `_acquire`); injected clients are the

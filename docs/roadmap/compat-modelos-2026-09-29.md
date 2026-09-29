@@ -104,25 +104,31 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_04` — La temperatura sólo viaja si se configuró
 
-- [ ] **Título**: los cuatro proveedores HTTP de `shared-llm` dejan de mandar
+- [x] **Título**: los cuatro proveedores HTTP de `shared-llm` dejan de mandar
       `temperature: 0.7` por defecto. Sin valor explícito, la clave no está en el
       cuerpo.
       **Test**: `packages/shared-llm/tests/test_temperature_only_when_set.py`.
       **Coste**: 0,25 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo: 2 de 3 casos. El cuerpo de chat
+    sale ahora de un solo constructor, `build_chat_body`, en vez de tres literales.
 
 ### `task_cm_05` — Adaptación reactiva a los parámetros que el modelo rechaza
 
-- [ ] **Título**: helper común en `_openai_compat` que, ante un 400 cuyo cuerpo dice
+- [x] **Título**: helper común en `_openai_compat` que, ante un 400 cuyo cuerpo dice
       `unsupported_parameter` sobre `max_tokens`, `temperature` no soportada o un
       tope por encima del máximo del modelo, devuelve el cuerpo corregido. Azure,
       Copilot y Ollama reintentan **una vez** con él y memorizan la corrección por
       modelo durante la vida del proveedor. Cualquier otro 400 sigue siendo un error.
       **Test**: `packages/shared-llm/tests/test_reactive_param_adaptation.py`.
       **Coste**: 1 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo (el módulo no existía). La lógica
+    pura vive en `providers/_adaptive.py` y el envío en `post_adaptive`. El stream
+    también se adapta, leyendo el error antes de ceder nada para no duplicar texto.
+    Un 400 no reconocido, o un segundo 400 tras adaptar, siguen siendo un error.
 
 ### `task_cm_06` — Transporte Responses para Codex y los GPT-5.x que lo exigen
 
-- [ ] **Título**: módulo `_openai_responses.py` en `shared-llm` que construye la
+- [x] **Título**: módulo `_openai_responses.py` en `shared-llm` que construye la
       petición (`input`, `instructions`, tools en formato plano,
       `max_output_tokens`, `reasoning.effort`, `store: false`) y parsea la respuesta
       (`output_text`, `function_call`, `usage`, `status: incomplete`). Azure y Copilot
@@ -131,6 +137,12 @@ silencioso del contexto en Ollama.
       reconoce el payload de Responses para que F32 y `task_cm_02` sigan valiendo.
       **Test**: `packages/shared-llm/tests/test_responses_transport.py`.
       **Coste**: 1,5 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo (el módulo no existía). Azure usa
+    el endpoint v1 (`/openai/v1/responses`, el despliegue en `model`) y Copilot
+    `/responses`. En un modelo sólo Responses, `stream()` entrega la respuesta entera
+    en un trozo: se pierde la entrega incremental, no el contenido ni el uso.
+    `shared-llm`: 212 passed; runtime: 769 passed; unitarios del repo con
+    `shared_llm`: 181 passed; mypy del árbol entero sin errores.
 
 ### Ola 3 — Contexto de Ollama
 

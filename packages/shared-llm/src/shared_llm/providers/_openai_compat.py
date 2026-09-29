@@ -14,13 +14,19 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from shared_llm.exceptions import AuthError, ProviderError, RateLimitError
+from shared_llm.providers._adaptive import ModelAdaptations, adapt_body, needs_responses_api
+from shared_llm.providers._openai_responses import (
+    is_responses_payload,
+    responses_corrupt_indexes,
+    responses_truncated,
+)
 from shared_llm.retry import retry_after_seconds
 from shared_llm.types import CompletionResponse, Message, StreamChunk, ToolCall, Usage
 
@@ -67,6 +73,69 @@ def to_openai_messages(messages: Sequence[Message]) -> list[dict[str, Any]]:
             entry["tool_call_id"] = m.tool_call_id
         out.append(entry)
     return out
+
+
+def build_chat_body(
+    messages: Sequence[Message],
+    *,
+    model: str | None,
+    max_tokens: int | None,
+    temperature: float | None,
+    tools: list[dict[str, Any]] | None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """El cuerpo de ``/chat/completions`` común a los tres proveedores HTTP.
+
+    ADR 0169 D3 (`task_cm_04`): ``temperature`` sólo entra si alguien la configuró.
+    El default de 0.7 que llevaban las firmas era un 400 en cada llamada a un modelo
+    de razonamiento. ``model`` es ``None`` en Azure, donde la URL fija el despliegue.
+    """
+    body: dict[str, Any] = {}
+    if model is not None:
+        body["model"] = model
+    body["messages"] = to_openai_messages(messages)
+    if max_tokens:
+        body["max_tokens"] = max_tokens
+    if temperature is not None:
+        body["temperature"] = temperature
+    body.update(extra)
+    if tools:
+        body["tools"] = tools
+    return body
+
+
+def error_text(resp: httpx.Response) -> str:
+    """El cuerpo de un error, o un marcador si no se pudo leer. Nunca lanza."""
+    return _error_text(resp)
+
+
+async def post_adaptive(
+    post: Callable[[dict[str, Any]], Awaitable[httpx.Response]],
+    body: dict[str, Any],
+    adaptations: ModelAdaptations,
+    *,
+    may_switch_transport: bool,
+) -> httpx.Response | None:
+    """POST con la adaptación reactiva del ADR 0169 D2 (`task_cm_05`).
+
+    Aplica lo ya aprendido para el modelo; ante un 400 adaptable reintenta UNA vez con
+    el cuerpo corregido y lo memoriza. Devuelve la respuesta sin clasificar —el
+    llamante hace ``check_status``—, o ``None`` si el servidor dice que el modelo sólo
+    se sirve por la Responses API y ``may_switch_transport`` lo permite.
+    """
+    body = adaptations.apply(body)
+    resp = await post(body)
+    if resp.status_code != 400:
+        return resp
+    text = error_text(resp)
+    if may_switch_transport and needs_responses_api(text):
+        adaptations.responses_api = True
+        return None
+    fixed = adapt_body(body, text)
+    if fixed is None:
+        return resp
+    adaptations.learn(body, fixed)
+    return await post(fixed)
 
 
 def check_status(resp: httpx.Response, *, provider: str) -> None:
@@ -450,6 +519,13 @@ def completion_signals(data: Any) -> CompletionSignals:
     """
     if not isinstance(data, dict):
         return CompletionSignals()
+    if is_responses_payload(data):
+        # ADR 0169 (`task_cm_06`): la misma señal para el transporte Responses, así
+        # F32 y la guarda de acción del runtime valen también para Codex.
+        return CompletionSignals(
+            truncated=responses_truncated(data),
+            malformed_tool_args=bool(responses_corrupt_indexes(data)),
+        )
     choices = data.get("choices")
     choice = choices[0] if isinstance(choices, list) and choices else None
     if not isinstance(choice, dict):
@@ -477,6 +553,8 @@ def corrupt_tool_call_indexes(data: Any) -> set[int]:
     """
     if not isinstance(data, dict):
         return set()
+    if is_responses_payload(data):
+        return responses_corrupt_indexes(data)
     choices = data.get("choices")
     choice = choices[0] if isinstance(choices, list) and choices else None
     message = choice.get("message") if isinstance(choice, dict) else None
@@ -493,13 +571,16 @@ def corrupt_tool_call_indexes(data: Any) -> set[int]:
 
 __all__ = [
     "CompletionSignals",
+    "build_chat_body",
     "check_status",
     "check_stream_status",
     "completion_signals",
     "corrupt_tool_call_indexes",
+    "error_text",
     "iter_sse_chunks",
     "parse_chat_completion",
     "parse_sse_delta",
+    "post_adaptive",
     "to_openai_messages",
     "typed_transport_errors",
 ]

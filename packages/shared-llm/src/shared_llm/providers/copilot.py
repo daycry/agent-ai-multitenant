@@ -33,13 +33,21 @@ from typing import Any
 import httpx
 
 from shared_llm.exceptions import AuthError, ProviderError
+from shared_llm.providers._adaptive import AdaptationMemo, adapt_body, needs_responses_api
 from shared_llm.providers._openai_compat import (
+    build_chat_body,
     check_status,
     check_stream_status,
+    error_text,
     iter_sse_chunks,
     parse_chat_completion,
-    to_openai_messages,
+    post_adaptive,
     typed_transport_errors,
+)
+from shared_llm.providers._openai_responses import (
+    parse_responses,
+    to_responses_body,
+    whole_as_chunks,
 )
 from shared_llm.types import CompletionResponse, Message, StreamChunk
 
@@ -142,6 +150,8 @@ class CopilotProvider:
         self._jwt_refresh_margin_s = jwt_refresh_margin_s
         self._jwt: str | None = None
         self._jwt_expires_at = 0.0
+        # ADR 0169 D2: lo que cada modelo rechazó, para no volver a pedírselo.
+        self._adapt = AdaptationMemo()
         self._timeout = timeout
         if http_client is not None:
             self._client = http_client
@@ -312,6 +322,51 @@ class CopilotProvider:
             **EDITOR_HEADERS,
         }
 
+    async def _post(self, path: str, body: dict[str, Any]) -> httpx.Response:
+        """POST a la API de Copilot con el JWT vigente.
+
+        Un 401 aquí significa que el JWT caducó entre el minteo y la llamada: se
+        re-mintea y se reintenta una vez. Cualquier otro estado es del llamante.
+        """
+        async with self._acquire() as client:
+            url = f"{_COPILOT_API}{path}"
+            resp = await client.post(url, headers=await self._chat_headers(), json=body)
+            if resp.status_code == 401:
+                self._jwt = None
+                resp = await client.post(url, headers=await self._chat_headers(), json=body)
+            return resp
+
+    async def _complete_responses(
+        self,
+        messages: Sequence[Message],
+        *,
+        model_id: str,
+        max_tokens: int | None,
+        temperature: float | None,
+        tools: list[dict[str, Any]] | None,
+        **kwargs: Any,
+    ) -> CompletionResponse:
+        """La llamada por ``/responses`` (ADR 0169, `task_cm_06`): Codex y los GPT-5.x
+        que Copilot sólo sirve ahí."""
+        body = to_responses_body(
+            messages,
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=tools,
+            **kwargs,
+        )
+        async with typed_transport_errors(provider=self.name):
+            resp = await post_adaptive(
+                lambda b: self._post("/responses", b),
+                body,
+                self._adapt.for_model(model_id),
+                may_switch_transport=False,
+            )
+            assert resp is not None
+            check_status(resp, provider=self.name)
+            return parse_responses(resp.json(), provider=self.name, fallback_model=model_id)
+
     # ------------------------------------------------------------------
     # LLMProvider Protocol
     # ------------------------------------------------------------------
@@ -321,35 +376,45 @@ class CopilotProvider:
         *,
         model: str | None = None,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         model_id = model or "gpt-4o"
-        body: dict[str, Any] = {
-            "model": model_id,
-            "messages": to_openai_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": False,
-            **kwargs,
-        }
-        if tools:
-            body["tools"] = tools
-        async with self._acquire() as client, typed_transport_errors(provider=self.name):
-            resp = await client.post(
-                f"{_COPILOT_API}/chat/completions",
-                headers=await self._chat_headers(),
-                json=body,
+        adaptations = self._adapt.for_model(model_id)
+        if adaptations.responses_api:
+            return await self._complete_responses(
+                messages,
+                model_id=model_id,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                **kwargs,
             )
-            # 401 here means the JWT expired between mint and call — re-mint
-            # once and retry. Anything else is a real provider error.
-            if resp.status_code == 401:
-                self._jwt = None
-                resp = await client.post(
-                    f"{_COPILOT_API}/chat/completions",
-                    headers=await self._chat_headers(),
-                    json=body,
+        body = build_chat_body(
+            messages,
+            model=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=tools,
+            stream=False,
+            **kwargs,
+        )
+        async with typed_transport_errors(provider=self.name):
+            resp = await post_adaptive(
+                lambda b: self._post("/chat/completions", b),
+                body,
+                adaptations,
+                may_switch_transport=True,
+            )
+            if resp is None:
+                return await self._complete_responses(
+                    messages,
+                    model_id=model_id,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=tools,
+                    **kwargs,
                 )
             check_status(resp, provider=self.name)
             return parse_chat_completion(resp.json(), provider=self.name, fallback_model=model_id)
@@ -360,57 +425,70 @@ class CopilotProvider:
         *,
         model: str | None = None,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         model_id = model or "gpt-4o"
-        body: dict[str, Any] = {
-            "model": model_id,
-            "messages": to_openai_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": True,
-            # prod-07 task_prod07_04: sin `stream_options.include_usage` el
-            # proveedor NO manda el chunk de usage y el turno se contabiliza a 0
-            # tokens / $0 (llm-6). Va ANTES de `**kwargs` a propósito: un caller
-            # con un endpoint que no soporte el campo puede pasar
-            # `stream_options=None` y desactivarlo sin tocar el provider.
-            "stream_options": {"include_usage": True},
-            **kwargs,
-        }
-        if tools:
-            body["tools"] = tools
-        # Same 401 handling as complete(): a 401 on the first attempt
-        # means the JWT expired between mint and call. Drop the cached
-        # JWT, re-mint, and retry the stream exactly once. We must close
-        # the first response body before re-opening, so the retry happens
-        # outside the first `async with` block.
-        async with self._acquire() as client:
-            async with client.stream(
-                "POST",
-                f"{_COPILOT_API}/chat/completions",
-                headers=await self._chat_headers(),
-                json=body,
-            ) as resp:
-                if resp.status_code != 401:
+        adaptations = self._adapt.for_model(model_id)
+        if not adaptations.responses_api:
+            body = adaptations.apply(
+                build_chat_body(
+                    messages,
+                    model=model_id,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=tools,
+                    stream=True,
+                    # prod-07 task_prod07_04: sin `include_usage` el turno se contabiliza a
+                    # 0 tokens. Antes de `**kwargs`, para poder desactivarlo con None.
+                    **{"stream_options": {"include_usage": True}, **kwargs},
+                )
+            )
+            reminted = adapted = False
+            url = f"{_COPILOT_API}/chat/completions"
+            while True:
+                async with (
+                    self._acquire() as client,
+                    client.stream(
+                        "POST", url, headers=await self._chat_headers(), json=body
+                    ) as resp,
+                ):
+                    # Un 401 es el JWT caducado entre minteo y llamada: re-mint y otra vez.
+                    if resp.status_code == 401 and not reminted:
+                        self._jwt = None
+                        reminted = True
+                        continue
+                    # ADR 0169 D2: el error se lee ANTES de ceder nada, así que adaptar
+                    # y reabrir no duplica texto en el llamante.
+                    if resp.status_code == 400 and not adapted:
+                        await resp.aread()
+                        text = error_text(resp)
+                        if needs_responses_api(text):
+                            adaptations.responses_api = True
+                            break
+                        fixed = adapt_body(body, text)
+                        if fixed is not None:
+                            adaptations.learn(body, fixed)
+                            body = fixed
+                            adapted = True
+                            continue
                     # prod-07 task_prod07_03: cuerpo leído antes de clasificar.
                     await check_stream_status(resp, provider=self.name)
                     async for chunk in iter_sse_chunks(resp, provider=self.name):
                         yield chunk
                     return
-                self._jwt = None
-            # Retry once with a freshly minted JWT (same per-call client).
-            async with client.stream(
-                "POST",
-                f"{_COPILOT_API}/chat/completions",
-                headers=await self._chat_headers(),
-                json=body,
-            ) as retry_resp:
-                # Idem en el reintento: era el segundo camino con el mismo defecto.
-                await check_stream_status(retry_resp, provider=self.name)
-                async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
-                    yield chunk
+        # Modelo sólo Responses: sin streaming, la respuesta entera en un trozo.
+        whole = await self._complete_responses(
+            messages,
+            model_id=model_id,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=tools,
+            **kwargs,
+        )
+        for chunk in whole_as_chunks(whole):
+            yield chunk
 
     async def aclose(self) -> None:
         if self._owns_client:
