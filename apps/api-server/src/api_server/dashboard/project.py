@@ -16,10 +16,9 @@ textos los pone el panel. Y sólo hay avisos de lo que el dominio **guarda**:
 * ``repo_not_synced`` — el proyecto tiene remoto git y el último sondeo del worker
   (``repository_config.last_git_sync``) no existe o no acabó en ``ok``.
 * ``budget_paused_project`` — pausa por presupuesto.
-
-**No hay aviso de «rol sin agente»**: el dominio no declara qué roles necesita un proyecto
-(ni el equipo ni las tareas guardan roles requeridos), y decidirlo aquí sería inventar una
-regla de producto (criterio de cierre 6 del plan).
+* ``role_without_agent`` — un plan activo pide tareas de un rol que el equipo no cubre
+  (``dashboard.project_team.role_gaps``, la misma función que la pestaña Equipo; regla del
+  ADR 0091: ``specification.tasks[].role`` frente a ``team_role_agents``).
 
 Todas las consultas llevan ``tenant_id`` además de la RLS de la sesión (principio 1).
 """
@@ -35,6 +34,7 @@ from shared_mcp.catalog import uses_oauth
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.dashboard.project_team import ACTIVE_PLAN_STATUSES, load_project, role_gaps
 from api_server.db.platform_settings import get_platform_setting
 from api_server.egress.mcp_allowlist import SETTING_KEY as MCP_ALLOWLIST_KEY
 from api_server.egress.mcp_discovery import egress_warnings_for_servers
@@ -43,7 +43,7 @@ from api_server.mcp.import_tools import count_imported_tools
 #: Planes activos que se enseñan con nombre, y runs recientes de la actividad.
 PLANS_LIMIT = 10
 ACTIVITY_LIMIT = 10
-_ACTIVE_PLAN_STATUSES = ("approved", "in_progress", "blocked")
+_ACTIVE_PLAN_STATUSES = ACTIVE_PLAN_STATUSES
 
 #: ¿Tiene este servidor OAuth de este proyecto un token en Vault?
 OAuthConnected = Callable[[str], Awaitable[bool]]
@@ -208,6 +208,17 @@ async def _warnings(
         last = repo_cfg.get("last_git_sync")
         if not (isinstance(last, dict) and last.get("status") == "ok"):
             warnings.append({"kind": "repo_not_synced", "count": 1, "names": [], "url_path": base})
+    orm_project = await load_project(session, tenant_id, project_id)
+    gaps = await role_gaps(session, tenant_id, orm_project) if orm_project is not None else []
+    if gaps:
+        warnings.append(
+            {
+                "kind": "role_without_agent",
+                "count": len(gaps),
+                "names": [g["role"] for g in gaps],
+                "url_path": f"{base}/team",
+            }
+        )
     if project.paused_by_budget:
         warnings.append(
             {"kind": "budget_paused_project", "count": 1, "names": [], "url_path": base}
@@ -215,7 +226,7 @@ async def _warnings(
     return warnings
 
 
-def _project_spend(spend: dict[str, Any], project_id: UUID) -> dict[str, Any]:
+def project_spend(spend: dict[str, Any], project_id: UUID) -> dict[str, Any]:
     """La fila de gasto de ESTE proyecto dentro del resumen del tenant."""
     for row in spend.get("projects") or []:
         if row.get("project_id") == str(project_id):
@@ -255,11 +266,11 @@ async def build_project_overview(
         },
         "plans": await _plans(session, tenant_id, project_id),
         "runs": await _runs(session, tenant_id, project_id),
-        "spend": _project_spend(spend, project_id),
+        "spend": project_spend(spend, project_id),
         "warnings": await _warnings(session, tenant_id, project_id, project, oauth_connected),
         "activity": await _activity(session, tenant_id, project_id),
         "generated_at": datetime.now(tz=UTC).isoformat(),
     }
 
 
-__all__ = ["ACTIVITY_LIMIT", "PLANS_LIMIT", "build_project_overview"]
+__all__ = ["ACTIVITY_LIMIT", "PLANS_LIMIT", "build_project_overview", "project_spend"]

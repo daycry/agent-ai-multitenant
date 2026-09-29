@@ -104,6 +104,7 @@ from api_server.routers.notifications import router as notifications_router
 from api_server.routers.ollama import admin_router as ollama_admin_router
 from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.platform_settings import admin_router as platform_settings_admin_router
+from api_server.routers.project_hub import router as project_hub_router
 from api_server.routers.project_overview import router as project_overview_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
@@ -283,6 +284,7 @@ def _register_routers(app: FastAPI) -> None:
         teams_router,
         projects_router,
         project_overview_router,
+        project_hub_router,
         tasks_router,
         task_lifecycle_router,
         review_router,

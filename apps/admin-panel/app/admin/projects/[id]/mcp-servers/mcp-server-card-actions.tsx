@@ -79,6 +79,8 @@ export function McpServerCardActions({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["tools-catalog"] });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      // task_ui_20: la pestaña Capacidades cuenta las tools importadas desde su endpoint.
+      void queryClient.invalidateQueries({ queryKey: ["project-capabilities", projectId] });
     },
   });
 

@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 /**
  * La barra contextual del proyecto (`task_ui_10`): las ocho entradas del plan, la
- * vuelta a «Proyectos», la entrada activa y las pestañas que aún no existen
- * (visibles pero deshabilitadas, no un enlace a un 404).
+ * vuelta a «Proyectos» y la entrada activa.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -51,7 +50,7 @@ describe("SidebarProject", () => {
     renderAt(ROOT);
     expect(screen.getByTestId("nav-project-board").getAttribute("href")).toBe(`${ROOT}/board`);
     expect(screen.getByTestId("nav-project-capabilities").getAttribute("href")).toBe(
-      `${ROOT}/mcp-servers`,
+      `${ROOT}/capabilities`,
     );
     // Ajustes es la ficha del proyecto (edición, git, gobierno), no otra pantalla.
     expect(screen.getByTestId("nav-project-settings").getAttribute("href")).toBe(
@@ -62,12 +61,12 @@ describe("SidebarProject", () => {
     );
   });
 
-  it("deja Runs, Equipo y Costes visibles pero SIN enlace", () => {
+  it("enlaza Runs, Equipo y Costes a sus pantallas (task_ui_12)", () => {
     renderAt(ROOT);
-    for (const id of ["nav-project-runs", "nav-project-team", "nav-project-costs"]) {
-      const el = screen.getByTestId(id);
-      expect(el.getAttribute("href"), id).toBeNull();
-      expect(el.getAttribute("aria-disabled"), id).toBe("true");
+    for (const id of ["runs", "team", "costs"]) {
+      const el = screen.getByTestId(`nav-project-${id}`);
+      expect(el.getAttribute("href"), id).toBe(`${ROOT}/${id}`);
+      expect(el.getAttribute("aria-disabled"), id).toBeNull();
     }
   });
 

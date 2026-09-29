@@ -66,23 +66,27 @@ Dos cosas que conviene leer antes de usar esta tabla:
 
 Todas cuelgan de `/admin/projects/[id]`; conservan su ruta y pasan a ser pestañas.
 
-| Ruta                                          | Pestaña                         | Notas                                            |
-| --------------------------------------------- | ------------------------------- | ------------------------------------------------ |
-| `/admin/projects/[id]`                        | Resumen                         | `GET /projects/{id}/overview` (`task_ui_10`)     |
-| `/admin/projects/[id]/board`                  | Tablero                         | Doble Kanban acotado al proyecto (`task_ui_11`)  |
-| `/admin/projects/[id]/plans`                  | Tablero (planes)                | Doble Kanban del principio 6                     |
-| `/admin/projects/[id]/plans/[planId]`         | Tablero (tareas del plan)       |                                                  |
-| `/admin/projects/[id]/tasks`                  | Tablero (tareas)                |                                                  |
-| `/admin/plans/[id]/escalated`                 | Tablero · escalaciones          | **Área por confirmar** (ver §Preguntas abiertas) |
-| `/admin/executions/[id]`                      | Runs · detalle                  | Se llega desde Runs y desde el dashboard         |
-| `/admin/projects/[id]/mcp-servers`            | Capacidades · MCP               | `task_ui_20` la funde con tools y skills         |
-| `/admin/projects/[id]/agent-tools-diagnostic` | Capacidades · diagnóstico       | Sólo lectura                                     |
-| `/admin/projects/[id]/commands`               | Capacidades · comandos          |                                                  |
-| `/admin/projects/[id]/knowledge-bases`        | Conocimiento                    | `task_ui_21` la convierte en flujo guiado        |
-| `/admin/projects/[id]/memories`               | Ajustes · memorias del proyecto |                                                  |
-| `/admin/projects/[id]/incoming-webhooks`      | Ajustes · webhooks entrantes    |                                                  |
-| `/admin/projects/[id]/dep-cache`              | Ajustes · caché de dependencias |                                                  |
-| `/admin/projects/[id]/chat`                   | Sin pestaña — acción            | Chat del proyecto                                |
+| Ruta                                          | Pestaña                         | Notas                                                                  |
+| --------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
+| `/admin/projects/[id]`                        | Resumen                         | `GET /projects/{id}/overview` (`task_ui_10`)                           |
+| `/admin/projects/[id]/board`                  | Tablero                         | Doble Kanban acotado al proyecto (`task_ui_11`)                        |
+| `/admin/projects/[id]/runs`                   | Runs                            | `GET /runs?project_id=` con filtros (`task_ui_12`)                     |
+| `/admin/projects/[id]/team`                   | Equipo                          | `GET /projects/{id}/team` (`task_ui_12`)                               |
+| `/admin/projects/[id]/costs`                  | Costes                          | `GET /projects/{id}/costs`, tenant_admin (`task_ui_12`)                |
+| `/admin/projects/[id]/plans`                  | Tablero (planes)                | Doble Kanban del principio 6                                           |
+| `/admin/projects/[id]/plans/[planId]`         | Tablero (tareas del plan)       |                                                                        |
+| `/admin/projects/[id]/tasks`                  | Tablero (tareas)                |                                                                        |
+| `/admin/plans/[id]/escalated`                 | Tablero · escalaciones          | **Área por confirmar** (ver §Preguntas abiertas)                       |
+| `/admin/executions/[id]`                      | Runs · detalle                  | Se llega desde Runs y desde el dashboard                               |
+| `/admin/projects/[id]/capabilities`           | Capacidades                     | MCP · Tools · Skills, `GET /projects/{id}/capabilities` (`task_ui_20`) |
+| `/admin/projects/[id]/mcp-servers`            | Capacidades · configurar MCP    | Declarar, editar y borrar servidores; el resto vive en Capacidades     |
+| `/admin/projects/[id]/agent-tools-diagnostic` | Capacidades · diagnóstico       | Sólo lectura                                                           |
+| `/admin/projects/[id]/commands`               | Capacidades · comandos          |                                                                        |
+| `/admin/projects/[id]/knowledge-bases`        | Conocimiento                    | `task_ui_21` la convierte en flujo guiado                              |
+| `/admin/projects/[id]/memories`               | Ajustes · memorias del proyecto |                                                                        |
+| `/admin/projects/[id]/incoming-webhooks`      | Ajustes · webhooks entrantes    |                                                                        |
+| `/admin/projects/[id]/dep-cache`              | Ajustes · caché de dependencias |                                                                        |
+| `/admin/projects/[id]/chat`                   | Sin pestaña — acción            | Chat del proyecto                                                      |
 
 ## Trabajo — Recursos del tenant
 

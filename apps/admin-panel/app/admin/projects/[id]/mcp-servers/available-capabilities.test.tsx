@@ -27,6 +27,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 import ProjectMcpServersPage from "@/app/admin/projects/[id]/mcp-servers/page";
+import { ProjectCapabilities } from "@/components/capability/project-capabilities";
 
 const AVAILABLE = [
   {
@@ -79,6 +80,15 @@ function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
+      <ProjectCapabilities projectId="proj-1" />
+    </QueryClientProvider>,
+  );
+}
+
+function mountConfigPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
       <ProjectMcpServersPage />
     </QueryClientProvider>,
   );
@@ -89,7 +99,19 @@ afterEach(() => {
   apiFetchMock.mockReset();
 });
 
-describe("pestaña MCP del proyecto — «Disponibles en tu tenant»", () => {
+describe("configuración MCP: «Capacidades disponibles» se fundió en Capacidades (task_ui_20)", () => {
+  it("la pantalla de configuración ya no monta la sección y enlaza a la pestaña", async () => {
+    wireApi();
+    mountConfigPage();
+    await waitFor(() => expect(screen.getByTestId("mcp-capabilities-link")).toBeTruthy());
+    expect(
+      screen.getByTestId("mcp-capabilities-link").querySelector("a")?.getAttribute("href"),
+    ).toBe("/admin/projects/proj-1/capabilities");
+    expect(screen.queryByTestId("available-capabilities-section")).toBeNull();
+  });
+});
+
+describe("pestaña Capacidades (MCP) — «Capacidades disponibles»", () => {
   it("monta la sección y ofrece SÓLO los servidores MCP disponibles", async () => {
     wireApi();
     mount();

@@ -104,9 +104,7 @@ test("el Resumen es la raíz del proyecto y enseña avisos, planes y runs", asyn
   await expect(page.getByTestId("nav-project-overview")).toHaveAttribute("aria-current", "page");
 });
 
-test("la barra tiene las ocho entradas y las que no existen están deshabilitadas", async ({
-  page,
-}) => {
+test("la barra tiene las ocho entradas y las ocho se enlazan", async ({ page }) => {
   await mockApi(page);
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
 
@@ -123,9 +121,10 @@ test("la barra tiene las ocho entradas y las que no existen están deshabilitada
   ]) {
     await expect(nav.getByTestId(`nav-project-${id}`)).toBeVisible();
   }
+  // `task_ui_12`: Runs, Equipo y Costes ya tienen pantalla, así que se enlazan.
   for (const id of ["runs", "team", "costs"]) {
-    await expect(nav.getByTestId(`nav-project-${id}`)).toHaveAttribute("aria-disabled", "true");
-    await expect(nav.getByTestId(`nav-project-${id}`)).not.toHaveAttribute("href");
+    await expect(nav.getByTestId(`nav-project-${id}`)).toHaveAttribute("href", `${BASE}/${id}`);
+    await expect(nav.getByTestId(`nav-project-${id}`)).not.toHaveAttribute("aria-disabled", "true");
   }
 });
 
@@ -137,7 +136,7 @@ test("navega Resumen → Capacidades → Conocimiento → Resumen dentro del pro
   const nav = page.getByTestId("sidebar-nav");
 
   await nav.getByTestId("nav-project-capabilities").click();
-  await expect(page).toHaveURL(`${BASE}/mcp-servers`);
+  await expect(page).toHaveURL(`${BASE}/capabilities`);
   await expect(nav).toHaveAttribute("data-area", "project");
   await expect(nav.getByTestId("nav-project-capabilities")).toHaveAttribute("aria-current", "page");
 

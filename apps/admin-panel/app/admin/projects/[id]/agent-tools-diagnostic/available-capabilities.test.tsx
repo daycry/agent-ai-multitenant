@@ -93,15 +93,15 @@ afterEach(() => {
   apiFetchMock.mockReset();
 });
 
-describe("pestaña Tools del proyecto — «Disponibles en tu tenant»", () => {
-  it("monta la sección y ofrece SÓLO tools y skills disponibles", async () => {
+describe("diagnóstico de tools del proyecto — «Capacidades disponibles» se fundió (task_ui_20)", () => {
+  it("ya NO monta la sección: vive en la pestaña Capacidades", async () => {
     wireApi();
     mount();
     // Se espera al ITEM, no a la sección: la sección se pinta antes de que la
     // consulta resuelva, así que esperar por ella pasaría con la lista vacía.
-    await waitFor(() => expect(screen.getByTestId("available-i2")).toBeTruthy());
-    expect(screen.getByTestId("available-capabilities-section")).toBeTruthy();
-    // Un servidor MCP se activa desde la pestaña MCP, no desde aquí.
-    expect(screen.queryByTestId("available-i1")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-tools-diagnostic-readonly-banner")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("available-capabilities-section")).toBeNull();
   });
 });

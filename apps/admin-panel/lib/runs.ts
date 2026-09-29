@@ -39,6 +39,7 @@ export interface ExecutionRunRow {
 export interface RunFilters {
   task_id?: string;
   plan_id?: string;
+  project_id?: string;
   agent_id?: string;
   role?: string;
   verdict?: string;

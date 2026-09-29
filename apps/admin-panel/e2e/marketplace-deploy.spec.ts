@@ -247,7 +247,9 @@ test("retirar uno deja el otro intacto", async ({ page }) => {
   expect(retired).toEqual(["dep-1"]);
 });
 
-test("la pestaña MCP del proyecto ofrece activar lo disponible del tenant", async ({ page }) => {
+test("la pestaña Capacidades del proyecto ofrece activar lo disponible del tenant", async ({
+  page,
+}) => {
   const calls: DeployCall[] = [];
   await setup(page, { onDeploy: (call) => calls.push(call) });
 
@@ -282,7 +284,41 @@ test("la pestaña MCP del proyecto ofrece activar lo disponible del tenant", asy
     }),
   );
 
-  await page.goto(`/admin/projects/${PROJECT_A}/mcp-servers`, { waitUntil: "domcontentloaded" });
+  // task_ui_20: «Capacidades disponibles» se fundió en la pestaña Capacidades.
+  // Antes de activar no hay nada; tras el POST, el endpoint unificado ya lo devuelve
+  // con su procedencia (el mismo cambio de estado que hace el backend real).
+  await page.route(apiRoute(`/projects/${PROJECT_A}/capabilities`), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        entity_type: "project",
+        mcp:
+          calls.length === 0
+            ? []
+            : [
+                {
+                  name: "jira",
+                  transport: "http",
+                  url: "https://a.example",
+                  origin: {
+                    kind: "marketplace",
+                    deployment_id: "dep-new",
+                    listing_id: LISTING_ID,
+                    listing_name: "Jira MCP",
+                    version: "1.2.0",
+                  },
+                  oauth: { required: false, connected: null },
+                  imported_tools: 0,
+                  egress: { blocked: false, host: null, code: null },
+                },
+              ],
+        tools: [],
+        skills: [],
+      }),
+    }),
+  );
+  await page.goto(`/admin/projects/${PROJECT_A}/capabilities`, { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId(`available-${INSTALLATION_ID}`)).toBeVisible();
   await page.getByTestId(`available-activate-${INSTALLATION_ID}`).click();
@@ -291,4 +327,8 @@ test("la pestaña MCP del proyecto ofrece activar lo disponible del tenant", asy
 
   await expect.poll(() => calls.length).toBeGreaterThan(0);
   expect(calls[0].body.project_id).toBe(PROJECT_A);
+
+  // task_ui_20: lo recién desplegado aparece en Capacidades, con su procedencia.
+  await expect(page.getByTestId("capability-card-jira")).toBeVisible();
+  await expect(page.getByTestId("capability-origin-jira")).toContainText("Jira MCP");
 });

@@ -101,8 +101,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   // Sistema no le enseña ningún grupo—. Se le da la que sí puede usar.
   const requested = areaForPath(pathname);
   const allowed = visibleAreas(scope);
-  const required =
-    requested === "system" && !allowed.includes("system") ? "work" : requested;
+  const required = requested === "system" && !allowed.includes("system") ? "work" : requested;
 
   const [sticky, setSticky] = useState<Area>(required ?? "work");
   useEffect(() => {

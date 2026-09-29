@@ -26,7 +26,7 @@ export type OverviewSpend = { available: boolean; reason?: string } & Partial<Bu
 
 export interface OverviewWarning {
   /** `mcp_not_connected` · `mcp_no_tools` · `mcp_egress_blocked` · `repo_not_synced` ·
-   *  `budget_paused_project`. Un código desconocido se pinta genérico. */
+   *  `budget_paused_project` · `role_without_agent`. Un código desconocido se pinta genérico. */
   kind: string;
   count: number;
   names: string[];

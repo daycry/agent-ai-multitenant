@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { useT } from "@/lib/i18n";
+import { KbGrantedTo } from "@/components/knowledge/kb-granted-to";
+import { KbStats } from "@/components/knowledge/kb-stats";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 import { KbDocumentsPanel } from "./kb-documents-panel";
@@ -122,6 +124,10 @@ export function KbRow({
           </div>
         </RoleGuard>
       </CardHeader>
+      <CardContent className="pb-2 pl-10">
+        <KbStats kbId={kb.id} />
+        <KbGrantedTo kbId={kb.id} />
+      </CardContent>
       {kb.description && (
         <CardContent className="pb-2">
           <div className="text-sm">{renderPlanDraft(kb.description)}</div>

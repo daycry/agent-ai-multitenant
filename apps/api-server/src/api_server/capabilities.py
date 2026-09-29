@@ -36,6 +36,11 @@ from api_server.agent_tools_enforcement import (
     compute_effective_tools,
     resolve_project_mcp_tool_names,
 )
+from api_server.capabilities_project import (
+    McpServerCapability,
+    SkillCapability,
+    ToolCapability,
+)
 from api_server.db.domain import Agent, AgentTool, Project, Tool
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.memory import MemoryEntry
@@ -176,6 +181,12 @@ class CapabilitiesResponse(BaseModel):
     #: no configurado, memory_scope=private silencioso, equipo sin miembros…).
     #: Cada uno = ``{code, es, en}``; el frontend renderiza el idioma activo.
     warnings: list[CapabilityWarning] = Field(default_factory=list)
+    #: `task_ui_20` (aditivo, sólo proyecto; ``None`` en agente/equipo): MCP con
+    #: procedencia, conexión, tools importadas y egress, más lo desplegado desde el
+    #: marketplace (`capabilities_project`).
+    mcp: list[McpServerCapability] | None = None
+    tools: list[ToolCapability] | None = None
+    skills: list[SkillCapability] | None = None
 
 
 # ---------------------------------------------------------------------------

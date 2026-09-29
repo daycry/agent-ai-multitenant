@@ -20,6 +20,7 @@ import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Home, Library, Plus, Tag } from "lucide-react";
 
+import { AddKnowledgeWizard } from "@/components/knowledge/add-knowledge-wizard";
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -37,9 +38,12 @@ import { groupByCategory, type KbCategory, type KnowledgeBase } from "./kb-types
 
 export default function KnowledgeBasesPage() {
   const t = useT("knowledgeBases");
+  const tw = useT("knowledgeWizard");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [wizardKey, setWizardKey] = useState(0);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [editing, setEditing] = useState<KnowledgeBase | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeBase | null>(null);
   const [granting, setGranting] = useState<KnowledgeBase | null>(null);
@@ -95,6 +99,16 @@ export default function KnowledgeBasesPage() {
                   <Tag className="mr-1 h-4 w-4" />
                   {t("categoriesLink")}
                 </Link>
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setWizardKey((k) => k + 1);
+                  setWizardOpen(true);
+                }}
+                data-testid="kbs-add-knowledge-button"
+              >
+                {tw("addKnowledge")}
               </Button>
               <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
                 <Plus className="mr-1 h-4 w-4" />
@@ -170,9 +184,24 @@ export default function KnowledgeBasesPage() {
           kbId={assignmentsFor.id}
           kbName={assignmentsFor.name}
           open={true}
-          onOpenChange={(v) => !v && setAssignmentsFor(null)}
+          onOpenChange={(v) => {
+            if (!v) {
+              void queryClient.invalidateQueries({ queryKey: ["kb-projects", assignmentsFor.id] });
+              setAssignmentsFor(null);
+            }
+          }}
         />
       )}
+
+      <AddKnowledgeWizard
+        key={wizardKey}
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        onDone={() => {
+          refetch();
+          void queryClient.invalidateQueries({ queryKey: ["kb-documents"] });
+        }}
+      />
 
       <KbCreateDialog
         open={createOpen}
@@ -213,7 +242,10 @@ export default function KnowledgeBasesPage() {
         <KbGrantDialog
           kb={granting}
           onOpenChange={(v) => !v && setGranting(null)}
-          onGranted={() => setGranting(null)}
+          onGranted={() => {
+            setGranting(null);
+            void queryClient.invalidateQueries({ queryKey: ["kb-projects", granting.id] });
+          }}
         />
       )}
     </div>

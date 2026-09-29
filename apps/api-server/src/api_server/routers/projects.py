@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from shared_mcp import VaultResolver
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,7 @@ from api_server.capabilities import (
     kbs_for_project,
     memory_counts,
 )
+from api_server.capabilities_project import build_project_capability_extras
 from api_server.celery_client import (
     enqueue_clone_project_repo,
     enqueue_compose_review_runtime,
@@ -48,6 +50,7 @@ from api_server.egress.mcp_discovery import egress_warnings_for_servers
 from api_server.git_integration import project_git_secret_path
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.mcp.import_tools import retire_server_tools
+from api_server.mcp.oauth_probe import oauth_connected_probe
 from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     apply_partial_update,
@@ -57,6 +60,7 @@ from api_server.routers._helpers import (
 )
 from api_server.routers._integrity import integrity_conflict
 from api_server.routers.llm_providers import get_provider_vault_store
+from api_server.routers.mcp import get_vault_resolver
 from api_server.schemas.projects import (
     GitConfigResponse,
     GitConfigUpdateRequest,
@@ -814,10 +818,11 @@ async def delete_project(
 @router.get("/{project_id}/capabilities", response_model=CapabilitiesResponse)
 async def get_project_capabilities(
     project_id: UUID,
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
+    resolver: VaultResolver | None = Depends(get_vault_resolver),
 ) -> CapabilitiesResponse:
-    """Devuelve la capacidad efectiva del proyecto (SABER + RECORDAR).
+    """Devuelve la capacidad efectiva del proyecto (SABER + RECORDAR + MCP/tools/skills).
 
     El proyecto no tiene persona ni tools propias (eso vive en sus agentes),
     así que ``ser`` es ``None`` y ``hacer`` no es restrictivo a este nivel.
@@ -835,6 +840,14 @@ async def get_project_capabilities(
         memory=await memory_counts(session, project_id=project_id),
     )
 
+    tenant_id = require_tenant_id(principal)
+    extras = await build_project_capability_extras(
+        session,
+        tenant_id=tenant_id,
+        project=project,
+        oauth_connected=oauth_connected_probe(resolver, tenant_id, project.id),
+    )
+
     return CapabilitiesResponse(
         entity_type="project",
         entity_id=project.id,
@@ -843,4 +856,7 @@ async def get_project_capabilities(
         ser=None,
         hacer=CapabilityHacer(unrestricted=True),
         warnings=[],
+        mcp=extras.mcp,
+        tools=extras.tools,
+        skills=extras.skills,
     )

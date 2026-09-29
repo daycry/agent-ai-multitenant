@@ -171,21 +171,27 @@ describe("projectNavItems", () => {
     const bySuffix = Object.fromEntries(
       projectNavItems(PROJECT_ID).map((item) => [item.labelKey, suffix(item.href)]),
     );
-    expect(bySuffix.projectCapabilities).toBe("/mcp-servers");
+    expect(bySuffix.projectCapabilities).toBe("/capabilities");
     expect(bySuffix.projectKnowledge).toBe("/knowledge-bases");
     expect(bySuffix.projectBoard).toBe("/board");
     // Ajustes es la ficha del proyecto (la raíz), con ancla a su sección.
     expect(bySuffix.projectSettings).toBe("#settings");
   });
 
-  it("deja VISIBLES pero DESHABILITADAS las pestañas cuya pantalla aún no existe", () => {
-    // Runs, Equipo y Costes las hace `task_ui_12`. Una entrada de menú a una ruta
-    // que nadie sirve es un 404 con aspecto de producto: se pinta, no se enlaza.
-    // Cuando esa tarea cree cada `page.tsx`, quita la entrada de este conjunto.
-    const disabled = projectNavItems(PROJECT_ID)
-      .filter((item) => item.disabled === true)
-      .map((item) => item.labelKey);
-    expect(disabled).toEqual(["projectRuns", "projectTeam", "projectCosts"]);
+  it("no deja ninguna pestaña del proyecto deshabilitada: las ocho tienen pantalla", () => {
+    // Runs, Equipo y Costes las hizo `task_ui_12`; una entrada deshabilitada sería
+    // una ruta que nadie sirve.
+    const disabled = projectNavItems(PROJECT_ID).filter((item) => item.disabled === true);
+    expect(disabled).toEqual([]);
+  });
+
+  it("apunta Runs, Equipo y Costes a sus rutas nuevas", () => {
+    const bySuffix = Object.fromEntries(
+      projectNavItems(PROJECT_ID).map((item) => [item.labelKey, suffix(item.href)]),
+    );
+    expect(bySuffix.projectRuns).toBe("/runs");
+    expect(bySuffix.projectTeam).toBe("/team");
+    expect(bySuffix.projectCosts).toBe("/costs");
   });
 
   it("agrupa bajo cada pestaña las pantallas que antes eran entradas sueltas", () => {
@@ -194,6 +200,7 @@ describe("projectNavItems", () => {
       items.find((item) => item.activeSuffixes?.includes(path))?.labelKey;
     expect(owner("/plans")).toBe("projectBoard");
     expect(owner("/tasks")).toBe("projectBoard");
+    expect(owner("/mcp-servers")).toBe("projectCapabilities");
     expect(owner("/commands")).toBe("projectCapabilities");
     expect(owner("/agent-tools-diagnostic")).toBe("projectCapabilities");
     expect(owner("/memories")).toBe("projectSettings");

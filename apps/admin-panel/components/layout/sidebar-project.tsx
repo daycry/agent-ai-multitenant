@@ -7,8 +7,8 @@
  * (Resumen · Tablero · Runs · Equipo · Capacidades · Conocimiento · Costes ·
  * Ajustes). Lista plana: son ocho entradas de un solo nivel.
  *
- * Las pestañas que aún no tienen pantalla (`PROJECT_TABS_PENDING` en
- * `nav-model.ts`) se pintan deshabilitadas: enlazarlas sería un 404.
+ * Desde `task_ui_12` las ocho pestañas tienen pantalla; `NavItem.disabled` queda para
+ * futuras pestañas aún sin ruta (enlazarlas sería un 404).
  */
 
 import Link from "next/link";

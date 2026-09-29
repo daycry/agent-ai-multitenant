@@ -187,6 +187,7 @@ def _exec_filters(
     verdict: str | None = None,
     model: str | None = None,
     min_cost: Decimal | None = None,
+    project_id: UUID | None = None,
 ) -> list[ColumnElement[bool]]:
     """The tenant scope + optional filters for an Execution aggregate / list.
 
@@ -203,6 +204,8 @@ def _exec_filters(
         filters.append(Agent.role == role)
     if plan_id is not None:
         filters.append(Task.plan_id == plan_id)
+    if project_id is not None:
+        filters.append(Task.project_id == project_id)
     if task_id is not None:
         filters.append(Execution.task_id == task_id)
     if verdict is not None:
@@ -404,6 +407,7 @@ async def query_execution_runs(
     min_cost: Decimal | None = None,
     display_currency: str | None = None,
     cursor: str | None = None,
+    project_id: UUID | None = None,
 ) -> list[ExecutionRunRow]:
     """This tenant's executions, newest first, paginated + filtered + currency-applied.
 
@@ -423,6 +427,7 @@ async def query_execution_runs(
         verdict=verdict,
         model=model,
         min_cost=min_cost,
+        project_id=project_id,
     )
     target_currency = await _resolve_display_currency(
         session, tenant_id=tenant_id, override=display_currency

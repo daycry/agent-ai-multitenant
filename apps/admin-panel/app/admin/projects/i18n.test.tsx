@@ -444,42 +444,39 @@ describe("projects/[id]/commands — comandos & runtime", () => {
 });
 
 describe("projects/[id]/knowledge-bases — KBs del proyecto", () => {
-  it("en castellano rinde cabecera, catálogo, ficha y estado del documento", async () => {
+  it("en castellano rinde cabecera, tarjeta con sus cifras y estado del documento", async () => {
     renderIn("es", <ProjectKnowledgeBasesPage />);
 
-    expect(await screen.findByText("Knowledge Bases del proyecto")).toBeDefined();
+    expect(await screen.findByText("Conocimiento del proyecto")).toBeDefined();
     expect((await screen.findByTestId("add-knowledge-button")).textContent).toContain(
       "Añadir conocimiento",
     );
-    expect(await screen.findByText("Catálogo de conocimiento")).toBeDefined();
+    expect((await screen.findByTestId("kb-stats-count-kb-1")).textContent).toBe("1 documentos");
+    expect((await screen.findByTestId("kb-stats-state-kb-1")).textContent).toBe("Indexada");
+    expect((await screen.findByTestId("kb-category-kb-1")).textContent).toContain("Sin categoría");
+    fireEvent.click(await screen.findByTestId("kb-toggle-kb-1"));
     expect((await screen.findByTestId("kb-doc-status-doc-1")).textContent).toBe("Indexado");
-    expect((await screen.findByTestId("kb-catalog-toggle-kb-1")).textContent).toContain(
-      "Desactivar",
-    );
+    expect((await screen.findByTestId("kb-remove-kb-1")).textContent).toContain("Quitar");
   });
 
   it("en inglés rinde lo mismo traducido y no deja castellano por debajo", async () => {
     renderIn("en", <ProjectKnowledgeBasesPage />);
 
-    expect(await screen.findByText("Project knowledge bases")).toBeDefined();
+    expect(await screen.findByText("Project knowledge")).toBeDefined();
     expect((await screen.findByTestId("add-knowledge-button")).textContent).toContain(
       "Add knowledge",
     );
-    expect(await screen.findByText("Knowledge catalog")).toBeDefined();
+    expect((await screen.findByTestId("kb-stats-state-kb-1")).textContent).toBe("Indexed");
+    fireEvent.click(await screen.findByTestId("kb-toggle-kb-1"));
     expect((await screen.findByTestId("kb-doc-status-doc-1")).textContent).toBe("Indexed");
-    expect((await screen.findByTestId("kb-catalog-toggle-kb-1")).textContent).toContain("Disable");
     expect((await screen.findByTestId("kb-doc-ingestion-link-doc-1")).textContent).toBe("Progress");
 
-    expect(screen.queryByText("Catálogo de conocimiento")).toBeNull();
+    expect(screen.queryByText("Conocimiento del proyecto")).toBeNull();
     expect(screen.queryByText("Indexado")).toBeNull();
   });
 
-  it("el diálogo de subida se traduce, y el nombre de la KB implícita NO (es un dato)", async () => {
+  it("el diálogo de subida se traduce", async () => {
     renderIn("en", <ProjectKnowledgeBasesPage />);
-
-    // El nombre de la KB implícita se persiste y sirve de clave del
-    // find-or-create: traducirlo crearía una KB distinta por idioma.
-    expect(await screen.findByText(/“Documentos de Demo” KB/)).toBeDefined();
 
     fireEvent.click(await screen.findByTestId("kb-upload-open-kb-1"));
 

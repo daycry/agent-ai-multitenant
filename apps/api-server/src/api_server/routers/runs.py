@@ -39,6 +39,9 @@ async def list_runs(
     agent_id: UUID | None = Query(default=None, description="Narrow to one agent."),
     role: str | None = Query(default=None, max_length=32, description="Narrow to one agent role."),
     plan_id: UUID | None = Query(default=None, description="Narrow to one plan."),
+    project_id: UUID | None = Query(
+        default=None, description="Narrow to one project — the project's Runs tab."
+    ),
     task_id: UUID | None = Query(
         default=None, description="Narrow to one task — the Kanban run-history panel."
     ),
@@ -75,6 +78,7 @@ async def list_runs(
         model=model,
         min_cost=min_cost,
         display_currency=display_currency,
+        project_id=project_id,
     )
 
 

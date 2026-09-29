@@ -31,7 +31,6 @@ import { Bot, Eye, Plug, Wrench } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
-import { AvailableCapabilitiesSection } from "@/components/marketplace/available-capabilities-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
@@ -172,10 +171,8 @@ export default function AgentToolsDiagnosticPage() {
         </div>
       )}
 
-      {/* ADR 0142 (D4): la ÚNICA parte de esta pantalla que escribe. Va debajo
-          del diagnóstico y con su propia cabecera para que no se confunda con
-          él; el banner de arriba acota su «solo lectura» a lo diagnóstico. */}
-      <AvailableCapabilitiesSection projectId={projectId} kinds={["tool", "skill"]} />
+      {/* «Capacidades disponibles» (ADR 0142 D4) se fundió en la pestaña Capacidades
+          del proyecto (`task_ui_20`): esta pantalla vuelve a ser sólo diagnóstico. */}
     </div>
   );
 }

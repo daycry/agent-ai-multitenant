@@ -206,16 +206,6 @@ export function projectIdFromPath(pathname: string | null | undefined): string |
 }
 
 /**
- * Las pestañas de la barra del proyecto cuya pantalla aún NO existe.
- *
- * Se pintan pero no se enlazan: una entrada de menú a una ruta que nadie sirve es
- * un 404 con aspecto de producto. Runs, Equipo y Costes las hace `task_ui_12`; al
- * crear cada `page.tsx`, esa tarea quita la pestaña de este conjunto (y el test de
- * `nav-model.test.ts` que fija la lista se lo recuerda).
- */
-const PROJECT_TABS_PENDING: ReadonlySet<string> = new Set(["runs", "team", "costs"]);
-
-/**
  * La barra contextual de un proyecto: las OCHO pestañas del plan.
  *
  * Las pantallas que antes eran entradas sueltas (planes, tareas, comandos,
@@ -238,14 +228,14 @@ export function projectNavItems(projectId: string): NavItem[] {
     labelKey,
     Icon,
     activeSuffixes,
-    disabled: PROJECT_TABS_PENDING.has(id) || undefined,
   });
   return [
     tab("overview", at(""), "projectOverview", Library),
     tab("board", at("/board"), "projectBoard", KanbanSquare, ["/plans", "/tasks"]),
     tab("runs", at("/runs"), "projectRuns", Play),
     tab("team", at("/team"), "projectTeam", Users),
-    tab("capabilities", at("/mcp-servers"), "projectCapabilities", Server, [
+    tab("capabilities", at("/capabilities"), "projectCapabilities", Server, [
+      "/mcp-servers",
       "/commands",
       "/agent-tools-diagnostic",
     ]),

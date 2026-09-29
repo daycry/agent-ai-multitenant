@@ -49,6 +49,10 @@ describe("dictionary — invariantes", () => {
     // con verdaderas traducciones pendientes, el test deja de servir para nada.
     const identicalOnPurpose = new Set([
       "login.emailLabel",
+      // `task_ui_20` — MCP, Tools y Skills son los nombres de los tres subsistemas.
+      "projectCapabilities.tabMcp",
+      "projectCapabilities.tabTools",
+      "projectCapabilities.tabSkills",
       "nav.dashboard",
       "nav.runs",
       // `task_ui_01` — «Chat» es la misma palabra en los dos idiomas, y es la
@@ -106,6 +110,11 @@ describe("dictionary — invariantes", () => {
       "tenantStats.colVerdict",
       // ui-reestructuracion `task_ui_11` y `task_ui_03`: «Plan» se escribe igual en
       // las dos lenguas y las unidades de antigüedad (min, h, d) son símbolos.
+      // `task_ui_12`: «Plan», «Tokens» y «Runs» se escriben igual en las dos lenguas.
+      "projectTabs.runsFilterPlan",
+      "projectTabs.colPlan",
+      "projectTabs.colTokens",
+      "projectTabs.colRuns",
       "portfolio.colPlan",
       "portfolio.countOne",
       "inboxHub.ageMinutes",

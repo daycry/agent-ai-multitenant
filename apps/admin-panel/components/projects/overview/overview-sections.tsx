@@ -132,6 +132,8 @@ function warningText(t: Translator<"projectOverview">, w: OverviewWarning): stri
       return t("warnRepoNotSynced");
     case "budget_paused_project":
       return t("warnBudgetPaused");
+    case "role_without_agent":
+      return t("warnRoleWithoutAgent", { names });
     default:
       return t("warnUnknown", { kind: w.kind });
   }

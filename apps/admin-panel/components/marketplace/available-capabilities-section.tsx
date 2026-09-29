@@ -143,6 +143,9 @@ export function AvailableCapabilitiesSection({
       void queryClient.invalidateQueries({ queryKey: availableKey });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["tools-catalog"] });
+      // task_ui_20: la pestaña Capacidades lee del endpoint unificado; lo recién
+      // desplegado tiene que aparecer ahí sin recargar.
+      void queryClient.invalidateQueries({ queryKey: ["project-capabilities", projectId] });
     },
     onError: (err: unknown) => {
       // Un fallo se enseña donde se pulsó, no en un toast que se va.

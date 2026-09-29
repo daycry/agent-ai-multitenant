@@ -219,7 +219,7 @@ export const dictionary = {
     projectPlans: { es: "Planes", en: "Plans" },
     projectTasks: { es: "Tareas", en: "Tasks" },
     projectChat: { es: "Chat", en: "Chat" },
-    projectCapabilities: { es: "Capacidades (MCP)", en: "Capabilities (MCP)" },
+    projectCapabilities: { es: "Capacidades", en: "Capabilities" },
     projectToolsDiagnostic: { es: "Diagnóstico de tools", en: "Tools diagnostic" },
     projectCommands: { es: "Comandos", en: "Commands" },
     projectKnowledge: { es: "Conocimiento", en: "Knowledge" },
@@ -3384,11 +3384,122 @@ export const dictionary = {
       es: "Proyecto pausado por presupuesto",
       en: "Project paused by budget",
     },
+    warnRoleWithoutAgent: {
+      es: "Roles que piden los planes activos y el equipo no cubre: {names}",
+      en: "Roles the active plans ask for and the team does not cover: {names}",
+    },
     warnUnknown: { es: "Aviso: {kind}", en: "Warning: {kind}" },
     activityTitle: { es: "Actividad de agentes", en: "Agent activity" },
     activityEmpty: { es: "Aún no hay runs en este proyecto.", en: "No runs in this project yet." },
     activityUnknownAgent: { es: "Agente sin asignar", en: "Unassigned agent" },
     moreTitle: { es: "Otras pantallas del proyecto", en: "Other project screens" },
+  },
+
+  /**
+   * Pestañas Runs, Equipo y Costes del proyecto (`task_ui_12`, plan
+   * ui-reestructuracion): `components/projects/hub/`.
+   */
+  projectTabs: {
+    runsTitle: { es: "Runs del proyecto", en: "Project runs" },
+    runsFilterPlan: { es: "Plan", en: "Plan" },
+    runsFilterAgent: { es: "Agente", en: "Agent" },
+    runsFilterStatus: { es: "Estado", en: "Status" },
+    all: { es: "Todos", en: "All" },
+    runsLoading: { es: "Cargando runs…", en: "Loading runs…" },
+    runsError: {
+      es: "No se pudieron cargar los runs: {detail}",
+      en: "Runs could not be loaded: {detail}",
+    },
+    runsEmpty: {
+      es: "Este proyecto aún no tiene runs con esos filtros.",
+      en: "No runs in this project for those filters yet.",
+    },
+    colWhen: { es: "Fecha", en: "Date" },
+    colPlan: { es: "Plan", en: "Plan" },
+    colTask: { es: "Tarea", en: "Task" },
+    colAgent: { es: "Agente", en: "Agent" },
+    colModel: { es: "Modelo", en: "Model" },
+    colStatus: { es: "Estado", en: "Status" },
+    colDuration: { es: "Duración", en: "Duration" },
+    colTokens: { es: "Tokens", en: "Tokens" },
+    colCost: { es: "Coste", en: "Cost" },
+    colRuns: { es: "Runs", en: "Runs" },
+    prev: { es: "Anterior", en: "Previous" },
+    next: { es: "Siguiente", en: "Next" },
+    page: { es: "Página {page}", en: "Page {page}" },
+    teamTitle: { es: "Equipo del proyecto", en: "Project team" },
+    teamLoading: { es: "Cargando el equipo…", en: "Loading the team…" },
+    teamError: {
+      es: "No se pudo cargar el equipo: {detail}",
+      en: "The team could not be loaded: {detail}",
+    },
+    teamNone: {
+      es: "Este proyecto no tiene equipo asignado. Asigna uno en Ajustes.",
+      en: "This project has no team assigned. Assign one in Settings.",
+    },
+    teamAssigned: { es: "Equipo asignado: {name}", en: "Assigned team: {name}" },
+    teamAiTitle: { es: "Agentes por rol", en: "Agents by role" },
+    teamAiEmpty: { es: "El equipo no tiene agentes de IA.", en: "The team has no AI agents." },
+    teamHumansTitle: { es: "Agentes humanos", en: "Human agents" },
+    teamHumansEmpty: {
+      es: "El equipo no tiene agentes humanos.",
+      en: "The team has no human agents.",
+    },
+    teamLeader: { es: "líder", en: "leader" },
+    gapsTitle: { es: "Huecos de rol", en: "Role gaps" },
+    gapsNone: {
+      es: "Ningún hueco: el equipo cubre los roles que piden los planes activos.",
+      en: "No gaps: the team covers every role the active plans ask for.",
+    },
+    gapAsked: { es: "Lo piden: {plans}", en: "Requested by: {plans}" },
+    gapCandidates: {
+      es: "Agentes con ese rol fuera del equipo:",
+      en: "Agents with that role outside the team:",
+    },
+    gapNoCandidates: {
+      es: "No hay ningún agente con ese rol en el tenant.",
+      en: "No agent with that role exists in the tenant.",
+    },
+    costsTitle: { es: "Costes del proyecto", en: "Project costs" },
+    costsLoading: { es: "Cargando los costes…", en: "Loading the costs…" },
+    costsError: {
+      es: "No se pudieron cargar los costes: {detail}",
+      en: "The costs could not be loaded: {detail}",
+    },
+    costsForbidden: {
+      es: "Los costes sólo los ve un administrador del tenant.",
+      en: "Only a tenant administrator can see the costs.",
+    },
+    costsWindow: { es: "Últimos {days} días", en: "Last {days} days" },
+    costsTotal: { es: "Gasto de IA", en: "AI spend" },
+    costsTotalValue: { es: "{cost} USD en {runs} runs", en: "{cost} USD across {runs} runs" },
+    budgetTitle: { es: "Presupuesto", en: "Budget" },
+    budgetNone: {
+      es: "Este proyecto no tiene presupuesto configurado.",
+      en: "This project has no budget configured.",
+    },
+    budgetUsed: {
+      es: "{percent}% de {budget} USD ({spent} USD gastados)",
+      en: "{percent}% of {budget} USD ({spent} USD spent)",
+    },
+    budgetOver: { es: "Presupuesto superado", en: "Budget exceeded" },
+    pausedNotice: {
+      es: "El proyecto está pausado por presupuesto: no arrancan runs nuevos.",
+      en: "The project is paused by budget: no new runs will start.",
+    },
+    pausedClear: { es: "Levantar la pausa", en: "Lift the pause" },
+    pausedClearing: { es: "Levantando…", en: "Lifting…" },
+    pausedClearError: {
+      es: "No se pudo levantar la pausa: {detail}",
+      en: "The pause could not be lifted: {detail}",
+    },
+    byPlan: { es: "Por plan", en: "By plan" },
+    byAgent: { es: "Por agente", en: "By agent" },
+    byModel: { es: "Por modelo", en: "By model" },
+    breakdownEmpty: { es: "Sin gasto en esta ventana.", en: "No spend in this window." },
+    noPlan: { es: "Sin plan", en: "No plan" },
+    noAgent: { es: "Sin agente", en: "No agent" },
+    noModel: { es: "Sin modelo (sin llamadas)", en: "No model (no calls)" },
   },
 
   /**
@@ -6016,6 +6127,10 @@ export const dictionary = {
       en: "MCP (Model Context Protocol) servers that the agents of this project will be able to use as tools.",
     },
     addButton: { es: "Añadir MCP server", en: "Add MCP server" },
+    capabilitiesLink: {
+      es: "Ver todas las capacidades del proyecto (MCP, tools y skills) y activar las del marketplace",
+      en: "See all the capabilities of the project (MCP, tools and skills) and activate the marketplace ones",
+    },
     deleteConfirm: {
       es: "¿Borrar este MCP server del proyecto?",
       en: "Delete this MCP server from the project?",
@@ -7438,6 +7553,112 @@ export const dictionary = {
     mcpServers: { es: "{count} servidores", en: "{count} servers" },
     mcpWarnings: { es: "{count} avisos", en: "{count} warnings" },
     mcpOk: { es: "sin avisos", en: "no warnings" },
+  },
+  /**
+   * `task_ui_21` — Conocimiento como flujo guiado: el asistente «Añadir
+   * conocimiento», las cifras de la tarjeta de cada base y «concedida a».
+   * Vocabulario: «base de conocimiento» y «documento»; ids y jerga de ingesta
+   * sólo dentro del detalle plegado de un fallo.
+   */
+  knowledgeWizard: {
+    addKnowledge: { es: "Añadir conocimiento", en: "Add knowledge" },
+    wizardTitle: { es: "Añadir conocimiento", en: "Add knowledge" },
+    loading: { es: "Cargando bases de conocimiento…", en: "Loading knowledge bases…" },
+    stepOf: { es: "Paso {step} de {total}", en: "Step {step} of {total}" },
+    step1: { es: "Elige o crea una base", en: "Choose or create a base" },
+    step2: { es: "Sube documentos o pega texto", en: "Upload documents or paste text" },
+    step3: { es: "Indexado", en: "Indexing" },
+    createNew: {
+      es: "+ Crear una base de conocimiento nueva",
+      en: "+ Create a new knowledge base",
+    },
+    newName: { es: "Nombre de la base", en: "Base name" },
+    filesLabel: { es: "Documentos", en: "Documents" },
+    textTitleLabel: {
+      es: "Título del texto pegado (opcional)",
+      en: "Pasted text title (optional)",
+    },
+    textLabel: { es: "…o pega un texto", en: "…or paste some text" },
+    pastedTextName: { es: "texto-pegado", en: "pasted-text" },
+    next: { es: "Siguiente", en: "Next" },
+    back: { es: "Atrás", en: "Back" },
+    upload: { es: "Subir e indexar", en: "Upload and index" },
+    uploading: { es: "Subiendo…", en: "Uploading…" },
+    done: { es: "Hecho", en: "Done" },
+    retry: { es: "Reintentar", en: "Retry" },
+    failureDetail: { es: "Detalle técnico del fallo", en: "Technical failure detail" },
+    docPending: { es: "En cola", en: "Queued" },
+    docProcessing: { es: "Indexando", en: "Indexing" },
+    docIndexed: { es: "Indexado", en: "Indexed" },
+    docFailed: { es: "Ha fallado", en: "Failed" },
+    stateEmpty: { es: "Sin documentos", en: "No documents" },
+    stateIndexed: { es: "Indexada", en: "Indexed" },
+    stateIndexing: { es: "Indexando", en: "Indexing" },
+    stateFailed: { es: "Con fallos", en: "With failures" },
+    documentsCount: { es: "{n} documentos", en: "{n} documents" },
+    updatedOn: { es: "Actualizada el {date}", en: "Updated {date}" },
+    categoryLabel: { es: "Categoría", en: "Category" },
+    noCategory: { es: "Sin categoría", en: "No category" },
+    grantedTo: { es: "Concedida a:", en: "Granted to:" },
+    grantedNone: { es: "ningún proyecto", en: "no project" },
+    revoke: { es: "Retirar de {name}", en: "Remove from {name}" },
+    addDocument: { es: "Añadir documento", en: "Add document" },
+    removeFromProject: { es: "Quitar del proyecto", en: "Remove from project" },
+    noDocumentsYet: {
+      es: "Esta base aún no tiene documentos.",
+      en: "This base has no documents yet.",
+    },
+    pageTitle: { es: "Conocimiento del proyecto", en: "Project knowledge" },
+    pageDescription: {
+      es: "Las bases de conocimiento que este proyecto y sus agentes pueden leer, con el estado de sus documentos.",
+      en: "The knowledge bases this project and its agents can read, with the state of their documents.",
+    },
+    pageEmpty: {
+      es: "Este proyecto aún no tiene conocimiento. Pulsa «Añadir conocimiento» para empezar.",
+      en: "This project has no knowledge yet. Press “Add knowledge” to start.",
+    },
+  },
+  /**
+   * `task_ui_20` — pestaña Capacidades del proyecto (MCP · Tools · Skills): procedencia,
+   * conexión, tools importadas y egress de cada servidor, y lo desplegado del marketplace.
+   */
+  projectCapabilities: {
+    title: { es: "Capacidades", en: "Capabilities" },
+    description: {
+      es: "Lo que los agentes de este proyecto pueden usar: servidores MCP, tools y skills, con de dónde vienen y en qué estado están.",
+      en: "What the agents of this project can use: MCP servers, tools and skills, with where they come from and their state.",
+    },
+    breadcrumbCurrent: { es: "Capacidades", en: "Capabilities" },
+    // «MCP», «Tools» y «Skills» son los nombres de los tres subsistemas y no se traducen.
+    tabMcp: { es: "MCP", en: "MCP" },
+    tabTools: { es: "Tools", en: "Tools" },
+    tabSkills: { es: "Skills", en: "Skills" },
+    emptyMcp: {
+      es: "Este proyecto aún no tiene servidores MCP. Decláralos en la configuración o actívalos desde el marketplace, debajo.",
+      en: "This project has no MCP servers yet. Declare them in the settings or activate them from the marketplace, below.",
+    },
+    emptyTools: {
+      es: "Ninguna tool del marketplace está desplegada en este proyecto.",
+      en: "No marketplace tool is deployed in this project.",
+    },
+    emptySkills: {
+      es: "Ninguna skill del marketplace está desplegada en este proyecto.",
+      en: "No marketplace skill is deployed in this project.",
+    },
+    originDeclared: { es: "Declarado", en: "Declared" },
+    originDeployed: {
+      es: "Desplegado desde {listing} v{version}",
+      en: "Deployed from {listing} v{version}",
+    },
+    deployedVersion: { es: "Desplegada v{version}", en: "Deployed v{version}" },
+    agentsCount: { es: "{count} agentes", en: "{count} agents" },
+    oauthConnected: { es: "OAuth conectado", en: "OAuth connected" },
+    oauthNotConnected: { es: "OAuth sin conectar", en: "OAuth not connected" },
+    egressBlocked: {
+      es: "Host {host} sin abrir en el egress",
+      en: "Host {host} not opened in egress",
+    },
+    configure: { es: "Configurar", en: "Configure" },
   },
 } as const satisfies Dictionary;
 

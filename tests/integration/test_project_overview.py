@@ -325,3 +325,273 @@ async def test_requires_authentication(configured_app, migrations_pg_dsn: str) -
     ) as client:
         resp = await client.get(f"/projects/{a['project']}/overview")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# task_ui_12 — el aviso `role_without_agent` y las pestañas Equipo y Costes.
+# ---------------------------------------------------------------------------
+_SPEC_QA = {"tasks": [{"title": "t1", "role": "backend_dev"}, {"title": "t2", "role": "qa"}]}
+
+
+async def _set_plan_spec(
+    dsn: str, project: UUID, spec: dict, *, status: str = "in_progress"
+) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "UPDATE plans SET specification = $2::jsonb, status = $3 WHERE project_id = $1",
+            project,
+            json.dumps(spec),
+            status,
+        )
+    finally:
+        await conn.close()
+
+
+async def _add_team(
+    dsn: str, seeded: dict[str, UUID], roles: list[tuple[str, str]], *, project_key: str = "project"
+) -> dict[str, UUID]:
+    """Un equipo asignado al proyecto con un agente por (rol, agent_type)."""
+    conn = await asyncpg.connect(dsn)
+    team = uuid4()
+    ids: dict[str, UUID] = {}
+    try:
+        await conn.execute(
+            "INSERT INTO teams (id, tenant_id, name) VALUES ($1, $2, 'Equipo')",
+            team,
+            seeded["tenant"],
+        )
+        for role, kind in roles:
+            agent = uuid4()
+            ids[role] = agent
+            await conn.execute(
+                "INSERT INTO agents (id, tenant_id, name, agent_type, role, system_prompt, scope)"
+                " VALUES ($1, $2, $3, $4, $5, 'p', 'global_tenant_template')",
+                agent,
+                seeded["tenant"],
+                f"Agente {role}",
+                kind,
+                role,
+            )
+            await conn.execute(
+                "INSERT INTO team_members (team_id, agent_id, tenant_id) VALUES ($1, $2, $3)",
+                team,
+                agent,
+                seeded["tenant"],
+            )
+        await conn.execute(
+            "UPDATE projects SET team_id = $2 WHERE id = $1", seeded[project_key], team
+        )
+    finally:
+        await conn.close()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_role_without_agent_warning_follows_the_team(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    await _set_plan_spec(migrations_pg_dsn, a["project"], _SPEC_QA)
+    # Sin equipo: los dos roles pedidos son hueco.
+    warning = _by_kind(await _overview(configured_app, a["project"], token))["role_without_agent"]
+    assert warning["names"] == ["backend_dev", "qa"]
+    assert warning["count"] == 2
+    assert warning["url_path"] == f"/admin/projects/{a['project']}/team"
+    # Equipo con backend_dev pero sin qa: sólo qa.
+    await _add_team(migrations_pg_dsn, a, [("backend_dev", "ai")])
+    warning = _by_kind(await _overview(configured_app, a["project"], token))["role_without_agent"]
+    assert warning["names"] == ["qa"]
+
+
+@pytest.mark.asyncio
+async def test_role_without_agent_warning_disappears_when_covered(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    await _set_plan_spec(migrations_pg_dsn, a["project"], _SPEC_QA)
+    await _add_team(migrations_pg_dsn, a, [("backend_dev", "ai"), ("qa", "ai")])
+    assert "role_without_agent" not in _by_kind(
+        await _overview(configured_app, a["project"], token)
+    )
+
+
+@pytest.mark.asyncio
+async def test_role_without_agent_ignores_inactive_plans_and_other_projects(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    # Plan completado que pide qa: no cuenta. El plan del otro proyecto pide qa: tampoco.
+    await _set_plan_spec(migrations_pg_dsn, a["project"], _SPEC_QA, status="completed")
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE plans SET specification = $2::jsonb WHERE project_id = $1",
+            a["other"],
+            json.dumps(_SPEC_QA),
+        )
+    finally:
+        await conn.close()
+    assert "role_without_agent" not in _by_kind(
+        await _overview(configured_app, a["project"], token)
+    )
+
+
+async def _api_get(app, path: str, token: str, *, expect: int = 200):  # type: ignore[no-untyped-def]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(path, headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == expect, resp.text
+    return resp.json()
+
+
+@pytest.mark.asyncio
+async def test_team_tab_lists_members_humans_and_the_same_role_gaps(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    await _set_plan_spec(migrations_pg_dsn, a["project"], _SPEC_QA)
+    ids = await _add_team(migrations_pg_dsn, a, [("backend_dev", "ai"), ("reviewer", "human")])
+    body = await _api_get(configured_app, f"/projects/{a['project']}/team", token)
+    assert body["team"]["name"] == "Equipo"
+    members = {m["role"]: m for m in body["members"]}
+    assert members["backend_dev"]["agent_type"] == "ai"
+    assert members["reviewer"]["agent_type"] == "human"
+    assert members["backend_dev"]["url_path"] == f"/admin/agents/{ids['backend_dev']}"
+    assert [g["role"] for g in body["role_gaps"]] == ["qa"]
+    # El hueco y el aviso del Resumen salen del mismo cálculo.
+    overview = await _overview(configured_app, a["project"], token)
+    assert _by_kind(overview)["role_without_agent"]["names"] == ["qa"]
+
+
+@pytest.mark.asyncio
+async def test_team_tab_offers_tenant_agents_that_fill_the_gap(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    await _set_plan_spec(migrations_pg_dsn, a["project"], _SPEC_QA)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    qa_agent = uuid4()
+    try:
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
+            " VALUES ($1, $2, 'Quique QA', 'qa', 'p', 'global_tenant_template')",
+            qa_agent,
+            a["tenant"],
+        )
+    finally:
+        await conn.close()
+    body = await _api_get(configured_app, f"/projects/{a['project']}/team", token)
+    gap = next(g for g in body["role_gaps"] if g["role"] == "qa")
+    assert gap["candidates"] == [
+        {"agent_id": str(qa_agent), "name": "Quique QA", "url_path": f"/admin/agents/{qa_agent}"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_team_tab_cross_tenant_is_404_and_does_not_leak(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    await _add_team(migrations_pg_dsn, b, [("qa", "ai")])
+    await _api_get(
+        configured_app,
+        f"/projects/{b['project']}/team",
+        await _token(a["admin"], a["tenant"]),
+        expect=404,
+    )
+    body = await _api_get(
+        configured_app,
+        f"/projects/{a['project']}/team",
+        await _token(a["admin"], a["tenant"]),
+    )
+    assert body["team"] is None
+    assert body["members"] == []
+    assert "Agente qa" not in json.dumps(body)
+
+
+async def _seed_costs(dsn: str, a: dict[str, UUID]) -> None:
+    """Dos runs con coste en el proyecto y uno en el otro proyecto del mismo tenant."""
+    conn = await asyncpg.connect(dsn)
+    try:
+        agent = uuid4()
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
+            " VALUES ($1, $2, 'Ana', 'backend_dev', 'p', 'global_tenant_template')",
+            agent,
+            a["tenant"],
+        )
+        rows = await conn.fetch("SELECT id FROM tasks WHERE tenant_id = $1", a["tenant"])
+        for i, row in enumerate(rows):
+            await conn.execute(
+                "UPDATE executions SET agent_id = $2, total_cost_usd = $3, total_tokens = 100,"
+                " last_model = $4 WHERE task_id = $1",
+                row["id"],
+                agent,
+                1 + i,
+                "m-a" if i == 0 else "m-b",
+            )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_costs_tab_breaks_down_spend_of_this_project_only(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    await _seed_costs(migrations_pg_dsn, a)
+    body = await _api_get(
+        configured_app,
+        f"/projects/{a['project']}/costs",
+        await _token(a["admin"], a["tenant"]),
+    )
+    assert body["run_count"] == 2
+    assert float(body["total_cost_usd"]) == pytest.approx(
+        sum(float(r["cost_usd"]) for r in body["by_plan"])
+    )
+    assert [p["title"] for p in body["by_plan"]] == ["Plan activo"]
+    assert [x["name"] for x in body["by_agent"]] == ["Ana"]
+    assert {m["model"] for m in body["by_model"]} <= {"m-a", "m-b"}
+    assert body["budget"]["available"] is False
+    assert body["paused_by_budget"] is False
+    assert "Plan ajeno" not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+async def test_costs_tab_is_tenant_admin_only(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    await _api_get(
+        configured_app,
+        f"/projects/{a['project']}/costs",
+        await _token(a["user"], a["tenant"]),
+        expect=403,
+    )
+
+
+@pytest.mark.asyncio
+async def test_costs_tab_cross_tenant_is_404(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    await _api_get(
+        configured_app,
+        f"/projects/{b['project']}/costs",
+        await _token(a["admin"], a["tenant"]),
+        expect=404,
+    )
+
+
+@pytest.mark.asyncio
+async def test_runs_can_be_filtered_by_project(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+    mine = await _api_get(configured_app, f"/runs?project_id={a['project']}", token)
+    other = await _api_get(configured_app, f"/runs?project_id={a['other']}", token)
+    everything = await _api_get(configured_app, "/runs", token)
+    assert len(mine) == 2 and len(other) == 1 and len(everything) == 3
+    assert {r["plan_title"] for r in mine} == {"Plan activo"}

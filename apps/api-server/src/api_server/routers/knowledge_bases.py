@@ -600,7 +600,20 @@ async def list_kbs_for_project(
         .order_by(KnowledgeBase.created_at.desc())
     )
     result = await session.execute(stmt)
-    return [to_kb_response(kb) for kb in result.scalars().all()]
+    kbs = list(result.scalars().all())
+    # La categoría va embebida (una query batch, como en `list_kbs`): la pestaña
+    # Conocimiento del proyecto la pinta en la tarjeta de cada base.
+    cat_ids = {kb.category_id for kb in kbs if kb.category_id is not None}
+    cats_by_id: dict[UUID, KbCategory] = {}
+    if cat_ids:
+        cat_rows = await session.execute(
+            select(KbCategory).where(KbCategory.id.in_(cat_ids), KbCategory.deleted_at.is_(None))
+        )
+        cats_by_id = {c.id: c for c in cat_rows.scalars().all()}
+    return [
+        to_kb_response(kb, cats_by_id.get(kb.category_id) if kb.category_id is not None else None)
+        for kb in kbs
+    ]
 
 
 # ===========================================================================

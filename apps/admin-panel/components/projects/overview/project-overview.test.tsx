@@ -66,6 +66,7 @@ const FULL: ProjectOverviewData = {
     { kind: "mcp_no_tools", count: 1, names: ["atlassian"], url_path: `${BASE}/mcp-servers` },
     { kind: "mcp_egress_blocked", count: 2, names: [], url_path: `${BASE}/mcp-servers` },
     { kind: "repo_not_synced", count: 1, names: [], url_path: BASE },
+    { kind: "role_without_agent", count: 1, names: ["qa"], url_path: `${BASE}/team` },
   ],
   activity: [
     {
@@ -130,6 +131,12 @@ describe("ProjectOverview", () => {
     expect(warnings.textContent).toContain("MCP sin tools importadas: atlassian");
     expect(warnings.textContent).toContain("Egress bloqueado en 2 servidor(es) MCP");
     expect(warnings.textContent).toContain("El repositorio no está sincronizado");
+    expect(warnings.textContent).toContain(
+      "Roles que piden los planes activos y el equipo no cubre: qa",
+    );
+    expect(screen.getByTestId("overview-warning-role_without_agent").getAttribute("href")).toBe(
+      `${BASE}/team`,
+    );
     expect(screen.getByTestId("overview-warning-mcp_not_connected").getAttribute("href")).toBe(
       `${BASE}/mcp-servers`,
     );

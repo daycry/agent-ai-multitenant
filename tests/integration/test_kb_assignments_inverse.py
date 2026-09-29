@@ -400,3 +400,52 @@ async def test_tenant_b_cannot_see_tenant_a_assignments(
             await client.get(f"/knowledge-bases/{ids['kb_a']}/projects", headers=headers_a)
         ).json()
         assert [p["project_id"] for p in a_projects] == [str(ids["project_a"])]
+
+
+# ===========================================================================
+# task_ui_21 — la pestaña Conocimiento del proyecto pinta la categoría de cada
+# base: el listado directo la trae embebida (antes iba siempre a null).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_project_kb_listing_embeds_the_category_and_is_tenant_scoped(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    cat_id = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO kb_categories (id, tenant_id, slug, name)"
+            " VALUES ($1, $2, 'manuales', 'Manuales')",
+            cat_id,
+            ids["tenant_a"],
+        )
+        await conn.execute(
+            "UPDATE knowledge_bases SET category_id = $1 WHERE id = $2", cat_id, ids["kb_a"]
+        )
+    finally:
+        await conn.close()
+    headers_a = {"Authorization": f"Bearer {await _mint(ids['admin_a'], ids['tenant_a'])}"}
+    headers_b = {"Authorization": f"Bearer {await _mint(ids['admin_b'], ids['tenant_b'])}"}
+
+    async with _client(configured_app) as client:
+        await client.post(
+            f"/knowledge-bases/{ids['kb_a']}/projects",
+            headers=headers_a,
+            json={"project_id": str(ids["project_a"])},
+        )
+        rows = (
+            await client.get(f"/projects/{ids['project_a']}/knowledge-bases", headers=headers_a)
+        ).json()
+        assert [r["category"]["name"] for r in rows] == ["Manuales"]
+
+        # Cross-tenant: el otro tenant no ve el proyecto (404), ni la base ni su
+        # categoría en su propio listado.
+        foreign = await client.get(
+            f"/projects/{ids['project_a']}/knowledge-bases", headers=headers_b
+        )
+        assert foreign.status_code == 404, foreign.text
+        own = (
+            await client.get(f"/projects/{ids['project_b']}/knowledge-bases", headers=headers_b)
+        ).json()
+        assert own == []

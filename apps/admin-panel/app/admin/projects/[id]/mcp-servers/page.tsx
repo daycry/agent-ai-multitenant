@@ -21,13 +21,13 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plug, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
-import { AvailableCapabilitiesSection } from "@/components/marketplace/available-capabilities-section";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -252,10 +252,13 @@ export default function ProjectMcpServersPage() {
         <McpToolRolePolicySection projectId={projectId} />
       ) : null}
 
-      {/* ADR 0142 (D4): activar aquí lo que el tenant ya tiene instalado. Es la
-          MISMA entidad que escribe la ficha de la instalación, así que las dos
-          vías no pueden enseñar estados distintos. */}
-      <AvailableCapabilitiesSection projectId={projectId} kinds={["mcp_server"]} />
+      {/* «Capacidades disponibles» (ADR 0142 D4) se fundió en la pestaña Capacidades
+          del proyecto (`task_ui_20`): allí se activa lo instalado en el tenant. */}
+      <p className="text-muted-foreground mt-8 text-xs" data-testid="mcp-capabilities-link">
+        <Link href={`/admin/projects/${projectId}/capabilities`} className="underline">
+          {t("capabilitiesLink")}
+        </Link>
+      </p>
 
       {editing ? (
         <McpServerDialog
