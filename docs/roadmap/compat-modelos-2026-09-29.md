@@ -1,9 +1,9 @@
 ---
 plan_id: compat-modelos-2026-09-29
 title: Compatibilidad del bucle del agente con modelos de 9B a frontera (Ollama local y cloud, Copilot, Azure, Claude)
-status: approved
+status: pending_human_validation
 blocking_plan: []
-started_at: null
+started_at: 2026-09-29
 completed_at: null
 estimated_duration_calendar: 1-2 semanas
 estimated_effort_person_days: 6-8
@@ -24,10 +24,10 @@ source_audit: petición del operador del 2026-09-29 y verificación en código r
 | **Decisión**          | [ADR 0169](../05-architecture-decisions/0169-compatibilidad-de-modelos-del-agente.md) |
 | **Rama git sugerida** | `plan/compat-modelos-2026-09-29`                                                      |
 
-> **Estado.** `approved`: lo pidió el operador el 2026-09-29. No pasa por
-> `in_progress` porque la regla de una sola fase activa la ocupa
-> `ui-reestructuracion-2026-09-09`. Al cerrar la última casilla pasa a
-> `pending_human_validation` con su changelog.
+> **Estado.** `pending_human_validation` desde el 2026-09-29: las 12 casillas están
+> cerradas con su test y hay changelog. No pasó por `in_progress` porque la regla de
+> una sola fase activa la ocupa `ui-reestructuracion-2026-09-09`; lo pidió el operador
+> el mismo día. Faltan los dos tests humanos de abajo.
 
 ## Resumen
 
@@ -180,7 +180,7 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_09` — Prueba viva contra un Ollama real
 
-- [ ] **Título**: `tests/e2e/test_model_compat_live.py`, gated por
+- [x] **Título**: `tests/e2e/test_model_compat_live.py`, gated por
       `MODEL_COMPAT_LIVE=1`, ejecuta el bucle del agente por su camino productivo
       (`run_agent` con el cliente del proveedor y las tools de fichero sobre un
       directorio temporal) con una tarea pequeña: escribir un fichero con un contenido
@@ -189,14 +189,23 @@ silencioso del contexto en Ollama.
       de la plataforma.
       **Test**: el propio fichero, con su resultado anotado en este plan.
       **Coste**: 1 d.
+  - ✅ **Entregada el 2026-09-29.** Ollama 0.31.1 del stack, sólo CPU, 8 GiB,
+    `OLLAMA_CONTEXT_LENGTH=16384`: `gemma4:e4b` (8,0 B) `done` en 8 min y `qwen3:8b`
+    (8,2 B) `done` en 10 min, los dos con el fichero correcto en 2 iteraciones. La
+    primera pasada de `qwen3:8b` acabó en `provider_error` y destapó `task_cm_12`. No
+    probados en vivo aquí, por falta de credenciales: Codex y GPT-5.x (Copilot, Azure)
+    y Ollama cloud. Detalle en `docs/04-reference/llm-providers.md` §9.4.
 
 ### `task_cm_10` — Referencia y changelog
 
-- [ ] **Título**: sección «Compatibilidad de modelos» en
+- [x] **Título**: sección «Compatibilidad de modelos» en
       `docs/04-reference/llm-providers.md` con la matriz de lo que se probó y cómo, y
       entrada en `docs/07-changelog/`.
       **Test**: `tests/unit/test_docs_governance.py`.
       **Coste**: 0,25 d.
+  - ✅ **Entregada el 2026-09-29.** `llm-providers.md` §9 (lo que se adapta, lo que el
+    runtime protege, el contexto de Ollama y lo probado) y §8 corregida: decía abiertas
+    dos tareas de prod-07 que se cerraron en agosto.
 
 ### `task_cm_11` — El tope de salida se fija desde la ficha del agente
 

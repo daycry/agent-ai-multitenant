@@ -2,7 +2,7 @@
 title: Capa LLM — reintentos, streaming, capacidades por kind, costes y Vault
 audience: backend-dev, devops, architect
 phase: prod-07-fiabilidad-llm-costes
-updated: 2026-08-01
+updated: 2026-09-29
 ---
 
 # Capa LLM — Referencia
@@ -227,20 +227,109 @@ pudo preciar, el coste se queda en 0 y el run queda marcado como no preciado en
 sus snapshots. Es el mismo criterio de integridad del catálogo — «no lo sé»
 nunca se transforma en una factura.
 
-## 8. Lo que queda de prod-07 (para no dar por hecho lo que no está)
+## 8. Estado de prod-07
 
-Actualizado el **2026-08-01**. Lo cerrado desde la revisión anterior:
-`task_prod07_05` (la dependencia del asistente es async generator y cierra el
-provider en su `finally`; el WS de voz cierra el suyo), `task_prod07_12` (el
-casado kind→familia del catálogo tiene por fin test:
-`test_execution_capture.py -k snapshot_provider`), **`task_prod07_09`** (el ADR
-0150 se firmó `accepted` con la opción A) y **`task_prod07_13` + `14`** (la
-contabilidad de costes de §7, con su e2e hasta budgets).
+Actualizado el **2026-09-29**. Las 16 tareas del plan están cerradas. Las dos que
+esta sección daba por abiertas se cerraron después de escribirla:
 
-| Tarea            | Estado                                                                                                                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task_prod07_10` | la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (env del contenedor), no en un mount tmpfs read-only                                                         |
-| `task_prod07_15` | el Memorizer resuelve por `provider_id` (ADR 0082) pero `_default_llm_factory` sigue cayendo a `OllamaProvider` desde env, y no hay contador de fallos de destilación |
+| Tarea            | Cierre                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_prod07_10` | 2026-08-10. La credencial ya no viaja en el env del contenedor: el worker la escribe en un fichero 0444 montado read-only en `/run/secrets`, y en `AGENT_TASK_SPEC` sólo queda el puntero `model.credentials_file`. |
+| `task_prod07_15` | 2026-08-01. El destilador del Memorizer tiene tres escalones: provider del agente por `provider_id`, fila activa del catálogo para `ollama` y, por último, el env del worker.                                       |
+
+## 9. Compatibilidad de modelos (ADR 0169)
+
+Qué hace la capa para que el mismo bucle del agente funcione con un modelo de 9B en
+un Ollama local y con Codex en Copilot o Azure. Todo dentro del catálogo cerrado del
+ADR 0021: no hay quinto proveedor.
+
+### 9.1 Lo que el proveedor adapta solo
+
+El proveedor lee el 400 del servidor, corrige el cuerpo, reintenta **una vez** y
+memoriza la corrección para ese modelo durante la vida del proveedor. La segunda
+llamada ya sale bien. Un 400 que no encaja, o un segundo 400 tras adaptar, sigue
+siendo un error.
+
+| El servidor dice                                                       | El proveedor                  | Dónde          |
+| ---------------------------------------------------------------------- | ----------------------------- | -------------- |
+| `unsupported_parameter` sobre `max_tokens`                             | manda `max_completion_tokens` | los tres HTTP  |
+| `temperature` no soportada                                             | quita `temperature`           | los tres HTTP  |
+| «supports at most N completion tokens»                                 | baja el tope a N              | los tres HTTP  |
+| `unsupported_api_for_model` (Copilot), `OperationNotSupported` (Azure) | cambia a la Responses API     | Copilot, Azure |
+
+Además, `temperature` sólo viaja si alguien la configuró. Antes las firmas llevaban
+0.7 por defecto, que es un 400 en cada llamada a un modelo de razonamiento.
+
+**Responses API.** Azure usa `{base}/openai/v1/responses` con el despliegue en
+`model`; Copilot, `/responses`. Sin estado (`store: false`) y con el mismo historial
+en texto que ya manda el runtime. En un modelo sólo Responses, `stream()` entrega la
+respuesta entera en un trozo: se pierde la entrega incremental, no el contenido, el
+uso ni las tool calls.
+
+### 9.2 Lo que el runtime protege
+
+| Situación                                                              | Qué pasa                                                                                                                                                                                  |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cada llamada HTTP                                                      | lleva `max_tokens`: 8192 al decidir, 4096 en el review, 2048 en la reflexión. `model_config.max_output_tokens` lo sustituye (256 a 200 000) y nunca se sube un tope configurado más bajo. |
+| Una acción con argumentos corruptos o la última de un turno truncado   | no se ejecuta; el `noop` dice cuál y cómo evitarlo                                                                                                                                        |
+| Una tool call escrita como texto                                       | se rescata si el nombre es una tool anunciada en ese turno (`<tool_call>`, bloque de código u objeto desnudo)                                                                             |
+| Un bloque `<think>` en el contenido                                    | se retira, también del entregable                                                                                                                                                         |
+| Un prompt que no cabe en el contexto con el que Ollama cargó el modelo | el run se detiene con `abort_code=context_truncated`                                                                                                                                      |
+
+`claude_sdk` queda fuera del tope de salida y del rescate de texto: su SDK no expone
+el parámetro y su FINISH real es prosa.
+
+### 9.3 Ollama: la ventana de contexto
+
+Ollama no deja fijar `num_ctx` por su endpoint compatible con OpenAI. Con menos de
+23 GiB de VRAM usa 4096 tokens, y cuando el prompt no cabe **recorta en silencio el
+principio de la conversación**, que es el prompt de sistema. Medido el 2026-09-29 en
+la BD viva, el percentil 90 del prompt de un agente es de 9.294 tokens.
+
+- El Ollama del stack lleva `OLLAMA_CONTEXT_LENGTH`: 32768 por defecto, configurable
+  en `install.yaml` (`providers.ollama.context_length`) y en `docker/.env`. Más
+  contexto cuesta memoria de KV-cache.
+- Para un Ollama que no controlamos, el runtime pregunta a `/api/ps` tras la primera
+  respuesta con qué contexto cargó el modelo. Si una cota inferior del prompt, a cinco
+  caracteres por token, no cabe, detiene el run. Sin `/api/ps`, como en Ollama cloud,
+  no hay dato y la guarda no actúa.
+- No se compara con `usage.prompt_tokens`: Ollama cuenta ahí sólo lo que evalúa, no lo
+  que reutiliza de su caché de prefijos, y saltaría en falso desde el segundo turno.
+
+Para comprobar el contexto real de un modelo cargado:
+
+```bash
+docker exec agentic-platform-ollama-1 ollama ps
+```
+
+### 9.4 Qué se ha probado con modelos reales
+
+Medido el 2026-09-29 con `tests/e2e/test_model_compat_live.py`
+(`MODEL_COMPAT_LIVE=1`), que entra por `agent_runtime.__main__.run_task` como el
+contenedor del runtime. Tarea: escribir `saludo.txt` con un contenido exacto y cerrar
+con `submit_result`. Ollama 0.31.1 del stack, **sólo CPU**, contenedor topado a 8 GiB,
+`OLLAMA_CONTEXT_LENGTH=16384`.
+
+| Modelo       | Parámetros | Resultado                               | Tiempo |
+| ------------ | ---------: | --------------------------------------- | -----: |
+| `gemma4:e4b` |      8,0 B | `done`, fichero correcto, 2 iteraciones |  8 min |
+| `qwen3:8b`   |      8,2 B | `done`, fichero correcto, 2 iteraciones | 10 min |
+
+La primera pasada con `qwen3:8b` acabó `aborted` con `provider_error`: el cliente
+HTTP del proveedor cortaba a los 120 s y los turnos en CPU duraban hasta 5 minutos.
+Es lo que corrigió `task_cm_12`; la segunda pasada es la de la tabla.
+
+**Lo que NO se ha probado en vivo aquí**, y por qué:
+
+- **Codex y GPT-5.x** por Copilot o Azure: no hay credencial de ninguno de los dos en
+  esta máquina. El cambio de transporte y la adaptación de parámetros se prueban con
+  las formas de error reales que documentan los propios proveedores
+  (`packages/shared-llm/tests/test_responses_transport.py`,
+  `test_reactive_param_adaptation.py`). Es el test humano `human_cm_02` del plan.
+- **Ollama cloud**: su clave vive en Vault y Vault está sellado. La prueba acepta
+  `MODEL_COMPAT_OLLAMA_BASE_URL=https://ollama.com/v1` y `MODEL_COMPAT_OLLAMA_API_KEY`.
+- **Claude Agent SDK**: sin cambios de comportamiento, porque los flags de clase lo
+  dejan fuera del tope de salida y del rescate de texto. Lo cubre la suite del runtime.
 
 ## Relacionado
 
@@ -248,4 +337,5 @@ contabilidad de costes de §7, con su e2e hasta budgets).
 - ADR 0021 — catálogo cerrado de proveedores y capa `shared-llm`.
 - ADR 0057 — resolución del modelo en el worker (F1) y sus fases pendientes.
 - ADR 0028 — `llm_providers` platform-global sin RLS y su credencial en Vault.
+- ADR 0169 — compatibilidad del bucle del agente con modelos de 9B a frontera.
 - [../03-guides/gotchas/](../03-guides/gotchas/) — trampas del toolchain.
