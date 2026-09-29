@@ -1837,7 +1837,11 @@ def _ollama_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # n
 
     svc: dict[str, Any] = {
         "image": IMAGE_OLLAMA,
-        "environment": {"OLLAMA_HOST": "0.0.0.0:11434"},
+        "environment": {
+            "OLLAMA_HOST": "0.0.0.0:11434",
+            # ADR 0169 D6: sin esto, el prompt de un agente no cabe y se recorta mudo.
+            "OLLAMA_CONTEXT_LENGTH": str(cfg.providers.ollama.context_length),
+        },
         "volumes": [f"{cfg.storage.data_root}/ollama:/root/.ollama"],
         "healthcheck": {
             "test": ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"],

@@ -551,6 +551,9 @@ services:
     image: ${IMAGE_OLLAMA:-ollama/ollama:0.31.1}
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
+      # ADR 0169 D6: Ollama no deja fijar el contexto por /v1 y con poca VRAM usa
+      # 4096 tokens, que recorta en silencio el prompt de sistema de un agente.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-32768}
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:

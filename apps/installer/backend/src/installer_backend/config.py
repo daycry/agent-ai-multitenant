@@ -365,6 +365,14 @@ class AzureFoundryProvider(BaseModel):
 #: `tool_calls` reales contra Ollama— y cabe en CPU con ~2 GB.
 DEFAULT_OLLAMA_CHAT_MODEL = "qwen2.5:3b"
 
+#: ADR 0169 D6 (`task_cm_07`): la ventana de contexto del Ollama del stack. Ollama no
+#: la deja fijar por su endpoint compatible con OpenAI y, con menos de 23 GiB de VRAM,
+#: usa 4096 tokens; cuando el prompt no cabe recorta en silencio el principio de la
+#: conversación, que es el prompt de sistema. Medido el 2026-09-29 en la BD viva: el
+#: percentil 90 del prompt de un agente es de 9.294 tokens y el máximo de 22.109. Más
+#: contexto cuesta memoria de KV-cache, por eso es configurable.
+DEFAULT_OLLAMA_CONTEXT_LENGTH = 32768
+
 
 class OllamaProvider(BaseModel):
     """Ollama (local or cloud). Endpoint URL only; no secret for local.
@@ -380,6 +388,7 @@ class OllamaProvider(BaseModel):
     enabled: bool = False
     endpoint: str | None = None
     chat_model: str = Field(default=DEFAULT_OLLAMA_CHAT_MODEL, min_length=1, max_length=120)
+    context_length: int = Field(default=DEFAULT_OLLAMA_CONTEXT_LENGTH, ge=2048, le=262144)
 
     @field_validator("endpoint")
     @classmethod

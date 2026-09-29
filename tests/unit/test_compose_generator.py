@@ -1932,3 +1932,49 @@ def test_the_test_lane_is_drained_by_a_worker_that_is_not_the_generic_pool() -> 
         "ninguna lane sirve la cola `test` sin servir también `default`: la espera "
         "síncrona de la fase de tests puede inanicionarse en el pool genérico"
     )
+
+
+# ---------------------------------------------------------------------------
+# ADR 0169 D6 (`task_cm_07`): la ventana de contexto de Ollama se fija en el servidor
+# ---------------------------------------------------------------------------
+def _ollama_env(config: InstallerConfig) -> dict[str, str]:
+    services = generate_compose(config)["services"]
+    assert isinstance(services, dict)
+    return dict(services[OLLAMA_SERVICE]["environment"])
+
+
+def test_ollama_gets_a_context_length_that_fits_an_agent_prompt() -> None:
+    """Ollama no deja fijar `num_ctx` por su endpoint compatible con OpenAI, y con
+    menos de 23 GiB de VRAM usa 4096 tokens. Medido el 2026-09-29, el percentil 90 del
+    prompt de un agente es de 9.294 tokens: sin esta variable, el servidor recorta en
+    silencio el principio de la conversación, que es el prompt de sistema."""
+    env = _ollama_env(_config(ollama_mode="cpu"))
+    assert env["OLLAMA_CONTEXT_LENGTH"] == "32768"
+
+
+def test_the_context_length_is_configurable() -> None:
+    config = _config(
+        ollama_mode="cpu",
+        providers=ProvidersConfig(
+            ollama=OllamaProvider(
+                enabled=True, endpoint="http://ollama:11434", context_length=16384
+            )
+        ),
+    )
+    assert _ollama_env(config)["OLLAMA_CONTEXT_LENGTH"] == "16384"
+
+
+@pytest.mark.parametrize("value", [1024, 1_000_000])
+def test_a_context_length_outside_the_sane_range_is_rejected(value: int) -> None:
+    with pytest.raises(ValueError, match="context_length"):
+        OllamaProvider(enabled=True, endpoint="http://ollama:11434", context_length=value)
+
+
+def test_the_dev_compose_sets_the_context_length_too() -> None:
+    dev = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker" / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    env = dev["services"]["ollama"]["environment"]
+    assert "OLLAMA_CONTEXT_LENGTH" in env

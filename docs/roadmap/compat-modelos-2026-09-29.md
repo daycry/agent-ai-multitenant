@@ -148,11 +148,18 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_07` — `OLLAMA_CONTEXT_LENGTH` en el compose y en el instalador
 
-- [ ] **Título**: el servicio `ollama` de `docker/docker-compose.yml` y el que genera
+- [x] **Título**: el servicio `ollama` de `docker/docker-compose.yml` y el que genera
       el instalador llevan `OLLAMA_CONTEXT_LENGTH`, default 32768 y configurable, con
       la cifra medida en el ADR 0169 como justificación.
-      **Test**: `tests/unit/installer/test_ollama_context_length.py`.
+      **Test**: `tests/unit/test_compose_generator.py -k context_length` (el plan
+      decía `tests/unit/installer/test_ollama_context_length.py`; los casos viven junto
+      a los demás del generador porque reutilizan su constructor de configuración).
       **Coste**: 0,25 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo: 3 de 5 casos; los dos de rango
+    pasaban por casualidad, porque hoy la clave desconocida también da `ValueError`.
+    `OllamaProvider.context_length` del instalador (2048 a 262144), la variable en el
+    compose de desarrollo y en `docker/.env.example`. Guardas de env, compose e
+    instalador: 779 passed.
 
 ### `task_cm_08` — El recorte silencioso del contexto se detecta
 
