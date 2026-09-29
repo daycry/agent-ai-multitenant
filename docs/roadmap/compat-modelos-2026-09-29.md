@@ -213,6 +213,21 @@ silencioso del contexto en Ollama.
     genérico sobre el tipo de valor. vitest: 36 + 10 passed; `tsc`, `eslint` y
     `check-i18n` limpios.
 
+### `task_cm_12` — El plazo HTTP del proveedor no corta antes que el del runtime
+
+- [x] **Título**: los tres clientes HTTP del runtime construyen su proveedor con el
+      plazo del runtime por llamada (`AGENT_RUNTIME_LLM_TIMEOUT_S`, 900 s), que es el
+      que manda y respeta el deadline del run. Hasta ahora el cliente httpx cortaba a
+      los 120 s (Ollama) o 60 s (Azure, Copilot).
+      **Test**: `docker/agent-runtimes/agent-runtime/tests/test_output_cap.py -k http_clients`.
+      **Coste**: 0,25 d.
+  - ✅ **Entregada el 2026-09-29.** Añadida al plan porque la destapó la prueba viva:
+    `qwen3:8b` en CPU escribió el fichero y el run acabó `aborted` con
+    `provider_error`. Los logs de Ollama daban seis `500` a los **2m0s exactos**: el
+    cliente httpx cortaba, Ollama registraba el corte y el runtime reintentaba lo mismo
+    con 900 s de presupuesto sin usar. Vista en rojo (`120.0 >= 900.0`). Runtime:
+    779 passed.
+
 ## Tests humanos
 
 ```yaml

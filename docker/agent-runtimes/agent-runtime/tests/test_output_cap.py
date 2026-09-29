@@ -104,3 +104,28 @@ def test_the_spec_threads_max_output_tokens_into_the_client() -> None:
     )
     assert isinstance(client, OllamaModelClient)
     assert client._max_output_tokens == 2048
+
+
+# ---------------------------------------------------------------------------
+# `task_cm_12`: el plazo HTTP del proveedor no corta antes que el del runtime.
+# Medido el 2026-09-29 con `qwen3:8b` en CPU: los turnos pasaban de 2 minutos, el
+# cliente httpx del proveedor (120 s) cortaba, Ollama registraba un 500 a los 2m0s
+# exactos y el runtime reintentaba lo mismo hasta abortar con `provider_error`,
+# con 900 s de presupuesto por llamada sin usar.
+# ---------------------------------------------------------------------------
+def test_http_clients_wait_as_long_as_the_runtime_budget() -> None:
+    from agent_runtime.providers import (
+        _DEFAULT_CALL_TIMEOUT_S,
+        AzureFoundryModelClient,
+        CopilotModelClient,
+    )
+
+    clients = [
+        OllamaModelClient(model="qwen3:8b", base_url="http://ollama:11434/v1"),
+        AzureFoundryModelClient(
+            model="gpt-5", apim_base_url="https://apim", deployment="d", subscription_key="k"
+        ),
+        CopilotModelClient(model="gpt-5", github_token="gho"),
+    ]
+    for client in clients:
+        assert client.provider._timeout >= _DEFAULT_CALL_TIMEOUT_S, type(client).__name__

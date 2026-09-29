@@ -1734,6 +1734,9 @@ class AzureFoundryModelClient(_ProviderModelClient):
                 bearer_token=bearer_token,
                 api_version=api_version,
                 http_client=http_client,
+                # `task_cm_12`: el plazo HTTP no corta antes que el del runtime (900 s),
+                # que es el que manda y respeta el deadline del run.
+                timeout=_DEFAULT_CALL_TIMEOUT_S,
             ),
             model=model,
             tools=tools,
@@ -1761,7 +1764,13 @@ class CopilotModelClient(_ProviderModelClient):
         max_output_tokens: int | None = None,
     ) -> None:
         super().__init__(
-            provider=CopilotProvider(github_token=github_token, http_client=http_client),
+            provider=CopilotProvider(
+                github_token=github_token,
+                http_client=http_client,
+                # `task_cm_12`: el plazo HTTP no corta antes que el del runtime (900 s),
+                # que es el que manda y respeta el deadline del run.
+                timeout=_DEFAULT_CALL_TIMEOUT_S,
+            ),
             model=model,
             tools=tools,
             extra_call_kwargs={
@@ -1797,6 +1806,9 @@ class OllamaModelClient(_ProviderModelClient):
                 api_key=api_key,
                 http_client=http_client,
                 default_model=model,
+                # `task_cm_12`: el plazo HTTP no corta antes que el del runtime (900 s),
+                # que es el que manda y respeta el deadline del run.
+                timeout=_DEFAULT_CALL_TIMEOUT_S,
             ),
             model=model,
             tools=tools,
