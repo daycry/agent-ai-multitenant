@@ -134,7 +134,7 @@ async def post_adaptive(
     fixed = adapt_body(body, text)
     if fixed is None:
         return resp
-    adaptations.learn(body, fixed)
+    adaptations.learn(body, fixed, text)
     retried = await post(fixed)
     if (
         may_switch_transport

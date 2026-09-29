@@ -33,9 +33,9 @@ _RESPONSES_ONLY_MARKERS = (
 #: «supports at most 4096 completion tokens» / «… output tokens».
 _MAX_CAP_RE = re.compile(r"at most (\d+) (?:completion|output) tokens", re.I)
 #: «maximum context length is 8192 tokens … (808 in the messages, 8192 in the completion)».
-_CONTEXT_RE = re.compile(
-    r"maximum context length is (\d+) tokens.*?\((\d+) in the messages", re.I | re.S
-)
+_CONTEXT_RE = re.compile(r"maximum context length is (\d+) tokens", re.I)
+#: Cada cifra «N in the <algo>» del paréntesis, salvo la de la completion.
+_CONTEXT_PART_RE = re.compile(r"(\d+) in the (\w+)", re.I)
 _CONTEXT_MARGIN = 64
 _CONTEXT_MIN_CAP = 256
 _CAP_KEYS = ("max_completion_tokens", "max_output_tokens", "max_tokens")
@@ -78,8 +78,11 @@ def adapt_body(body: dict[str, Any], error_text: str) -> dict[str, Any] | None:
                 fixed[key] = limit
                 changed = True
     context = _CONTEXT_RE.search(error_text)
-    if context:
-        room = int(context.group(1)) - int(context.group(2)) - _CONTEXT_MARGIN
+    parts = [
+        int(n) for n, what in _CONTEXT_PART_RE.findall(error_text) if what.lower() != "completion"
+    ]
+    if context and parts:
+        room = int(context.group(1)) - sum(parts) - _CONTEXT_MARGIN
         if room >= _CONTEXT_MIN_CAP:
             for key in _CAP_KEYS:
                 if key in fixed and int(fixed[key]) > room:
@@ -110,12 +113,18 @@ class ModelAdaptations:
                     out[key] = self.cap_limit
         return out
 
-    def learn(self, before: dict[str, Any], after: dict[str, Any]) -> None:
-        """Registra qué cambió entre el cuerpo rechazado y el corregido."""
+    def learn(self, before: dict[str, Any], after: dict[str, Any], error_text: str = "") -> None:
+        """Registra qué cambió entre el cuerpo rechazado y el corregido.
+
+        El tope de la ventana de contexto depende del prompt de ESA llamada: no se
+        memoriza. Sólo el «at most N tokens» (propiedad del modelo) se guarda.
+        """
         if "max_tokens" in before and "max_completion_tokens" in after:
             self.use_completion_tokens = True
         if "temperature" in before and "temperature" not in after:
             self.drop_temperature = True
+        if not _MAX_CAP_RE.search(error_text):
+            return
         for key in _CAP_KEYS:
             if key in before and key in after and int(after[key]) < int(before[key]):
                 self.cap_limit = int(after[key])

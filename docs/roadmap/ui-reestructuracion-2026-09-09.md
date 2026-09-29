@@ -216,6 +216,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
     Verificado por el orquestador: integración 16 passed (con cross-tenant y los dos roles), vitest 11 passed.
 
+  - **Revisión adversarial, intento 2 (2026-09-29).** Las nueve correcciones cierran. Dos gaps nuevos quedan
+    como **deuda aceptada**, con su porqué: (N3) la actividad ordena por creación, así que un run antiguo que
+    falla ahora no sube al top 10 — es el precio de usar el índice `(tenant_id, created_at)` y la poda de
+    particiones en la tabla más grande del sistema; (N4) el gasto se cachea 300 s y el resto 30 s, así que
+    durante hasta cinco minutos una pausa por presupuesto puede verse antes que el gasto que la causó. Sustituye
+    a la «caché Redis 30 s» del enunciado para esa sección.
+
 ### `task_ui_03` — Bandeja humana unificada
 
 - [ ] **Título**: `/admin/inbox` pasa a tener pestañas Aprobaciones · Preguntas (`ask_human`) · Revisiones ·

@@ -201,7 +201,7 @@ def test_adapt_body_gives_up_when_the_context_leaves_no_room() -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_window_400_is_adapted_and_remembered() -> None:
+async def test_context_window_cap_is_per_call_and_not_remembered() -> None:
     bodies: list[dict[str, Any]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -219,7 +219,29 @@ async def test_context_window_400_is_adapted_and_remembered() -> None:
     )
     await provider.complete(_MSGS, max_tokens=8192)
     await provider.complete(_MSGS, max_tokens=8192)
-    assert [b["max_tokens"] for b in bodies] == [8192, 7320, 7320]
+    assert [b["max_tokens"] for b in bodies] == [8192, 7320, 8192, 7320]
+
+
+@pytest.mark.asyncio
+async def test_model_cap_400_is_remembered() -> None:
+    server = _Server(reject=_CAP_ERR)
+    provider = OllamaProvider(
+        base_url="http://o/v1", http_client=server.client(), default_model="m"
+    )
+    await provider.complete(_MSGS, max_tokens=8192)
+    await provider.complete(_MSGS, max_tokens=8192)
+    assert [b["max_tokens"] for b in server.bodies] == [8192, 4096, 4096]
+
+
+_CTX_FUNCS_ERR = (
+    "This model's maximum context length is 8192 tokens. However, you requested 10292 "
+    "tokens (100 in the messages, 2000 in the functions, 8192 in the completion)."
+)
+
+
+def test_adapt_body_subtracts_the_functions_too() -> None:
+    fixed = adapt_body({"max_tokens": 8192}, _CTX_FUNCS_ERR)
+    assert fixed == {"max_tokens": 8192 - 100 - 2000 - 64}
 
 
 # --- un segundo 400 sigue siendo error (gap 3a) ---------------------------------------
