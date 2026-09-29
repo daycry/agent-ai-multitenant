@@ -50,7 +50,11 @@ from shared_llm import (
     OllamaProvider,
 )
 from shared_llm.credential_fields import overlay_credentials
-from shared_llm.providers._openai_compat import CompletionSignals, completion_signals
+from shared_llm.providers._openai_compat import (
+    CompletionSignals,
+    completion_signals,
+    corrupt_tool_call_indexes,
+)
 from shared_llm.providers.claude_agent_session import ClaudeAgentSessionProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 from shared_llm.retry import RetryEvent, retry_delay
@@ -862,18 +866,56 @@ _ASSESS_SYSTEM = (
 )
 
 
-def _readonly_batch_prefix(calls: list[Any]) -> list[dict[str, Any]]:
+def _readonly_batch_prefix(
+    calls: list[Any], unusable: frozenset[int] = frozenset()
+) -> list[dict[str, Any]]:
     """ADR 0111: el prefijo consecutivo de calls read-only DESPUÉS del primero,
     cap ``_BATCH_READONLY_CAP`` en total. Vacío si el primer call es un mutador
-    (semántica de una-acción intacta); se corta en el primer no-read-only."""
+    (semántica de una-acción intacta); se corta en el primer no-read-only.
+
+    ADR 0169 D5: se corta también en la primera llamada ``unusable`` —argumentos
+    corruptos, o la última de un turno truncado—, que no se ejecuta con ``{}``."""
     if not calls or not _is_readonly_tool(calls[0].name):
         return []
     batch: list[dict[str, Any]] = []
-    for call in calls[1:]:
-        if len(batch) >= _BATCH_READONLY_CAP - 1 or not _is_readonly_tool(call.name):
+    for idx, call in enumerate(calls[1:], start=1):
+        if (
+            len(batch) >= _BATCH_READONLY_CAP - 1
+            or not _is_readonly_tool(call.name)
+            or idx in unusable
+        ):
             break
         batch.append({"tool": call.name, "args": dict(call.arguments)})
     return batch
+
+
+def _unusable_calls(resp: CompletionResponse, calls: list[Any]) -> frozenset[int]:
+    """Índices de las tool calls que NO deben ejecutarse (ADR 0169 D5).
+
+    Las de argumentos corruptos, y en un turno truncado la ÚLTIMA: es la que el tope
+    cortó, y si la cortó antes de empezar los argumentos llega como ``""``, que no
+    parece corrupto pero tampoco es lo que el modelo quería mandar."""
+    unusable = set(corrupt_tool_call_indexes(getattr(resp, "raw", None)))
+    if calls and _completion_signals(resp).truncated:
+        unusable.add(len(calls) - 1)
+    return frozenset(unusable)
+
+
+def _discarded_action_noop(tool: str, *, truncated: bool) -> ModelDecision:
+    """El `noop` que sustituye a una acción inutilizable, con el motivo dirigido."""
+    how = "were cut off at the output token cap" if truncated else "were not valid JSON"
+    return ModelDecision(
+        kind=DecisionKind.ACT,
+        tool="noop",
+        tool_args={
+            "reason": (
+                f"your call to {tool} was NOT executed: its arguments {how}. Retry with a "
+                "smaller call — write a large file in several steps (create it, then add "
+                "the rest with edit_file) or shorten the content."
+            )
+        },
+        rationale=f"{tool} discarded: arguments {how}",
+    )
 
 
 def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
@@ -961,6 +1003,12 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
                 # vez de tumbar un FINISH cuyo entregable ya está escrito.
                 check_declarations=normalise_declarations(args.get("acceptance_checks")),
             )
+    elif calls and _unusable_calls(resp, calls) & {0}:
+        # ADR 0169 D5 (`task_cm_02`): la acción elegida llegó corrupta o es la última
+        # de un turno cortado por el tope de salida. Ejecutarla sería llamar a la tool
+        # con `{}`; el modelo recibe en su lugar el motivo y cómo evitarlo.
+        truncated = _completion_signals(resp).truncated
+        decision = _discarded_action_noop(calls[0].name, truncated=truncated)
     elif calls:
         first = calls[0]
         # ADR 0111: when the FIRST call is read-only, the consecutive read-only
@@ -969,7 +1017,7 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
         # read. The prefix STOPS at the first mutator (one-action semantics for
         # anything that can change the deliverable); the remainder is discarded
         # and logged, exactly as F36 always did.
-        batch = _readonly_batch_prefix(calls)
+        batch = _readonly_batch_prefix(calls, _unusable_calls(resp, calls))
         discarded = [call.name for call in calls[1 + len(batch) :]]
         if batch:
             _log.info(

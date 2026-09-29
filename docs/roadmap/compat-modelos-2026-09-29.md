@@ -69,12 +69,20 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_02` — Una tool call de acción truncada o corrupta no se ejecuta
 
-- [ ] **Título**: `_decision_from` extiende la guarda F32 a la rama ACT. Si la
+- [x] **Título**: `_decision_from` extiende la guarda F32 a la rama ACT. Si la
       respuesta salió truncada o los argumentos de la llamada elegida llegaron
       corruptos, la decisión es un `noop` con el motivo dirigido («reintenta con un
       contenido más corto o parte el fichero»), no la tool con `{}`.
       **Test**: `docker/agent-runtimes/agent-runtime/tests/test_truncated_action_guard.py`.
       **Coste**: 0,5 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo: 4 de 6 casos (los dos limpios ya
+    pasaban). La guarda es POR LLAMADA: `shared_llm` expone
+    `corrupt_tool_call_indexes`, y el runtime descarta la llamada elegida si llegó
+    corrupta o es la última de un turno truncado, y corta el lote de lecturas antes
+    de una llamada inutilizable. El test antiguo
+    `test_action_only_corrupt_call_still_acts` fijaba el defecto («exactly as
+    before») y se reescribió a la decisión del ADR 0169. Runtime + shared-llm:
+    948 passed, 1 skipped.
 
 ### `task_cm_03` — Rescate de tool calls escritas como texto
 

@@ -136,14 +136,16 @@ def test_legit_finish_not_blocked_by_unrelated_corrupt_call() -> None:
     assert d.finish_status == "success"
 
 
-# --- _decision_from: the ACT and prose branches are untouched -----------------
-def test_action_only_corrupt_call_still_acts() -> None:
-    # The F32 guard applies ONLY to the submit_result FINISH branch. A corrupt
-    # action-only call still ACTs with degraded ({}) args, exactly as before.
+# --- _decision_from: the ACT branch ---------------------------------------------
+def test_action_only_corrupt_call_is_not_executed() -> None:
+    # Hasta el 2026-09-29 este test fijaba que una acción corrupta se ejecutaba con
+    # `{}` «exactly as before», porque F32 sólo cubría `submit_result`. El ADR 0169
+    # D5 extiende la guarda a la acción: el detalle vive en
+    # `test_truncated_action_guard.py`; aquí queda la regresión mínima.
     d = _decision_from(_resp(_payload(tool_calls=[_tc("write_file", "{bad")])), model="m").decision
     assert d.kind == DecisionKind.ACT
-    assert d.tool == "write_file"
-    assert d.tool_args == {}
+    assert d.tool == "noop"
+    assert "write_file" in d.tool_args["reason"]
 
 
 def test_prose_finish_unchanged() -> None:

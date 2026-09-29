@@ -467,11 +467,36 @@ def completion_signals(data: Any) -> CompletionSignals:
     return CompletionSignals(truncated=truncated, malformed_tool_args=malformed)
 
 
+def corrupt_tool_call_indexes(data: Any) -> set[int]:
+    """Índices de las tool calls cuyos ``arguments`` llegaron corruptos (ADR 0169 D5).
+
+    `CompletionSignals.malformed_tool_args` dice SI alguna llamada vino corrupta, no
+    CUÁL. El runtime necesita saberlo por llamada: una llamada descartada con JSON roto
+    no debe invalidar la que se eligió. Mismo recorrido defensivo que
+    `completion_signals`; cualquier forma inesperada devuelve el conjunto vacío.
+    """
+    if not isinstance(data, dict):
+        return set()
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    message = choice.get("message") if isinstance(choice, dict) else None
+    if not isinstance(message, dict):
+        return set()
+    out: set[int] = set()
+    for idx, tc in enumerate(message.get("tool_calls") or []):
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        _, malformed = _parse_args_checked((fn or {}).get("arguments"))
+        if malformed:
+            out.add(idx)
+    return out
+
+
 __all__ = [
     "CompletionSignals",
     "check_status",
     "check_stream_status",
     "completion_signals",
+    "corrupt_tool_call_indexes",
     "iter_sse_chunks",
     "parse_chat_completion",
     "parse_sse_delta",
