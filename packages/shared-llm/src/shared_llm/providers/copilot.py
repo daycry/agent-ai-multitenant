@@ -461,13 +461,13 @@ class CopilotProvider:
                         continue
                     # ADR 0169 D2: el error se lee ANTES de ceder nada, así que adaptar
                     # y reabrir no duplica texto en el llamante.
-                    if resp.status_code == 400 and not adapted:
+                    if resp.status_code == 400:
                         await resp.aread()
                         text = error_text(resp)
                         if needs_responses_api(text):
                             adaptations.responses_api = True
                             break
-                        fixed = adapt_body(body, text)
+                        fixed = adapt_body(body, text) if not adapted else None
                         if fixed is not None:
                             adaptations.learn(body, fixed)
                             body = fixed

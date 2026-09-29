@@ -28,6 +28,12 @@ source_audit: auditoria-harness-ciclo-kb-memoria-2026-09-17.md
 | **Origen**            | [`auditoria-harness-ciclo-kb-memoria-2026-09-17.md`](auditoria-harness-ciclo-kb-memoria-2026-09-17.md) |
 | **Rama git sugerida** | `plan/harness-00-programa`                                                                             |
 
+> **Aprobación (2026-09-29).** Pasa a `approved` por el objetivo que el operador fijó ese día por
+> escrito: «es necesario que todo el roadmap esté implementado». La revisión adversarial (lente A)
+> señaló que `approved` significa «aprobado por humano»; ésa es la aprobación. Las decisiones D1 y D2
+> del ADR 0168, que rozan producto, se tomaron sin cambiar el comportamiento por defecto de ningún
+> proyecto, así que el operador puede revertirlas sin deshacer nada construido encima.
+>
 > **Estado**: este documento coordina; no se marca `completed` hasta que los seis
 > planes hijos estén `completed` o diferidos por ADR. Sustituye al borrador
 > `docs/new_feature/harness-00-programa-profesionalizacion-2026-09-16.md`.
@@ -111,10 +117,11 @@ harness-03 + harness-04 + harness-05
 #### `task_h00_02` — El `claim_id` viaja también por el serializador canónico
 
 - [x] **Título**: `ExecutionRequest.as_dict()` emite `claim_id` (hoy lo omite aunque
-      `from_dict` lo lea), y el orchestrator construye el payload con
-      `ExecutionRequest(...).as_dict()` en vez de un dict a mano, para que no haya
-      dos definiciones del contrato. Es la corrección más barata de la auditoría y
-      no espera al programa. Round-trip completo `as_dict → from_dict` por cada
+      `from_dict` lo lea). Es la corrección más barata de la auditoría y no espera al
+      programa. **Movido a `task_h01_08`** (revisión adversarial, lente A, 2026-09-29):
+      que el orchestrator construya el payload con el serializador en vez de un dict a
+      mano; allí se sustituye ese dict por el envelope V1 y hacerlo aquí sería tocar el
+      dispatch dos veces. Round-trip completo `as_dict → from_dict` por cada
       campo del dataclass (`dataclasses.fields`), para que el siguiente campo
       olvidado falle en CI.
       **Test**: `tests/unit/test_execution_request_roundtrip_all_fields.py`;
@@ -122,9 +129,8 @@ harness-03 + harness-04 + harness-05
       `as_dict`. **Coste**: 0,5 d.
   - ✅ **Entregada el 2026-09-29.** Vista en rojo: de los 24 campos, `claim_id` era
     el único que `as_dict` no emitía. El round-trip recorre `dataclasses.fields`, así
-    que el próximo campo olvidado también falla. La mitad «el orquestador construye el
-    payload con `as_dict()`» se deja a `task_h01_08`, que es donde se sustituye el dict
-    a mano por el envelope V1: hacerlo dos veces sería tocar el dispatch para nada.
+    que el próximo campo olvidado también falla. El segundo test declarado,
+    `test_la_reclamacion_viaja_con_identidad.py`, gana el caso `as_dict` tras la revisión.
 
 #### `task_h00_03` — Baseline ejecutable
 

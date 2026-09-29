@@ -205,3 +205,72 @@ async def test_stream_on_a_responses_only_model_yields_the_whole_answer() -> Non
     assert "".join(c.delta for c in chunks) == "Hecho."
     assert chunks[-1].done is True
     assert chunks[-1].usage is not None and chunks[-1].usage.output_tokens == 30
+
+
+@pytest.mark.asyncio
+async def test_azure_remembers_the_switch_to_responses() -> None:
+    vendor = _Vendor(_AZURE_ERR, "/openai/v1/responses")
+    provider = AzureFoundryAPIMProvider(
+        apim_base_url="https://apim",
+        deployment="codex-dep",
+        subscription_key="k",
+        http_client=vendor.client(),
+    )
+    await provider.complete(_MSGS, max_tokens=100)
+    await provider.complete(_MSGS, max_tokens=100)
+    assert vendor.paths[-1] == "/openai/v1/responses"
+    assert len(vendor.paths) == 3, "la segunda llamada va directa a /responses"
+    assert vendor.paths.count("/openai/v1/responses") == 2
+
+
+_TEMP_ERR = {
+    "error": {
+        "message": "Unsupported value: 'temperature' does not support 0.2 with this model. "
+        "Only the default (1) value is supported."
+    }
+}
+
+
+class _TempThenResponsesOnly:
+    """400 por temperature; sin ella, el modelo sólo se sirve por Responses."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+
+    def handler(self, req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/copilot_internal/v2/token"):
+            return httpx.Response(200, json={"token": "jwt", "expires_at": time.time() + 1500})
+        self.paths.append(req.url.path)
+        body = json.loads(req.content)
+        if req.url.path.endswith("/chat/completions"):
+            if "temperature" in body:
+                return httpx.Response(400, json=_TEMP_ERR)
+            return httpx.Response(400, json=_COPILOT_ERR)
+        return httpx.Response(200, json=_response())
+
+
+@pytest.mark.asyncio
+async def test_switch_to_responses_after_an_adapted_retry() -> None:
+    vendor = _TempThenResponsesOnly()
+    provider = CopilotProvider(
+        github_token="gho",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(vendor.handler)),
+    )
+    resp = await provider.complete(_MSGS, model="gpt-5-codex", temperature=0.2, max_tokens=100)
+    assert resp.content == "Hecho."
+    assert vendor.paths == ["/chat/completions", "/chat/completions", "/responses"]
+
+
+@pytest.mark.asyncio
+async def test_stream_switch_to_responses_after_an_adapted_retry() -> None:
+    vendor = _TempThenResponsesOnly()
+    provider = CopilotProvider(
+        github_token="gho",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(vendor.handler)),
+    )
+    chunks = [
+        c
+        async for c in provider.stream(_MSGS, model="gpt-5-codex", temperature=0.2, max_tokens=100)
+    ]
+    assert "".join(c.delta for c in chunks) == "Hecho."
+    assert vendor.paths == ["/chat/completions", "/chat/completions", "/responses"]

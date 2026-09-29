@@ -205,6 +205,9 @@ Los secretos **nunca** viajan dentro: sólo `credential_ref` (Vault) — coheren
       `tests/integration/test_worker_accepts_both_contracts.py`;
       `tests/unit/test_orchestrator_does_not_mutate_after_build.py`.
       **Coste**: 1,5 d. **Depende de**: task_h01_03, task_h01_04.
+  - 📌 **Hereda de `task_h00_02`** (2026-09-29): que el orchestrator deje de armar el
+    payload como un dict a mano en `dispatch.py` y use el serializador del contrato. Allí
+    sólo se cerró que `as_dict()` emita `claim_id`.
 
 #### `task_h01_09` — Documentación, referencia y changelog
 

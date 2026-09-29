@@ -175,3 +175,70 @@ async def test_stream_adapts_before_yielding() -> None:
     text = "".join([c.delta async for c in provider.stream(_MSGS, max_tokens=500)])
     assert text == "hola"
     assert bodies[-1]["max_completion_tokens"] == 500
+
+
+# --- ventana de contexto (gap 1) ----------------------------------------------------
+_CTX_ERR = (
+    "This model's maximum context length is 8192 tokens. However, you requested 9000 "
+    "tokens (808 in the messages, 8192 in the completion). Please reduce the length of "
+    "the messages or completion."
+)
+_CTX_TIGHT_ERR = (
+    "This model's maximum context length is 8192 tokens. However, you requested 9000 "
+    "tokens (8000 in the messages, 1000 in the completion). Please reduce the length of "
+    "the messages or completion."
+)
+
+
+@pytest.mark.parametrize("key", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+def test_adapt_body_fits_the_completion_in_the_context_window(key: str) -> None:
+    fixed = adapt_body({key: 8192, "model": "m"}, _CTX_ERR)
+    assert fixed == {key: 8192 - 808 - 64, "model": "m"}
+
+
+def test_adapt_body_gives_up_when_the_context_leaves_no_room() -> None:
+    assert adapt_body({"max_tokens": 1000}, _CTX_TIGHT_ERR) is None
+
+
+@pytest.mark.asyncio
+async def test_context_window_400_is_adapted_and_remembered() -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        bodies.append(body)
+        if body["max_tokens"] > 7320:
+            return httpx.Response(400, json={"error": {"message": _CTX_ERR}})
+        return httpx.Response(200, json=_OK)
+
+    provider = AzureFoundryAPIMProvider(
+        apim_base_url="https://apim",
+        deployment="small",
+        subscription_key="k",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await provider.complete(_MSGS, max_tokens=8192)
+    await provider.complete(_MSGS, max_tokens=8192)
+    assert [b["max_tokens"] for b in bodies] == [8192, 7320, 7320]
+
+
+# --- un segundo 400 sigue siendo error (gap 3a) ---------------------------------------
+@pytest.mark.asyncio
+async def test_a_second_400_after_adapting_is_an_error_without_a_third_attempt() -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        if len(bodies) == 1:
+            return httpx.Response(400, json=_MAX_TOKENS_ERR)
+        return httpx.Response(400, json={"error": {"message": "invalid role 'foo'"}})
+
+    provider = AzureFoundryAPIMProvider(
+        apim_base_url="https://apim",
+        deployment="gpt-5",
+        subscription_key="k",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(ProviderError):
+        await provider.complete(_MSGS, max_tokens=100)
+    assert len(bodies) == 2

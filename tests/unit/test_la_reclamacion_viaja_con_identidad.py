@@ -71,6 +71,12 @@ def test_an_old_payload_without_claim_still_parses() -> None:
     assert ExecutionRequest.from_dict(_raw()).claim_id is None
 
 
+def test_the_claim_survives_the_canonical_serializer() -> None:
+    """`task_h00_02`: `as_dict` no emitía `claim_id` aunque `from_dict` lo leyera."""
+    request = ExecutionRequest.from_dict(_raw(claim_id="c-9"))
+    assert ExecutionRequest.from_dict(request.as_dict()).claim_id == "c-9"
+
+
 # --------------------------------------------------------------- el worker
 
 

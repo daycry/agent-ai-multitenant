@@ -135,7 +135,16 @@ async def post_adaptive(
     if fixed is None:
         return resp
     adaptations.learn(body, fixed)
-    return await post(fixed)
+    retried = await post(fixed)
+    if (
+        may_switch_transport
+        and retried.status_code == 400
+        and needs_responses_api(error_text(retried))
+    ):
+        # Un cambio de transporte como mucho: el reintento adaptado ya se gastó.
+        adaptations.responses_api = True
+        return None
+    return retried
 
 
 def check_status(resp: httpx.Response, *, provider: str) -> None:
