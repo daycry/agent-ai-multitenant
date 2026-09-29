@@ -48,6 +48,7 @@ from shared_llm import (
     LLMProvider,
     Message,
     OllamaProvider,
+    ToolCall,
 )
 from shared_llm.credential_fields import overlay_credentials
 from shared_llm.providers._openai_compat import (
@@ -74,7 +75,7 @@ from agent_runtime.review_contract import (
     VERDICT_REJECT,
 )
 from agent_runtime.state import ReviewState
-from agent_runtime.text_tool_calls import salvage_tool_calls, strip_think
+from agent_runtime.text_tool_calls import embedded_tool_calls, salvage_tool_calls, strip_think
 from agent_runtime.tool_classification import _is_readonly_tool
 from agent_runtime.untrusted import fence_untrusted
 
@@ -1630,6 +1631,21 @@ class _ProviderModelClient:
         if calls:
             _log.info("tool call(s) rescued from text content: %s", [c.name for c in calls])
             return replace(resp, tool_calls=calls, content="")
+        embedded = embedded_tool_calls(resp.content, allowed)
+        if embedded:
+            # Revisión adversarial, intento 1 (Lente C): prosa con una llamada dentro. No se
+            # ejecuta —podría ser contenido inyectado que el modelo sólo está citando— y
+            # tampoco se da por buena como FINISH, que era el fallo original. El `noop`
+            # le dice al modelo cómo salir de la ambigüedad en su siguiente turno.
+            names = sorted({c.name for c in embedded})
+            _log.warning("tool call(s) found inside prose, not executed: %s", names)
+            reason = (
+                f"your reply mixed prose with a call to {', '.join(names)}, so it was NOT "
+                "executed. To call a tool, reply with ONLY the call. If you were quoting "
+                "content, finish again without the literal call block."
+            )
+            noop = ToolCall(id="text_noop", name="noop", arguments={"reason": reason})
+            return replace(resp, tool_calls=[noop], content="")
         cleaned = strip_think(resp.content)
         return resp if cleaned == resp.content else replace(resp, content=cleaned)
 

@@ -11,8 +11,11 @@ reconoce en los tres formatos que se ven en la práctica:
 La clave de los argumentos puede ser ``arguments`` o ``parameters`` (Llama 3.x), y su
 valor un objeto o un JSON codificado como cadena.
 
-**El límite que hace esto seguro**: sólo se devuelve una llamada cuyo nombre esté en
-``allowed``, que el llamante rellena con las tools ANUNCIADAS en ese turno. Un JSON
+**Los dos límites que hacen esto seguro**. Primero, la respuesta ENTERA tiene que ser la
+llamada: si al quitar los bloques queda texto, era prosa que citaba una llamada (por
+ejemplo, al resumir contenido inyectado) y no se ejecuta. Segundo, sólo se devuelve una
+llamada cuyo nombre esté en ``allowed``, que el llamante rellena con las tools
+ANUNCIADAS en ese turno. Un JSON
 cualquiera en la prosa —un ejemplo de configuración, un fragmento de respuesta— no
 tiene ``name`` de una tool anunciada y sigue siendo prosa.
 
@@ -69,17 +72,23 @@ def _loads(fragment: str) -> Any:
         return None
 
 
-def salvage_tool_calls(text: str, allowed: Collection[str]) -> list[ToolCall]:
-    """Las tool calls que ``text`` contiene como texto, en orden; ``[]`` si ninguna.
+def _calls_in(text: str, allowed: Collection[str], *, whole: bool) -> list[ToolCall]:
+    """Las llamadas a tools permitidas que hay en ``text``, por formato.
 
     Se prueba cada formato por orden de especificidad y se para en el primero que da
-    alguna llamada válida, para no mezclar, por ejemplo, una etiqueta real con un
-    ejemplo en un bloque de código dentro de la misma respuesta.
+    alguna llamada válida, para no mezclar una etiqueta real con un ejemplo en un bloque
+    de código. Con ``whole`` sólo vale un formato si la respuesta ENTERA son sus bloques.
     """
     body = strip_think(text)
     if not body or not allowed:
         return []
-    for fragments in (_TAGGED.findall(body), _FENCED.findall(body), [body]):
+    for pattern in (_TAGGED, _FENCED, None):
+        if pattern is None:
+            fragments = [body]
+        else:
+            if whole and pattern.sub("", body).strip():
+                continue
+            fragments = pattern.findall(body)
         calls = [
             call
             for idx, fragment in enumerate(fragments)
@@ -90,4 +99,24 @@ def salvage_tool_calls(text: str, allowed: Collection[str]) -> list[ToolCall]:
     return []
 
 
-__all__ = ["salvage_tool_calls", "strip_think"]
+def salvage_tool_calls(text: str, allowed: Collection[str]) -> list[ToolCall]:
+    """Las tool calls que ``text`` ES, en orden; ``[]`` si no es sólo eso.
+
+    Revisión adversarial, intento 1 (Lente C, CWE-1427): sólo cuenta si la respuesta
+    entera es la llamada. Una llamada citada en mitad de la prosa —el modelo resumiendo
+    una página o un README con contenido inyectado— no se ejecuta: rescatarla haría que
+    bastara con que el modelo REPITIERA la inyección, sin necesidad de obedecerla.
+    """
+    return _calls_in(text, allowed, whole=True)
+
+
+def embedded_tool_calls(text: str, allowed: Collection[str]) -> list[ToolCall]:
+    """Las tool calls a tools permitidas que ``text`` CONTIENE, aunque haya prosa.
+
+    No se ejecutan nunca: sirven para no dar por buena como FINISH una respuesta que
+    mezcla prosa con una llamada, que es el fallo que el rescate vino a corregir.
+    """
+    return _calls_in(text, allowed, whole=False)
+
+
+__all__ = ["embedded_tool_calls", "salvage_tool_calls", "strip_think"]
