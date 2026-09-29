@@ -86,7 +86,7 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_03` — Rescate de tool calls escritas como texto
 
-- [ ] **Título**: si una respuesta HTTP no trae tool calls estructuradas y su texto
+- [x] **Título**: si una respuesta HTTP no trae tool calls estructuradas y su texto
       contiene una llamada en `<tool_call>{…}</tool_call>`, un objeto JSON con
       `name` y `arguments`, o ese objeto en un bloque de código, **y el nombre es una
       tool anunciada en ese turno**, se enruta como ACT (o como FINISH si es
@@ -94,6 +94,11 @@ silencioso del contexto en Ollama.
       anunciado, o camino `claude_sdk`: el texto sigue siendo lo que era.
       **Test**: `docker/agent-runtimes/agent-runtime/tests/test_text_tool_call_salvage.py`.
       **Coste**: 1 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo (el módulo no existía). Módulo
+    puro `agent_runtime/text_tool_calls.py`; el cliente lo aplica en `decide` por
+    `_salvaged`, detrás de `_advertises_submit_result`, así que `claude_sdk` queda
+    intacto. El review no lo necesita: su red de prosa ya lee JSON embebido. 12
+    casos, incluidos los tres que NO se rescatan. Runtime + shared-llm: 960 passed.
 
 ### Ola 2 — Modelos de razonamiento y Codex
 

@@ -35,7 +35,7 @@ import os
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -74,6 +74,7 @@ from agent_runtime.review_contract import (
     VERDICT_REJECT,
 )
 from agent_runtime.state import ReviewState
+from agent_runtime.text_tool_calls import salvage_tool_calls, strip_think
 from agent_runtime.tool_classification import _is_readonly_tool
 from agent_runtime.untrusted import fence_untrusted
 
@@ -1527,7 +1528,7 @@ class _ProviderModelClient:
                 )
             )
             self._record_thread_turn(sent_user, resp)
-            return _decision_from(resp, model=self.model)
+            return _decision_from(self._salvaged(resp, tools), model=self.model)
         resp = self._retrying(
             lambda: self.provider.complete(
                 _decide_messages(state),
@@ -1537,7 +1538,31 @@ class _ProviderModelClient:
                 **self._extra_call_kwargs,
             )
         )
-        return _decision_from(resp, model=self.model)
+        return _decision_from(self._salvaged(resp, tools), model=self.model)
+
+    def _salvaged(
+        self, resp: CompletionResponse, tools: list[dict[str, Any]] | None
+    ) -> CompletionResponse:
+        """ADR 0169 D5 (`task_cm_03`): rescata tool calls escritas como texto.
+
+        Sólo en los caminos HTTP (`_advertises_submit_result`): en claude_sdk el FINISH
+        real ES prosa y no se reinterpreta. Sólo si no hay tool calls estructuradas, y
+        sólo con los nombres anunciados en este turno. Sin rescate, el texto pierde sus
+        bloques ``<think>`` para que no acaben en el entregable.
+        """
+        if not self._advertises_submit_result or resp.tool_calls or not resp.content:
+            return resp
+        allowed = {
+            str(tool["function"]["name"])
+            for tool in tools or []
+            if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+        }
+        calls = salvage_tool_calls(resp.content, allowed)
+        if calls:
+            _log.info("tool call(s) rescued from text content: %s", [c.name for c in calls])
+            return replace(resp, tool_calls=calls, content="")
+        cleaned = strip_think(resp.content)
+        return resp if cleaned == resp.content else replace(resp, content=cleaned)
 
     def assess_progress(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """ADR 0112 fase 2: mini-turno DEDICADO de reflexion (solo HTTP).
