@@ -53,19 +53,24 @@ export interface ProviderModelValue {
   model: string;
   temperature: number;
   reasoning_effort: string;
+  /** Tope de salida por llamada (ADR 0169 D4). El campo sólo se pinta si el valor
+   * trae la clave: `null` = el default del runtime. */
+  max_output_tokens?: number | null;
 }
 
-export function ProviderModelSelects({
+type ModelField = "provider" | "model" | "temperature" | "max_output_tokens";
+
+export function ProviderModelSelects<V extends ProviderModelValue>({
   value,
   onChange,
   idPrefix,
   errorFor,
 }: {
-  value: ProviderModelValue;
-  onChange: (next: ProviderModelValue) => void;
+  value: V;
+  onChange: (next: V) => void;
   idPrefix: string;
   /** Errores de validación a anclar inline (opcional; persona los pasa). */
-  errorFor?: (field: "provider" | "model" | "temperature") => string | null;
+  errorFor?: (field: ModelField) => string | null;
 }) {
   const t = useT("capability");
 
@@ -83,7 +88,9 @@ export function ProviderModelSelects({
   // claude_sdk ignora temperature; los demás la envían.
   const tempApplies = selected ? selected.kind !== "claude_sdk" : true;
   const reasoningLabel = (opt: string) => labelFor(opt, t("reasoningOff"));
-  const err = (field: "provider" | "model" | "temperature") => errorFor?.(field) ?? null;
+  const err = (field: ModelField) => errorFor?.(field) ?? null;
+  // ADR 0169 D4: sólo quien trae la clave muestra el tope, y claude_sdk no lo admite.
+  const capApplies = "max_output_tokens" in value && tempApplies;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid={`${idPrefix}-model-fields`}>
@@ -185,6 +192,36 @@ export function ProviderModelSelects({
           </p>
         )}
       </div>
+
+      {capApplies && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${idPrefix}-max-output`}>{t("fieldMaxOutputTokens")}</Label>
+          <Input
+            id={`${idPrefix}-max-output`}
+            type="number"
+            min={256}
+            step={256}
+            value={value.max_output_tokens ?? ""}
+            placeholder={t("fieldMaxOutputTokensPlaceholder")}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                // Vacío = sin tope propio (el runtime aplica el suyo, ADR 0169 D4).
+                max_output_tokens: e.target.value === "" ? null : Number(e.target.value),
+              })
+            }
+            data-testid={`${idPrefix}-max-output`}
+          />
+          {err("max_output_tokens") && (
+            <p
+              className="text-danger-soft-foreground text-xs"
+              data-testid={`${idPrefix}-max-output-error`}
+            >
+              {err("max_output_tokens")}
+            </p>
+          )}
+        </div>
+      )}
 
       {reasoningSelectable.length > 0 && (
         <div className="flex flex-col gap-1.5">

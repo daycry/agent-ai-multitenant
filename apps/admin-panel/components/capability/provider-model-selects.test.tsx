@@ -237,7 +237,7 @@ describe("PersonaModelFields — el envoltorio que usan agentes/equipos", () => 
       <QueryClientProvider client={client}>
         <LanguageProvider>
           <PersonaModelFields
-            draft={{ ...EMPTY, temperature: 9 }}
+            draft={{ ...EMPTY, temperature: 9, max_output_tokens: null }}
             onChange={vi.fn()}
             idPrefix="persona"
           />
@@ -255,5 +255,41 @@ describe("PersonaModelFields — el envoltorio que usan agentes/equipos", () => 
     expect(texts.filter((t) => t.includes("(ollama)"))).toHaveLength(2);
     // Y la validación pura se ancla en su control (temperatura fuera de rango).
     expect(screen.getByTestId("persona-temperature-error")).toBeTruthy();
+  });
+});
+
+// ADR 0169 D4 (`task_cm_11`): el tope de salida sólo se edita donde el valor trae la
+// clave (la ficha del agente), y vaciarlo vuelve al default del runtime.
+describe("ProviderModelSelects — tope de salida (ADR 0169)", () => {
+  const OLLAMA_PICKED: ProviderModelValue = {
+    ...EMPTY,
+    provider_id: "prov-ollama-local",
+    provider: "ollama",
+    model: "llama3.1:8b",
+  };
+
+  it("no pinta el campo si el valor no trae la clave", async () => {
+    wireApi();
+    mount(OLLAMA_PICKED);
+    await waitFor(() => expect(providerOptions()).toHaveLength(3));
+    expect(screen.queryByTestId("t-max-output")).toBeNull();
+  });
+
+  it("lo pinta vacío con null y emite el número que se escribe", async () => {
+    wireApi();
+    const { onChange } = mount({ ...OLLAMA_PICKED, max_output_tokens: null });
+    await waitFor(() => expect(providerOptions()).toHaveLength(3));
+    const input = screen.getByTestId("t-max-output") as HTMLInputElement;
+    expect(input.value).toBe("");
+    fireEvent.change(input, { target: { value: "4096" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ max_output_tokens: 4096 }));
+  });
+
+  it("vaciar el campo emite null", async () => {
+    wireApi();
+    const { onChange } = mount({ ...OLLAMA_PICKED, max_output_tokens: 4096 });
+    await waitFor(() => expect(providerOptions()).toHaveLength(3));
+    fireEvent.change(screen.getByTestId("t-max-output"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ max_output_tokens: null }));
   });
 });

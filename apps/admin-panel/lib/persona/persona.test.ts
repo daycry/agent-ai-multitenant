@@ -76,6 +76,7 @@ describe("persona — validación del borrador (catálogo + temperatura)", () =>
     model: "claude-opus-4",
     temperature: 0.2,
     reasoning_effort: "off",
+    max_output_tokens: null,
   };
 
   it("un borrador válido no produce errores", () => {
@@ -119,6 +120,7 @@ describe("persona — draftFromConfig (carga inicial)", () => {
       model: "llama3",
       temperature: 0.7,
       reasoning_effort: "off",
+      max_output_tokens: null,
     });
   });
 
@@ -232,6 +234,7 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
         model: "llama3",
         temperature: 0.5,
         reasoning_effort: "off",
+        max_output_tokens: null,
       },
       prompts: { es: "Nuevo ES", en: "Nuevo EN" },
     });
@@ -251,6 +254,7 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
         model: "m",
         temperature: 0.2,
         reasoning_effort: "off",
+        max_output_tokens: null,
       },
       prompts: {},
     });
@@ -266,6 +270,7 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
         model: "m",
         temperature: 0.2,
         reasoning_effort: "xhigh",
+        max_output_tokens: null,
       },
       prompts: {},
     });
@@ -281,6 +286,7 @@ describe("persona — buildModelConfig (envío preservando bilingüe)", () => {
         model: "m",
         temperature: 0.2,
         reasoning_effort: "off",
+        max_output_tokens: null,
       },
       prompts: {},
     });
@@ -306,5 +312,52 @@ describe("persona — modo custom y etiquetas", () => {
   it("expone la etiqueta 'No disponible aún' reutilizable y bilingüe", () => {
     expect(UNAVAILABLE_LABEL.es).toBe("No disponible aún");
     expect(UNAVAILABLE_LABEL.en).toBe("Not available yet");
+  });
+});
+
+// ADR 0169 D4 (`task_cm_11`): el tope de salida por modelo se puede fijar desde la
+// ficha del agente, con el mismo rango que valida el backend.
+describe("persona — max_output_tokens (ADR 0169)", () => {
+  const base: ModelConfigDraft = {
+    ...DEFAULT_MODEL_CONFIG,
+    provider_id: "row-1",
+    provider: "ollama",
+    model: "gemma4:e4b",
+  };
+
+  it("un borrador nuevo no fija tope: manda el default del runtime", () => {
+    expect(DEFAULT_MODEL_CONFIG.max_output_tokens).toBeNull();
+    expect(buildModelConfig({ current: null, draft: base, prompts: {} }).max_output_tokens).toBe(
+      undefined,
+    );
+  });
+
+  it("lee el tope guardado y lo vuelve a escribir", () => {
+    const draft = draftFromConfig({ provider: "ollama", model: "m", max_output_tokens: 4096 });
+    expect(draft.max_output_tokens).toBe(4096);
+    const cfg = buildModelConfig({
+      current: null,
+      draft: { ...base, max_output_tokens: 4096 },
+      prompts: {},
+    });
+    expect(cfg.max_output_tokens).toBe(4096);
+  });
+
+  it("vaciar el campo borra el tope que había", () => {
+    const cfg = buildModelConfig({
+      current: { provider: "ollama", model: "m", max_output_tokens: 4096 },
+      draft: { ...base, max_output_tokens: null },
+      prompts: {},
+    });
+    expect("max_output_tokens" in cfg).toBe(false);
+  });
+
+  it.each([100, 250_000, 12.5])("rechaza un tope fuera de rango (%s)", (value) => {
+    const errors = validateDraft({ ...base, max_output_tokens: value }, "es");
+    expect(errors.map((e) => e.field)).toContain("max_output_tokens");
+  });
+
+  it("acepta un tope sensato", () => {
+    expect(validateDraft({ ...base, max_output_tokens: 8192 }, "es")).toEqual([]);
   });
 });

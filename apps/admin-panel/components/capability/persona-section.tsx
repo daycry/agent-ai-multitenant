@@ -267,7 +267,7 @@ export function PersonaModelFields({
 }) {
   const { lang } = useLang();
   const errors = useMemo(() => validateDraft(draft, lang), [draft, lang]);
-  const errorFor = (field: "provider" | "model" | "temperature") =>
+  const errorFor = (field: "provider" | "model" | "temperature" | "max_output_tokens") =>
     errors.find((e) => e.field === field)?.message ?? null;
 
   // ADR 0082: selección por PROVEEDOR CONCRETO mediante el componente reutilizable

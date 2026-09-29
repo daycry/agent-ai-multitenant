@@ -1827,6 +1827,11 @@ export const dictionary = {
     fieldModel: { es: "Modelo", en: "Model" },
     fieldTemperature: { es: "Temperatura", en: "Temperature" },
     fieldReasoning: { es: "Razonamiento", en: "Reasoning" },
+    fieldMaxOutputTokens: { es: "Tope de salida (tokens)", en: "Output cap (tokens)" },
+    fieldMaxOutputTokensPlaceholder: {
+      es: "por defecto del runtime",
+      en: "runtime default",
+    },
     fieldSelectPlaceholder: { es: "— Selecciona —", en: "— Select —" },
     fieldModelNamePlaceholder: { es: "nombre del modelo", en: "model name" },
     reasoningOff: { es: "Desactivado", en: "Off" },
@@ -2226,6 +2231,10 @@ export const dictionary = {
   persona: {
     errorProvider: { es: "Selecciona un proveedor.", en: "Select a provider." },
     errorModelEmpty: { es: "El modelo no puede estar vacío.", en: "Model cannot be empty." },
+    errorMaxOutputTokens: {
+      es: "El tope de salida tiene que ser un entero entre {min} y {max}.",
+      en: "The output cap must be an integer between {min} and {max}.",
+    },
     errorTemperature: {
       es: "La temperatura debe estar entre {min} y {max}.",
       en: "Temperature must be between {min} and {max}.",

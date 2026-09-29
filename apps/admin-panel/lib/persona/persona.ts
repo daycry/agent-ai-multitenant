@@ -66,11 +66,17 @@ export const DEFAULT_MODEL_CONFIG: ModelConfigDraft = {
   // 0.1 alinea con el default del plugin de GitHub Copilot en VS Code.
   temperature: 0.1,
   reasoning_effort: "off",
+  // ADR 0169 D4: sin tope propio, el runtime aplica el suyo (8192 al decidir).
+  max_output_tokens: null,
 };
 
 // Rango de temperatura (mismo que `MODEL_TEMPERATURE_MIN/MAX` del backend).
 export const TEMPERATURE_MIN = 0;
 export const TEMPERATURE_MAX = 2;
+
+// Rango de `max_output_tokens` (mismo que `MODEL_MAX_OUTPUT_TOKENS_MIN/MAX` del backend).
+export const MAX_OUTPUT_TOKENS_MIN = 256;
+export const MAX_OUTPUT_TOKENS_MAX = 200_000;
 
 // ---------------------------------------------------------------------------
 // Shape del model_config (espeja la columna `model_config` del agente).
@@ -98,6 +104,8 @@ export interface ModelConfig {
   temperature?: number;
   /** Esfuerzo de razonamiento por proveedor (ADR 0070). "off"/ausente = sin razonar. */
   reasoning_effort?: string;
+  /** Tope de salida por llamada (ADR 0169 D4). Ausente = el default del runtime. */
+  max_output_tokens?: number;
   system_prompts?: SystemPrompts;
   [key: string]: unknown;
 }
@@ -114,6 +122,8 @@ export interface ModelConfigDraft {
   temperature: number;
   /** Opción de razonamiento elegida; "off" = sin razonamiento (ADR 0070). */
   reasoning_effort: string;
+  /** Tope de salida por llamada; `null` = el default del runtime (ADR 0169 D4). */
+  max_output_tokens: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +132,7 @@ export interface ModelConfigDraft {
 
 export interface ModelConfigError {
   /** Campo que falla, para anclar el mensaje en el control correcto. */
-  field: "provider" | "model" | "temperature";
+  field: "provider" | "model" | "temperature" | "max_output_tokens";
   message: string;
 }
 
@@ -161,6 +171,19 @@ export function validateDraft(draft: ModelConfigDraft, lang: Lang): ModelConfigE
       }),
     });
   }
+  const cap = draft.max_output_tokens;
+  if (
+    cap != null &&
+    (!Number.isInteger(cap) || cap < MAX_OUTPUT_TOKENS_MIN || cap > MAX_OUTPUT_TOKENS_MAX)
+  ) {
+    errors.push({
+      field: "max_output_tokens",
+      message: translate(lang, "persona", "errorMaxOutputTokens", {
+        min: MAX_OUTPUT_TOKENS_MIN,
+        max: MAX_OUTPUT_TOKENS_MAX,
+      }),
+    });
+  }
   return errors;
 }
 
@@ -183,6 +206,10 @@ export function draftFromConfig(cfg: ModelConfig | null | undefined): ModelConfi
       typeof cfg?.reasoning_effort === "string" && cfg.reasoning_effort.trim()
         ? cfg.reasoning_effort
         : "off",
+    max_output_tokens:
+      typeof cfg?.max_output_tokens === "number" && Number.isInteger(cfg.max_output_tokens)
+        ? cfg.max_output_tokens
+        : null,
   };
 }
 
@@ -337,6 +364,12 @@ export function buildModelConfig(input: BuildConfigInput): ModelConfig {
     next.reasoning_effort = draft.reasoning_effort;
   } else {
     delete next.reasoning_effort;
+  }
+  // ADR 0169 D4: el tope sólo se persiste si el operador lo fijó; vaciarlo lo borra.
+  if (draft.max_output_tokens != null) {
+    next.max_output_tokens = draft.max_output_tokens;
+  } else {
+    delete next.max_output_tokens;
   }
 
   const system_prompts: SystemPrompts = {};

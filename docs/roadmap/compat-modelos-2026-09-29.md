@@ -198,6 +198,21 @@ silencioso del contexto en Ollama.
       **Test**: `tests/unit/test_docs_governance.py`.
       **Coste**: 0,25 d.
 
+### `task_cm_11` — El tope de salida se fija desde la ficha del agente
+
+- [x] **Título**: `persona.ts` lee, valida (256 a 200 000, el mismo rango que la API) y
+      persiste `max_output_tokens`, y `ProviderModelSelects` pinta el campo sólo cuando
+      el valor trae la clave, así que los otros cinco sitios que reutilizan el editor
+      no cambian. Vacío = el default del runtime. `claude_sdk` no lo muestra.
+      **Test**: `npm --prefix apps/admin-panel run test -- lib/persona/persona.test.ts components/capability/provider-model-selects.test.tsx`.
+      **Coste**: 0,5 d.
+  - ✅ **Entregada el 2026-09-29.** Añadida al plan durante la implementación: sin
+    ella, `max_output_tokens` sólo se podía fijar por API. Vista en rojo: 6 fallos en
+    `persona.test.ts`. `buildModelConfig` ya conservaba las claves que la UI no edita,
+    así que un tope fijado por API nunca se perdía al guardar. El editor pasa a ser
+    genérico sobre el tipo de valor. vitest: 36 + 10 passed; `tsc`, `eslint` y
+    `check-i18n` limpios.
+
 ## Tests humanos
 
 ```yaml
