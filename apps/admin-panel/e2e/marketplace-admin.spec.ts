@@ -368,7 +368,7 @@ test("shares tab creates an explicit cross-tenant share grant", async ({ page })
   );
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("marketplace-tab-shares").click();
+  await page.getByTestId("marketplace-tab-publish").click();
 
   await expect(page.getByTestId("share-create-card")).toBeVisible();
   await page.getByTestId("share-listing-select").selectOption(PRIVATE_ID);
@@ -394,7 +394,7 @@ test("shares tab revokes a grant", async ({ page }) => {
   });
 
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("marketplace-tab-shares").click();
+  await page.getByTestId("marketplace-tab-publish").click();
 
   await expect(page.getByTestId(`share-${SHARE_ID}`)).toBeVisible();
   await page.getByTestId(`share-revoke-${SHARE_ID}`).click();

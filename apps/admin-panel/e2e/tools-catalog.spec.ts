@@ -280,6 +280,7 @@ test("the agent-tools empty state links to the catalog (clickable, not plain tex
   );
 
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await page.getByTestId("agent-tools-tab-advanced").click();
   const link = page.getByTestId("agent-tools-catalog-link");

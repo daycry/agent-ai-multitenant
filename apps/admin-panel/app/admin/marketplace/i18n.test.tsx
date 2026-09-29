@@ -124,7 +124,7 @@ describe("marketplace en castellano", () => {
     expect(await screen.findByTestId("marketplace-tab-catalog")).toBeDefined();
     expect(screen.getByTestId("marketplace-tab-catalog").textContent).toBe("Catálogo");
     expect(screen.getByTestId("marketplace-tab-installed").textContent).toBe("Instaladas");
-    expect(screen.getByTestId("marketplace-tab-shares").textContent).toBe("Compartir");
+    expect(screen.getByTestId("marketplace-tab-publish").textContent).toBe("Publicar");
     // El reclamo vive DENTRO de la pestaña de catálogo, que no se pinta hasta
     // que la query resuelve.
     await waitFor(() => expect(screen.getByTestId("catalog-publish-callout")).toBeTruthy());
@@ -143,7 +143,7 @@ describe("marketplace en inglés", () => {
     expect(await screen.findByTestId("marketplace-tab-catalog")).toBeDefined();
     expect(screen.getByTestId("marketplace-tab-catalog").textContent).toBe("Catalog");
     expect(screen.getByTestId("marketplace-tab-installed").textContent).toBe("Installed");
-    expect(screen.getByTestId("marketplace-tab-shares").textContent).toBe("Sharing");
+    expect(screen.getByTestId("marketplace-tab-publish").textContent).toBe("Publish");
     await waitFor(() => expect(screen.getByTestId("catalog-publish-callout")).toBeTruthy());
     expect(screen.getByText("Do you have an internal skill or tool?")).toBeDefined();
     expect(screen.getByTestId("catalog-publish-cta").textContent).toContain(
@@ -194,7 +194,7 @@ describe("marketplace en inglés", () => {
     wireApi();
     renderIn("en", <MarketplaceAdminPage />);
 
-    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    fireEvent.click(await screen.findByTestId("marketplace-tab-publish"));
     await waitFor(() => expect(screen.getByTestId("share-create-card")).toBeTruthy());
 
     expect(screen.getByText("Share a private listing with another tenant")).toBeDefined();

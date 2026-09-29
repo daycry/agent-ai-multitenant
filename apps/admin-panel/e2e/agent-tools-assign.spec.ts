@@ -177,6 +177,7 @@ async function setup(
 test("renders Básicas / Avanzadas tabs with the derived split", async ({ page }) => {
   await setup(page, { assigned: [READ_FILE_ID] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await expect(page.getByTestId("agent-tools-section")).toBeVisible();
   await expect(page.getByTestId("agent-tools-tab-basic")).toContainText("Básicas (2)");
@@ -198,6 +199,7 @@ test("renders Básicas / Avanzadas tabs with the derived split", async ({ page }
 test("Avanzadas tab lists custom + executor tools with badges", async ({ page }) => {
   await setup(page, { assigned: [] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await page.getByTestId("agent-tools-tab-advanced").click();
 
@@ -234,6 +236,7 @@ test("toggle a tool and Save sends the full declarative set", async ({ page }) =
     },
   });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   // Save is disabled until the selection changes.
   await expect(page.getByTestId("agent-tools-save")).toBeDisabled();
@@ -254,6 +257,7 @@ test("toggle a tool and Save sends the full declarative set", async ({ page }) =
 test("global_builtin agent is read-only", async ({ page }) => {
   await setup(page, { scope: "global_builtin", assigned: [READ_FILE_ID] });
   await page.goto(`/admin/agents/${BUILTIN_AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await expect(page.getByTestId("agent-tools-section")).toBeVisible();
   await expect(page.getByTestId("agent-tools-save")).toHaveCount(0);

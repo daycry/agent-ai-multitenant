@@ -144,6 +144,16 @@ class InstallationCreateRequest(BaseModel):
     async_gates: bool = False
 
 
+class InstallationDeploymentRef(BaseModel):
+    """Un proyecto donde vive una instalación (`task_ui_32`)."""
+
+    model_config = _BASE_CONFIG
+
+    project_id: UUID
+    project_name: str
+    status: str
+
+
 class MarketplaceInstallationResponse(BaseModel):
     """An installation record for the caller's tenant."""
 
@@ -173,12 +183,17 @@ class MarketplaceInstallationResponse(BaseModel):
     # «Instaladas» no enseñe un UUID. `None` cuando el endpoint no cargó el listing.
     listing_name: str | None = None
     listing_kind: str | None = None
+    # `task_ui_32`: dónde está desplegada — un elemento por proyecto con despliegue
+    # vivo (`active`/`disabled`), con el nombre para no enseñar el UUID. Aditivo:
+    # `[]` cuando el endpoint no lo cargó o no hay despliegues.
+    deployments: list[InstallationDeploymentRef] = []
 
 
 def to_installation_response(
     installation: MarketplaceInstallation,
     *,
     listing: MarketplaceListing | None = None,
+    deployments: list[InstallationDeploymentRef] | None = None,
 ) -> MarketplaceInstallationResponse:
     capability = capability_of(listing.kind, listing.manifest) if listing is not None else None
     return MarketplaceInstallationResponse(
@@ -186,6 +201,7 @@ def to_installation_response(
         capability_reason=capability.reason if capability else None,
         listing_name=listing.name if listing is not None else None,
         listing_kind=listing.kind if listing is not None else None,
+        deployments=deployments or [],
         id=installation.id,
         tenant_id=installation.tenant_id,
         listing_id=installation.listing_id,

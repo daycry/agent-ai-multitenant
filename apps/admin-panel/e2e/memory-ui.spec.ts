@@ -121,6 +121,22 @@ async function setup(page: Page): Promise<Capture> {
     }),
   );
 
+  // task_ui_31: el contador de cada pestaña sale de `GET /memories/counts`.
+  await page.route(/http:\/\/localhost:8001\/memories\/counts$/, (route) => {
+    const n = (s: string) => (store[s] ?? []).length;
+    const counts = {
+      private: n("private"),
+      team_shared: n("team_shared"),
+      project_shared: n("project_shared"),
+      global: n("global"),
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ all: Object.values(counts).reduce((a, b) => a + b, 0), ...counts }),
+    });
+  });
+
   await page.route(/http:\/\/localhost:8001\/memories(\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();

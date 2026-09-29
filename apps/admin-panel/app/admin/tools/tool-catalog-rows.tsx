@@ -39,6 +39,8 @@ export function ToolGroup({
   canEdit,
   onEdit,
   onDelete,
+  selectedId,
+  onSelect,
   testidPrefix,
 }: {
   title: string;
@@ -49,6 +51,8 @@ export function ToolGroup({
   canEdit: boolean;
   onEdit: (tool: CatalogTool) => void;
   onDelete: (tool: CatalogTool) => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   testidPrefix: string;
 }) {
   return (
@@ -77,6 +81,8 @@ export function ToolGroup({
               canEdit={canEdit}
               onEdit={onEdit}
               onDelete={onDelete}
+              selected={selectedId === tool.id}
+              onSelect={() => onSelect(tool.id)}
             />
           ))}
         </ul>
@@ -96,7 +102,11 @@ function ToolCatalogRow({
   canEdit,
   onEdit,
   onDelete,
+  selected,
+  onSelect,
 }: {
+  selected: boolean;
+  onSelect: () => void;
   tool: CatalogTool;
   lang: Lang;
   t: Translator<"tools">;
@@ -113,14 +123,25 @@ function ToolCatalogRow({
 
   return (
     <li
-      className={cn("rounded border transition-colors", "border-border hover:bg-muted/40")}
+      className={cn(
+        "rounded border transition-colors",
+        selected ? "border-primary bg-muted/40" : "border-border hover:bg-muted/40",
+      )}
       data-testid={`tool-row-${tool.id}`}
       data-builtin={tool.is_builtin ? "true" : "false"}
     >
       <div className="flex items-start gap-3 p-3">
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{tool.name}</span>
+            <button
+              type="button"
+              onClick={onSelect}
+              aria-pressed={selected}
+              data-testid={`resource-select-tool-row-${tool.id}`}
+              className="text-sm font-medium hover:underline"
+            >
+              {tool.name}
+            </button>
             {!tool.is_runtime_wired && (
               <Tooltip content={t("unwiredTooltip")}>
                 <TooltipTrigger

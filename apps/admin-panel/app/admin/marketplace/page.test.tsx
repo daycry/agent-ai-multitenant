@@ -457,12 +457,13 @@ describe("la pestaña Instaladas y los tipos diferidos", () => {
 });
 
 // task_mk_13 (UI-05): la cola de revisión (ADR 0142 D6) es del System Admin y
-// tiene que encontrarse desde la cabecera del marketplace, no sólo por URL.
+// tiene que encontrarse desde la pestaña Publicar del marketplace, no sólo por URL.
 describe("el enlace a la cola de revisión", () => {
   it("lo ve el System Admin", async () => {
     usuario.isSystemAdmin = true;
     try {
       montar();
+      fireEvent.click(await screen.findByTestId("marketplace-tab-publish"));
       const link = await screen.findByTestId("marketplace-review-link");
       expect(link.getAttribute("href")).toBe("/admin/marketplace/review");
     } finally {
@@ -472,7 +473,8 @@ describe("el enlace a la cola de revisión", () => {
 
   it("un tenant admin no lo ve: la cola no es suya", async () => {
     montar();
-    await screen.findByTestId("marketplace-admin-header");
+    fireEvent.click(await screen.findByTestId("marketplace-tab-publish"));
+    await screen.findByTestId("marketplace-publish-tab-cta");
     expect(screen.queryByTestId("marketplace-review-link")).toBeNull();
   });
 });
@@ -512,7 +514,7 @@ describe("nombres en vez de UUIDs", () => {
         },
       ],
     });
-    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    fireEvent.click(await screen.findByTestId("marketplace-tab-publish"));
     expect((await screen.findByTestId("share-listing-name-share-1")).textContent).toBe(
       "informe-interno",
     );
@@ -522,7 +524,7 @@ describe("nombres en vez de UUIDs", () => {
 
   it("el diálogo de compartir busca el tenant en vez de pedir su UUID", async () => {
     montar();
-    fireEvent.click(await screen.findByTestId("marketplace-tab-shares"));
+    fireEvent.click(await screen.findByTestId("marketplace-tab-publish"));
     await screen.findByTestId("share-target-input");
     expect(screen.queryByPlaceholderText("00000000-0000-0000-0000-000000000000")).toBeNull();
   });

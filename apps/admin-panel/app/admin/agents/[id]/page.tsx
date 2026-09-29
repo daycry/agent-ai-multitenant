@@ -24,8 +24,6 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Copy, Home, Pencil, Trash2 } from "lucide-react";
 
-import { CapabilityHub } from "@/components/capability/capability-hub";
-import { PersonaSection } from "@/components/capability/persona-section";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { PageHeader } from "@/components/layout/page-header";
 import { StateBlock } from "@/components/shared/state-block";
@@ -34,17 +32,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { useLang } from "@/lib/lang-context";
-import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
-import { resolvePromptSource } from "@/lib/persona/persona";
 
 import { AgentDeleteDialog } from "./agent-delete-dialog";
-import { SCOPE_BADGE, type Agent } from "./agent-detail-types";
+import { type Agent } from "./agent-detail-types";
 import { AgentEditDialog } from "./agent-edit-dialog";
 import { AgentForkDialog } from "./agent-fork-dialog";
-import { AgentKbsSection } from "./agent-kbs-section";
-import { AgentSkillsSection } from "./agent-skills-section";
-import { AgentToolsSection } from "./agent-tools-section";
+import { AgentTabs } from "./agent-tabs";
 
 export default function AgentHubPage() {
   const t = useT("agents");
@@ -52,7 +45,6 @@ export default function AgentHubPage() {
   const agentId = params?.id ?? "";
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { lang } = useLang();
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -151,115 +143,7 @@ export default function AgentHubPage() {
         </Card>
       )}
 
-      {agent && (
-        <Card className="space-y-4 p-6" data-testid="agent-fields">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={SCOPE_BADGE[agent.scope] ?? "muted"}>{agent.scope}</Badge>
-            <Badge variant="info">{agent.role}</Badge>
-            <Badge variant="muted">{agent.agent_type}</Badge>
-            {agent.review_capability && <Badge variant="success">{t("canReview")}</Badge>}
-            {agent.is_template && <Badge variant="info">{t("isTemplate")}</Badge>}
-            {/* Plan 06.17 task_06_17_12: badge Linked/Forked DERIVADO de
-                forked_from_agent_id (no del scope, que mentía). Un agente con
-                origen es "Forked"; sin origen es "Linked" (copia de catálogo). */}
-            {agent.forked_from_agent_id ? (
-              <Badge variant="warning" data-testid="agent-forked-badge">
-                Forked
-              </Badge>
-            ) : (
-              <Badge variant="muted" data-testid="agent-linked-badge">
-                Linked
-              </Badge>
-            )}
-          </div>
-
-          <div>
-            <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-              {t("systemPrompt")} · {lang}
-            </p>
-            {/* Fuente ÚNICA (Plan 06.17 task_06_17_11): la MISMA que lee la
-                tarjeta de la lista (model_config.system_prompts), con fallback
-                al campo plano legacy. Cierra la colisión lista vs detalle. */}
-            <pre
-              className="bg-muted/40 mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded p-3 text-xs"
-              data-testid="agent-system-prompt-view"
-            >
-              {resolvePromptSource(agent.model_config, agent.system_prompt, lang).text ||
-                agent.system_prompt}
-            </pre>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-            <Field label={t("memoryScope")} value={agent.memory_scope} />
-            <Field label={t("maxConcurrent")} value={String(agent.max_concurrent_tasks)} />
-            <Field
-              label={t("fieldProject")}
-              value={agent.project_id ? agent.project_id.slice(0, 8) : "—"}
-            />
-          </div>
-
-          {/* Honestidad de estado (Plan 06.17 task_06_17_06): un agente IA con
-              memory_scope=private NO memoriza entre runs — el Memorizer hace
-              skip silencioso (skip_private). Avisamos en vez de prometer
-              recuerdo. Solo aplica a agentes IA (un "agente" humano no memoriza
-              vía Memorizer en ningún caso). */}
-          {agent.agent_type === "ai" && privateScopeMemoryWarning(agent.memory_scope, lang) ? (
-            <p
-              className="bg-warning-soft text-warning-soft-foreground rounded p-3 text-xs"
-              data-testid="agent-private-memory-warning"
-              role="status"
-            >
-              {privateScopeMemoryWarning(agent.memory_scope, lang)}
-            </p>
-          ) : null}
-        </Card>
-      )}
-
-      {/* Plan 06.17 task_06_17_09: Hub de Capacidad (modelo mental único
-          SABER/RECORDAR/SER/HACER). Vista del set efectivo REAL por encima de
-          las secciones de edición que vienen debajo. */}
-      {agent && (
-        <div className="mt-4">
-          <CapabilityHub entityType="agent" entityId={agent.id} />
-        </div>
-      )}
-
-      {/* Plan 06.17 task_06_17_11: sección Persona (SER) — proveedor/modelo/
-          temperatura del catálogo cerrado + prompt efectivo (rol + modo). */}
-      {agent && (
-        <div className="mt-4">
-          <PersonaSection
-            modelConfig={agent.model_config}
-            systemPrompt={agent.system_prompt}
-            role={agent.role}
-          />
-        </div>
-      )}
-
-      {/* Plan 06.9: knowledge bases granted to this agent template */}
-      {agent && (
-        <div className="mt-4">
-          <AgentKbsSection agentId={agent.id} isReadOnly={isReadOnly} />
-        </div>
-      )}
-
-      {/* Plan 06.15: tools assigned to this agent (básicas / avanzadas) */}
-      {agent && (
-        <div className="mt-4">
-          <AgentToolsSection
-            agentId={agent.id}
-            isReadOnly={isReadOnly}
-            projectId={agent.project_id}
-          />
-        </div>
-      )}
-
-      {/* Plan 06.18: skills assigned to this agent (inject prompt_fragment) */}
-      {agent && (
-        <div className="mt-4">
-          <AgentSkillsSection agentId={agent.id} isReadOnly={isReadOnly} />
-        </div>
-      )}
+      {agent && <AgentTabs agent={agent} isReadOnly={isReadOnly} />}
 
       {agent && (
         <AgentEditDialog
@@ -298,15 +182,6 @@ export default function AgentHubPage() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-muted-foreground text-xs">{label}</p>
-      <p className="font-medium">{value}</p>
     </div>
   );
 }

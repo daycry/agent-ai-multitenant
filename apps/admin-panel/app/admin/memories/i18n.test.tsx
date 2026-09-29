@@ -51,6 +51,8 @@ const MEMORY = {
   updated_at: "2026-08-01T00:00:00Z",
 };
 
+const COUNTS = { all: 1, private: 0, team_shared: 1, project_shared: 0, global: 0 };
+
 const SIMILAR = {
   memory: { ...MEMORY, id: "mem-2", content: "El worker-test reutiliza el dep-cache." },
   similarity: 0.91,
@@ -59,6 +61,7 @@ const SIMILAR = {
 function wireApi(memories: unknown[] = [MEMORY], similar: unknown[] = [SIMILAR]) {
   apiFetchMock.mockImplementation((path: string) => {
     if (path.startsWith("/memories/") && path.endsWith("/similar")) return Promise.resolve(similar);
+    if (path === "/memories/counts") return Promise.resolve(COUNTS);
     if (path.startsWith("/memories")) return Promise.resolve(memories);
     return Promise.resolve([]);
   });
@@ -88,8 +91,8 @@ describe("memories en castellano", () => {
     renderIn("es");
 
     expect(await screen.findByText("Memoria del equipo")).toBeDefined();
-    expect(screen.getByTestId("memories-scope-all").textContent).toBe("Todas");
-    expect(screen.getByTestId("memories-scope-team_shared").textContent).toBe("Equipo");
+    expect(screen.getByTestId("memories-scope-all").textContent).toMatch(/^Todas/);
+    expect(screen.getByTestId("memories-scope-team_shared").textContent).toMatch(/^Equipo/);
     expect(screen.getByText("Nueva memoria manual")).toBeDefined();
     expect(screen.getByText("Contenido")).toBeDefined();
     expect(screen.getByTestId("memory-create-submit").textContent).toBe("Guardar memoria");
@@ -119,8 +122,8 @@ describe("memories en inglés", () => {
     renderIn("en");
 
     expect(await screen.findByText("Team memory")).toBeDefined();
-    expect(screen.getByTestId("memories-scope-all").textContent).toBe("All");
-    expect(screen.getByTestId("memories-scope-team_shared").textContent).toBe("Team");
+    expect(screen.getByTestId("memories-scope-all").textContent).toMatch(/^All/);
+    expect(screen.getByTestId("memories-scope-team_shared").textContent).toMatch(/^Team/);
     expect(screen.getByText("New manual memory")).toBeDefined();
     expect(screen.getByText("Content")).toBeDefined();
     expect(screen.getByTestId("memory-create-submit").textContent).toBe("Save memory");

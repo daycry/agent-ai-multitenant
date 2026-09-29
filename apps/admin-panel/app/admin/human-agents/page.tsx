@@ -4,7 +4,13 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, Coins, GitFork, Home, Mail, UserRound, UsersRound } from "lucide-react";
 
-import { PageHeader } from "@/components/layout/page-header";
+import {
+  ResourceCard,
+  ResourceDetailPanel,
+  ResourceHeader,
+  ResourceLayout,
+  ResourceToolbar,
+} from "@/components/resource";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT, type MessageKey } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 import { HumanAgentFormDialog } from "./human-agent-form-dialog";
@@ -54,99 +61,104 @@ export interface AssignableUser {
 // ---------------------------------------------------------------------------
 // Tenant Human-Agent card
 // ---------------------------------------------------------------------------
+const SCOPE_LABEL_KEY: Record<string, MessageKey<"agents">> = {
+  global_builtin: "scopeBuiltin",
+  global_tenant_template: "scopeTenantTemplate",
+  project_local: "scopeProjectLocal",
+};
+
 function HumanAgentCard({
   agent,
   users,
   onEdit,
+  selected,
+  onSelect,
 }: {
   agent: HumanAgent;
   users: AssignableUser[];
   onEdit: (agent: HumanAgent) => void;
+  selected: boolean;
+  onSelect: () => void;
 }) {
+  const tr = useT("resource");
+  const ta = useT("agents");
   const cfg = agent.config;
   const assigned = users.find((u) => u.user_id === cfg?.assigned_user_id);
   const escalation = users.find((u) => u.user_id === cfg?.escalation_target_user_id);
 
   return (
-    <Card data-testid={`human-agent-${agent.id}`} className="flex h-full flex-col">
-      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
-        <div className="flex min-w-0 flex-col gap-1">
-          <CardTitle className="truncate text-base">{agent.name}</CardTitle>
+    <ResourceCard
+      testId={`human-agent-${agent.id}`}
+      name={agent.name}
+      selected={selected}
+      onSelect={onSelect}
+      badge={<Badge variant="info">humano</Badge>}
+      provenance={agent.forked_from_agent_id ? tr("provForked") : tr("provOwn")}
+      scope={SCOPE_LABEL_KEY[agent.scope] ? ta(SCOPE_LABEL_KEY[agent.scope]) : agent.scope}
+      description={
+        agent.description ? <p className="line-clamp-2 text-xs">{agent.description}</p> : undefined
+      }
+      extra={
+        <>
           <span className="text-muted-foreground text-xs">{agent.role}</span>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <Badge variant="info">humano</Badge>
-          {agent.forked_from_agent_id && (
-            <span
-              className="text-muted-foreground inline-flex items-center gap-1 text-[10px] italic"
-              title="Forkado de una plantilla global"
-            >
-              <GitFork className="h-3 w-3" /> forkado
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-2 text-sm">
-        {agent.description && (
-          <p className="text-muted-foreground line-clamp-2 text-xs">{agent.description}</p>
-        )}
-        <dl className="flex flex-col gap-1.5 text-xs">
-          <div className="flex items-center gap-2">
-            <UserRound className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-            <dt className="sr-only">Usuario asignado</dt>
-            <dd data-testid={`ha-assigned-${agent.id}`}>
-              {assigned ? (
-                <span className="font-medium">{assigned.full_name ?? assigned.email}</span>
-              ) : (
-                <span className="text-warning-soft-foreground italic">Sin asignar</span>
-              )}
-            </dd>
-          </div>
-          {cfg?.hourly_rate && (
+          <dl className="flex flex-col gap-1.5 text-xs">
             <div className="flex items-center gap-2">
-              <Coins className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-              <dd>
-                {cfg.hourly_rate} {cfg.hourly_rate_currency ?? ""} / h
+              <UserRound className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+              <dt className="sr-only">Usuario asignado</dt>
+              <dd data-testid={`ha-assigned-${agent.id}`}>
+                {assigned ? (
+                  <span className="font-medium">{assigned.full_name ?? assigned.email}</span>
+                ) : (
+                  <span className="text-warning-soft-foreground italic">Sin asignar</span>
+                )}
               </dd>
             </div>
-          )}
-          <div className="flex items-center gap-2">
-            <Clock className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-            <dd>Aceptación: {cfg?.acceptance_timeout_hours ?? 24} h</dd>
-          </div>
-          {escalation && (
+            {cfg?.hourly_rate && (
+              <div className="flex items-center gap-2">
+                <Coins className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+                <dd>
+                  {cfg.hourly_rate} {cfg.hourly_rate_currency ?? ""} / h
+                </dd>
+              </div>
+            )}
             <div className="flex items-center gap-2">
-              <UsersRound className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-              <dd>Escala a: {escalation.full_name ?? escalation.email}</dd>
+              <Clock className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+              <dd>Aceptación: {cfg?.acceptance_timeout_hours ?? 24} h</dd>
             </div>
-          )}
-          {cfg && cfg.notification_channels.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Mail className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-              <dd className="flex flex-wrap gap-1">
-                {cfg.notification_channels.map((ch) => (
-                  <Badge key={ch} variant="muted">
-                    {ch}
-                  </Badge>
-                ))}
-              </dd>
-            </div>
-          )}
-        </dl>
-        <div className="mt-auto pt-2">
-          <RoleGuard min="tenant_admin">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onEdit(agent)}
-              data-testid={`ha-edit-${agent.id}`}
-            >
-              Editar
-            </Button>
-          </RoleGuard>
-        </div>
-      </CardContent>
-    </Card>
+            {escalation && (
+              <div className="flex items-center gap-2">
+                <UsersRound className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+                <dd>Escala a: {escalation.full_name ?? escalation.email}</dd>
+              </div>
+            )}
+            {cfg && cfg.notification_channels.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Mail className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+                <dd className="flex flex-wrap gap-1">
+                  {cfg.notification_channels.map((ch) => (
+                    <Badge key={ch} variant="muted">
+                      {ch}
+                    </Badge>
+                  ))}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </>
+      }
+      actions={
+        <RoleGuard min="tenant_admin">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onEdit(agent)}
+            data-testid={`ha-edit-${agent.id}`}
+          >
+            Editar
+          </Button>
+        </RoleGuard>
+      }
+    />
   );
 }
 
@@ -210,7 +222,10 @@ function TemplateCard({ template, onForked }: { template: HumanAgent; onForked: 
 // ---------------------------------------------------------------------------
 export default function HumanAgentsPage() {
   const errorText = useErrorText();
+  const tr = useT("resource");
   const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<HumanAgent | null>(null);
 
@@ -232,9 +247,17 @@ export default function HumanAgentsPage() {
     refetchOnWindowFocus: false,
   });
 
-  const agents = agentsQuery.data ?? [];
+  const allAgents = agentsQuery.data ?? [];
+  const q = search.trim().toLowerCase();
+  const agents = q
+    ? allAgents.filter((a) =>
+        `${a.name} ${a.role} ${a.description ?? ""}`.toLowerCase().includes(q),
+      )
+    : allAgents;
+  const selected = allAgents.find((a) => a.id === selectedId) ?? null;
   const templates = templatesQuery.data ?? [];
   const users = usersQuery.data ?? [];
+  const selectedUser = users.find((u) => u.user_id === selected?.config?.assigned_user_id);
 
   function refreshAgents() {
     void queryClient.invalidateQueries({ queryKey: ["human-agents", "list"] });
@@ -258,11 +281,15 @@ export default function HumanAgentsPage() {
           { label: "Agentes humanos" },
         ]}
       />
-      <PageHeader
+      <ResourceHeader
         icon={<UserRound className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Agentes humanos"
         description="Personas (o roles) asignables a tareas del plan igual que un agente IA. Configura asignación, tarifa, canales de notificación y escalación."
-        actions={
+        count={agentsQuery.data ? allAgents.length : undefined}
+        countLabel={tr(allAgents.length === 1 ? "countHumansOne" : "countHumansMany", {
+          count: allAgents.length,
+        })}
+        action={
           <RoleGuard min="tenant_admin">
             <Button onClick={openCreate} data-testid="new-human-agent-button">
               <UserRound className="mr-1 h-4 w-4" />
@@ -286,7 +313,7 @@ export default function HumanAgentsPage() {
       <Tabs defaultValue="mine" data-testid="human-agents-tabs">
         <TabsList>
           <TabsTrigger value="mine" data-testid="tab-mine">
-            Mis agentes humanos ({agents.length})
+            Mis agentes humanos ({allAgents.length})
           </TabsTrigger>
           <TabsTrigger value="templates" data-testid="tab-templates">
             Plantillas globales ({templates.length})
@@ -306,7 +333,13 @@ export default function HumanAgentsPage() {
               </p>
             </Card>
           )}
-          {!agentsQuery.isLoading && !agentsQuery.isError && agents.length === 0 && (
+          <ResourceToolbar
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder={tr("searchHumans")}
+            searchTestId="human-agents-search"
+          />
+          {!agentsQuery.isLoading && !agentsQuery.isError && allAgents.length === 0 && (
             <p
               className="text-muted-foreground py-8 text-center text-sm"
               data-testid="human-agents-empty"
@@ -314,15 +347,56 @@ export default function HumanAgentsPage() {
               Tu tenant aún no tiene agentes humanos. Crea uno o clona una plantilla global.
             </p>
           )}
+          {allAgents.length > 0 && agents.length === 0 && (
+            <p className="text-muted-foreground py-8 text-center text-sm">{tr("noMatches")}</p>
+          )}
           {agents.length > 0 && (
-            <div
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-              data-testid="human-agents-grid"
-            >
-              {agents.map((agent) => (
-                <HumanAgentCard key={agent.id} agent={agent} users={users} onEdit={openEdit} />
-              ))}
-            </div>
+            <ResourceLayout
+              panel={
+                selected ? (
+                  <ResourceDetailPanel
+                    title={selected.name}
+                    onClose={() => setSelectedId(null)}
+                    fields={[
+                      { key: "role", label: tr("fieldRole"), value: selected.role },
+                      {
+                        key: "assigned",
+                        label: tr("fieldAssignedTo"),
+                        value: selectedUser
+                          ? (selectedUser.full_name ?? selectedUser.email)
+                          : tr("unassigned"),
+                      },
+                      ...(selected.description
+                        ? [
+                            {
+                              key: "description",
+                              label: tr("fieldDescription"),
+                              value: selected.description,
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                ) : undefined
+              }
+              list={
+                <div
+                  className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
+                  data-testid="human-agents-grid"
+                >
+                  {agents.map((agent) => (
+                    <HumanAgentCard
+                      key={agent.id}
+                      agent={agent}
+                      users={users}
+                      onEdit={openEdit}
+                      selected={selectedId === agent.id}
+                      onSelect={() => setSelectedId(agent.id)}
+                    />
+                  ))}
+                </div>
+              }
+            />
           )}
         </TabsContent>
 

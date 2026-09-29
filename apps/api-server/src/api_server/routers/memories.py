@@ -33,6 +33,13 @@ from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tena
 from api_server.db.memory import MemoryEntry
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
+from api_server.memorizer.provenance import (
+    Names,
+    created_by_for,
+    resolve_names,
+    scope_counts,
+    search_memories,
+)
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.docs_viewer import get_query_embedder
 
@@ -101,6 +108,16 @@ class MemoryStoreRequest(BaseModel):
         return self
 
 
+class CreatedBy(BaseModel):
+    """Quién dejó la memoria. `kind='unknown'` si el dominio no guardó la huella."""
+
+    model_config = _BASE_CONFIG
+
+    kind: Literal["agent", "human", "user", "unknown"]
+    id: UUID | None = None
+    name: str | None = None
+
+
 class MemoryResponse(BaseModel):
     model_config = _BASE_CONFIG
 
@@ -108,35 +125,63 @@ class MemoryResponse(BaseModel):
     tenant_id: UUID
     scope: str
     type: str
+    category: str
+    """Alias de `type` (episodic/semantic); el `kind` tipado es de task_mem_04."""
     content: str
     tags: list[str]
     user_id: UUID | None
     team_id: UUID | None
     project_id: UUID | None
     source_execution_id: UUID | None
+    execution_id: UUID | None
+    """Alias de `source_execution_id` (contrato del panel)."""
+    human_work_session_id: UUID | None = None
     agent_id: UUID | None
+    project_name: str | None = None
+    team_name: str | None = None
+    agent_name: str | None = None
+    created_by: CreatedBy = Field(default_factory=lambda: CreatedBy(kind="unknown"))
+    recall_count: int | None = None
+    """Sin dato hasta `task_mem_02` (columna `recall_count`); el panel dice «desconocido»."""
     has_embedding: bool
     created_at: datetime
     updated_at: datetime
 
 
-def _to_response(row: MemoryEntry) -> MemoryResponse:
+def _to_response(row: MemoryEntry, names: Names | None = None) -> MemoryResponse:
+    n = names or Names()
     return MemoryResponse(
         id=row.id,
         tenant_id=row.tenant_id,
         scope=row.scope,
         type=row.type,
+        category=row.type,
         content=row.content,
         tags=list(row.tags or []),
         user_id=row.user_id,
         team_id=row.team_id,
         project_id=row.project_id,
         source_execution_id=row.source_execution_id,
+        execution_id=row.source_execution_id,
+        human_work_session_id=row.source_human_work_session_id,
         agent_id=row.agent_id,
+        project_name=n.projects.get(row.project_id) if row.project_id else None,
+        team_name=n.teams.get(row.team_id) if row.team_id else None,
+        agent_name=n.agents.get(row.agent_id) if row.agent_id else None,
+        created_by=CreatedBy(**created_by_for(row, n)),
+        recall_count=None,
         has_embedding=row.embedding is not None,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+async def _enriched(
+    session: AsyncSession, tenant_id: UUID, rows: list[MemoryEntry]
+) -> list[MemoryResponse]:
+    """Respuestas con nombres resueltos en un puñado de consultas (sin N+1)."""
+    names = await resolve_names(session, tenant_id, rows)
+    return [_to_response(r, names) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -246,19 +291,30 @@ async def store_memory(
 async def list_memories(
     scope: _SCOPE_LITERAL | None = Query(default=None),
     type: _TYPE_LITERAL | None = Query(default=None),
+    category: _TYPE_LITERAL | None = Query(default=None),
     project_id: UUID | None = Query(default=None),
     team_id: UUID | None = Query(default=None),
+    agent_id: UUID | None = Query(default=None),
+    created_by: UUID | None = Query(default=None),
+    execution_id: UUID | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MemoryResponse]:
-    """Visible memories in the tenant, optionally filtered by scope /
-    type / owner pointer. RLS handles the tenant boundary; on top of it
-    a ``private`` row is visible ONLY to its owning user (H1) — it holds
-    personal data (assistant prefs + córtex owner). Shared / global rows
-    are visible to any tenant member. This is the operator's Memory UI
-    (task_04_06)."""
+    """Visible memories in the tenant with their provenance (task_ui_31).
+
+    Filters: scope, type/category (same column), project, team, agent,
+    ``created_by`` (an agent id, or a user id for private/manual/human-session
+    memories), ``execution_id`` and a ``created_at`` range. RLS handles the
+    tenant boundary (``tenant_id`` is also explicit); on top of it a ``private``
+    row is visible ONLY to its owning user (H1) — no filter can lift that.
+    Names (project/team/agent/creator) are resolved in a batch, not per row."""
+    tenant_id = require_tenant_id(principal)
     stmt = select(MemoryEntry).where(
+        MemoryEntry.tenant_id == tenant_id,
         MemoryEntry.deleted_at.is_(None),
         # Owner isolation: private rows only for their owner; non-private rows
         # (team_shared / project_shared / global) for any tenant member.
@@ -266,15 +322,122 @@ async def list_memories(
     )
     if scope is not None:
         stmt = stmt.where(MemoryEntry.scope == scope)
-    if type is not None:
-        stmt = stmt.where(MemoryEntry.type == type)
+    kind = category or type
+    if kind is not None:
+        stmt = stmt.where(MemoryEntry.type == kind)
     if project_id is not None:
         stmt = stmt.where(MemoryEntry.project_id == project_id)
     if team_id is not None:
         stmt = stmt.where(MemoryEntry.team_id == team_id)
-    stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit)
+    if agent_id is not None:
+        stmt = stmt.where(MemoryEntry.agent_id == agent_id)
+    if execution_id is not None:
+        stmt = stmt.where(MemoryEntry.source_execution_id == execution_id)
+    if created_by is not None:
+        from api_server.db.domain import HumanWorkSession
+
+        stmt = stmt.where(
+            or_(
+                MemoryEntry.agent_id == created_by,
+                MemoryEntry.user_id == created_by,
+                MemoryEntry.source_human_work_session_id.in_(
+                    select(HumanWorkSession.id).where(
+                        HumanWorkSession.tenant_id == tenant_id,
+                        HumanWorkSession.user_id == created_by,
+                    )
+                ),
+                MemoryEntry.metadata_["actor_user_id"].astext == str(created_by),
+            )
+        )
+    if created_from is not None:
+        stmt = stmt.where(MemoryEntry.created_at >= created_from)
+    if created_to is not None:
+        stmt = stmt.where(MemoryEntry.created_at <= created_to)
+    stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit).offset(offset)
     result = await session.execute(stmt)
-    return [_to_response(row) for row in result.scalars().all()]
+    return await _enriched(session, tenant_id, list(result.scalars().all()))
+
+
+# ---------------------------------------------------------------------------
+# GET /memories/counts — contador por pestaña de ámbito
+# ---------------------------------------------------------------------------
+@router.get("/counts")
+async def memory_counts(
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, int]:
+    """`{all, private, team_shared, project_shared, global}` de lo VISIBLE para
+    quien pregunta (las privadas, sólo las suyas): el número de la pestaña es el
+    del listado, nunca más."""
+    tenant_id = require_tenant_id(principal)
+    return await scope_counts(session, tenant_id, principal.user_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /memories/search — buscador semántico del panel
+# ---------------------------------------------------------------------------
+class MemorySearchHit(BaseModel):
+    model_config = _BASE_CONFIG
+
+    memory: MemoryResponse
+    score: float
+    """Puntuación RRF (BM25 español + vector); sólo sirve para ordenar."""
+
+
+@router.get("/search", response_model=list[MemorySearchHit])
+async def search_memories_endpoint(
+    q: str = Query(min_length=1, max_length=500),
+    scope: _SCOPE_LITERAL | None = Query(default=None),
+    project_id: UUID | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    embedder: Embedder | None = Depends(get_query_embedder),
+) -> list[MemorySearchHit]:
+    """Búsqueda híbrida (texto + vector) sobre las memorias visibles.
+
+    Misma fusión RRF que el recall del agente, pero sin fijar un único
+    equipo/proyecto: el operador busca en todo lo que puede ver. Las privadas
+    de otra persona y todo lo de otro tenant quedan fuera en SQL. Sin embedder
+    (Ollama caído) degrada a sólo texto."""
+    tenant_id = require_tenant_id(principal)
+    qvec: list[float] | None = None
+    if embedder is not None:
+        try:
+            vectors = await embedder.embed([q])
+            qvec = list(vectors[0]) if vectors else None
+        except EmbeddingError:
+            qvec = None
+    ranked = await search_memories(
+        session,
+        tenant_id=tenant_id,
+        viewer_id=principal.user_id,
+        query=q,
+        query_embedding=qvec,
+        scope=scope,
+        project_id=project_id,
+        limit=limit,
+    )
+    if not ranked:
+        return []
+    rows = (
+        (
+            await session.execute(
+                select(MemoryEntry).where(
+                    MemoryEntry.tenant_id == tenant_id,
+                    MemoryEntry.id.in_([mid for mid, _ in ranked]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    responses = {r.id: r for r in await _enriched(session, tenant_id, list(rows))}
+    return [
+        MemorySearchHit(memory=responses[mid], score=round(score, 6))
+        for mid, score in ranked
+        if mid in responses
+    ]
 
 
 # ---------------------------------------------------------------------------

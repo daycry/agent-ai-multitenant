@@ -179,6 +179,7 @@ async function setup(
 test("clicking anywhere in the row toggles the tool", async ({ page }) => {
   await setup(page, { assigned: [] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   const row = page.getByTestId(`agent-tool-row-${READ_FILE_ID}`);
   const checkbox = page.getByTestId(`agent-tool-checkbox-${READ_FILE_ID}`);
@@ -203,6 +204,7 @@ test("clicking anywhere in the row toggles the tool", async ({ page }) => {
 test("selected row is visually distinct without inspecting the checkbox", async ({ page }) => {
   await setup(page, { assigned: [READ_FILE_ID] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   const selectedRow = page.getByTestId(`agent-tool-row-${READ_FILE_ID}`);
   const unselectedRow = page.getByTestId(`agent-tool-row-${WRITE_FILE_ID}`);
@@ -219,6 +221,7 @@ test("selected row is visually distinct without inspecting the checkbox", async 
 test("read-only agent: row does not toggle and shows no pointer cursor", async ({ page }) => {
   await setup(page, { scope: "global_builtin", assigned: [READ_FILE_ID] });
   await page.goto(`/admin/agents/${BUILTIN_AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   const checkbox = page.getByTestId(`agent-tool-checkbox-${READ_FILE_ID}`);
   await expect(checkbox).toBeChecked();
@@ -245,6 +248,7 @@ test("read-only agent: row does not toggle and shows no pointer cursor", async (
 test("security badge tooltip opens on hover and on keyboard focus", async ({ page }) => {
   await setup(page, { assigned: [] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   const trigger = page.getByTestId(`agent-tool-security-badge-${READ_FILE_ID}`);
   const tip = page.getByRole("tooltip").filter({ hasText: "Solo lectura" });
@@ -274,6 +278,7 @@ test("group select-all is a tri-state checkbox", async ({ page }) => {
   // file group seeded with ONE of TWO members selected → indeterminate.
   await setup(page, { assigned: [READ_FILE_ID] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   const bulk = page.getByTestId("agent-tools-group-toggle-file");
 
@@ -299,6 +304,7 @@ test("group select-all is a tri-state checkbox", async ({ page }) => {
 test("shows Guardado confirmation after saving", async ({ page }) => {
   await setup(page, { assigned: [] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await expect(page.getByTestId("agent-tools-saved")).toHaveCount(0);
 

@@ -220,6 +220,7 @@ test("assigning a wired builtin (read_file) saves and confirms", async ({ page }
     },
   });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await page.getByTestId(`agent-tool-row-${READ_FILE_ID}`).getByText("read_file").click();
   await page.getByTestId("agent-tools-save").click();
@@ -241,6 +242,7 @@ test("assigning a non-executable builtin (apply_patch) is rejected and surfaced"
 }) => {
   await setup(page, { assigned: [], rejectIds: [APPLY_PATCH_ID] });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await page.getByTestId(`agent-tool-row-${APPLY_PATCH_ID}`).getByText("apply_patch").click();
   await page.getByTestId("agent-tools-save").click();
@@ -265,6 +267,7 @@ test("assigning semantic_search saves (reconciles onto rag_search)", async ({ pa
     },
   });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   // semantic_search lives under the knowledge group — still a Básica builtin.
   await page

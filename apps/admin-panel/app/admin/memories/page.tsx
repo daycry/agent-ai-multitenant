@@ -1,125 +1,63 @@
 "use client";
 
 /**
- * task_04_06 — Memoria del Equipo.
+ * task_04_06 / task_ui_31 — Memoria del Equipo.
  *
  * Pantalla que el operador usa para inspeccionar lo que el Memorizer
- * (task_04_03) y el endpoint `POST /memories` (task_04_05) han escrito
- * en el store. Permite filtrar por scope/type, crear una memoria
- * manual y borrar (soft-delete) las existentes.
+ * (task_04_03) y el endpoint `POST /memories` (task_04_05) han escrito en el
+ * store. Pestañas por ámbito con contador, ficha de procedencia en cada
+ * memoria (quién, cuándo, dónde, recuperaciones), buscador semántico, alta
+ * manual y borrado (soft-delete).
  *
  * Permisos:
- *   - cualquier usuario del tenant lee (RLS),
+ *   - cualquier usuario del tenant lee (RLS); las privadas, sólo su dueño
+ *     (el backend las filtra: el contador de cada pestaña es el del listado),
  *   - cualquier usuario crea private / team_shared / project_shared,
  *   - sólo tenant_admin puede crear global (el backend devuelve 403).
  */
 
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Brain, GitMerge, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Brain, Search } from "lucide-react";
 
+import { CreateMemoryCard } from "@/components/memories/create-memory-card";
+import { MemoryList } from "@/components/memories/memory-list";
+import {
+  SCOPE_KEY,
+  type MemoryCounts,
+  type MemoryResponse,
+  type MemoryScope,
+  type MemorySearchHit,
+} from "@/components/memories/types";
 import { PageHeader } from "@/components/layout/page-header";
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
-import { ProjectCombobox } from "@/components/ui/project-combobox";
-import { TeamCombobox } from "@/components/ui/team-combobox";
-import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError, apiFetch } from "@/lib/api";
-import { useT, type Translator } from "@/lib/i18n";
-import { useLang } from "@/lib/lang-context";
-import { memoryDetectorState } from "@/lib/memory/honesty";
-import { renderPlanDraft } from "@/lib/plan-draft-md";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
-// --------------------------------------------------------------------------
-// Types
-// --------------------------------------------------------------------------
-type MemoryScope = "private" | "team_shared" | "project_shared" | "global";
-type MemoryType = "episodic" | "semantic";
+const SCOPE_OPTIONS: (MemoryScope | "all")[] = [
+  "all",
+  "private",
+  "team_shared",
+  "project_shared",
+  "global",
+];
 
-/** Las claves del namespace `memories`, para tipar los mapas de etiquetas. */
-type MemoriesKey = Parameters<Translator<"memories">>[0];
-
-interface MemoryResponse {
-  id: string;
-  tenant_id: string;
-  scope: MemoryScope;
-  type: MemoryType;
-  content: string;
-  tags: string[];
-  user_id: string | null;
-  team_id: string | null;
-  project_id: string | null;
-  source_execution_id: string | null;
-  agent_id: string | null;
-  has_embedding: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * Clave del diccionario por scope, no el texto ya resuelto.
- *
- * El mapa sigue existiendo (en vez de disolverse en un `t("scope" + x)`)
- * porque es lo que hace que TypeScript siga exigiendo una entrada por cada
- * valor del enum: con la concatenacion, anadir un scope en el backend
- * compilaria y pintaria la clave cruda en pantalla.
- */
-const SCOPE_KEY: Record<MemoryScope | "all", MemoriesKey> = {
-  all: "scopeAll",
-  private: "scopePrivate",
-  team_shared: "scopeTeam",
-  project_shared: "scopeProject",
-  global: "scopeGlobal",
-};
-
-// Colores por scope (de menos a más alcance):
-//   private → muted (uso individual)
-//   team_shared → info (azul, compartido con team)
-//   project_shared → primary (color de marca, contexto del proyecto)
-//   global → warning (naranja, "tocas esto y afecta a TODOS")
-const SCOPE_VARIANT: Record<MemoryScope, BadgeVariant> = {
-  private: "muted",
-  team_shared: "info",
-  project_shared: "primary",
-  global: "warning",
-};
-
-const TYPE_KEY: Record<MemoryType, MemoriesKey> = {
-  episodic: "typeEpisodic",
-  semantic: "typeSemantic",
-};
-
-// Episódica = hecho concreto del pasado · Semántica = conocimiento durable.
-const TYPE_VARIANT: Record<MemoryType, BadgeVariant> = {
-  episodic: "default",
-  semantic: "info",
-};
-
-// --------------------------------------------------------------------------
-// Page
-// --------------------------------------------------------------------------
 export default function MemoriesPage() {
   const t = useT("memories");
+  const tp = useT("memoriesProvenance");
   const tCommon = useT("common");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [scopeFilter, setScopeFilter] = useState<MemoryScope | "all">("all");
+  const [draft, setDraft] = useState("");
+  const [term, setTerm] = useState("");
+  const searching = term.length > 0;
+  const scopeParam = scopeFilter === "all" ? "" : `&scope=${scopeFilter}`;
 
-  const query = useQuery({
+  const listQuery = useQuery({
     queryKey: ["memories", scopeFilter],
     queryFn: () =>
       apiFetch<MemoryResponse[]>(
@@ -127,6 +65,31 @@ export default function MemoriesPage() {
       ),
     refetchOnWindowFocus: false,
   });
+
+  const countsQuery = useQuery({
+    queryKey: ["memories", "counts"],
+    queryFn: () => apiFetch<MemoryCounts>("/memories/counts"),
+    refetchOnWindowFocus: false,
+  });
+  // Un backend anterior (o un mock) puede no devolver el objeto: sin contador, no se inventa.
+  const counts =
+    countsQuery.data && !Array.isArray(countsQuery.data) && typeof countsQuery.data === "object"
+      ? countsQuery.data
+      : null;
+
+  const searchQuery = useQuery({
+    queryKey: ["memories", "search", term, scopeFilter],
+    queryFn: () =>
+      apiFetch<MemorySearchHit[]>(`/memories/search?q=${encodeURIComponent(term)}${scopeParam}`),
+    enabled: searching,
+    refetchOnWindowFocus: false,
+  });
+
+  const active = searching ? searchQuery : listQuery;
+  const memories: MemoryResponse[] = searching
+    ? (searchQuery.data ?? []).map((h) => h.memory)
+    : (listQuery.data ?? []);
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="memories-page">
@@ -137,512 +100,87 @@ export default function MemoriesPage() {
         data-testid="memories-header"
       />
 
-      <CreateMemoryCard
-        onCreated={() => queryClient.invalidateQueries({ queryKey: ["memories"] })}
-      />
+      <CreateMemoryCard onCreated={invalidate} />
 
       <Card className="mt-6">
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <CardTitle>
-            {t(SCOPE_KEY[scopeFilter])} ({query.data?.length ?? "…"})
-          </CardTitle>
-          <ScopeFilter value={scopeFilter} onChange={setScopeFilter} />
+        <CardHeader className="flex flex-col gap-3">
+          <div className="flex flex-row items-center justify-between gap-4">
+            <CardTitle>
+              {t(SCOPE_KEY[scopeFilter])} (
+              {searching ? memories.length : (counts?.[scopeFilter] ?? "…")})
+            </CardTitle>
+            <div
+              className="border-muted bg-muted/40 inline-flex rounded-md border p-0.5 text-xs"
+              data-testid="memories-scope-filter"
+              role="group"
+              aria-label={tp("tabsAria")}
+            >
+              {SCOPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => setScopeFilter(opt)}
+                  data-testid={`memories-scope-${opt}`}
+                  aria-pressed={scopeFilter === opt}
+                  className={
+                    "rounded px-2 py-1 transition-colors " +
+                    (scopeFilter === opt
+                      ? "bg-background shadow-sm font-semibold"
+                      : "text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  {t(SCOPE_KEY[opt])}
+                  {counts ? (
+                    <span className="ml-1 tabular-nums" data-testid={`memories-count-${opt}`}>
+                      {counts[opt]}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
+          <form
+            className="flex gap-2"
+            data-testid="memories-search-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setTerm(draft.trim());
+            }}
+          >
+            <Input
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                if (e.target.value.trim() === "") setTerm("");
+              }}
+              placeholder={tp("searchPlaceholder")}
+              aria-label={tp("searchLabel")}
+              data-testid="memories-search-input"
+            />
+            <Button type="submit" variant="outline" data-testid="memories-search-submit">
+              <Search className="mr-1 h-4 w-4" />
+              {tp("searchSubmit")}
+            </Button>
+          </form>
         </CardHeader>
         <CardContent>
-          {query.isLoading ? (
-            <p className="text-muted-foreground text-sm">{tCommon("loading")}</p>
-          ) : query.isError ? (
-            <p className="text-destructive text-sm" data-testid="memories-error">
-              {errorText(query.error)}
+          {active.isLoading ? (
+            <p className="text-muted-foreground text-sm">
+              {searching ? tp("searching") : tCommon("loading")}
             </p>
-          ) : (query.data ?? []).length === 0 ? (
+          ) : active.isError ? (
+            <p className="text-destructive text-sm" data-testid="memories-error">
+              {errorText(active.error)}
+            </p>
+          ) : memories.length === 0 ? (
             <p className="text-muted-foreground text-sm italic" data-testid="memories-empty">
-              {t("empty")}
+              {searching ? tp("searchEmpty") : t("empty")}
             </p>
           ) : (
-            <MemoryList
-              memories={query.data ?? []}
-              onDeleted={() => queryClient.invalidateQueries({ queryKey: ["memories"] })}
-            />
+            <MemoryList memories={memories} onDeleted={invalidate} />
           )}
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-// --------------------------------------------------------------------------
-// Scope filter (segmented control)
-// --------------------------------------------------------------------------
-function ScopeFilter({
-  value,
-  onChange,
-}: {
-  value: MemoryScope | "all";
-  onChange: (next: MemoryScope | "all") => void;
-}) {
-  const t = useT("memories");
-  const options: (MemoryScope | "all")[] = [
-    "all",
-    "private",
-    "team_shared",
-    "project_shared",
-    "global",
-  ];
-  return (
-    <div
-      className="border-muted bg-muted/40 inline-flex rounded-md border p-0.5 text-xs"
-      data-testid="memories-scope-filter"
-    >
-      {options.map((opt) => (
-        <button
-          key={opt}
-          type="button"
-          onClick={() => onChange(opt)}
-          data-testid={`memories-scope-${opt}`}
-          aria-pressed={value === opt}
-          className={
-            "rounded px-2 py-1 transition-colors " +
-            (value === opt
-              ? "bg-background shadow-sm font-semibold"
-              : "text-muted-foreground hover:text-foreground")
-          }
-        >
-          {t(SCOPE_KEY[opt])}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// --------------------------------------------------------------------------
-// List
-// --------------------------------------------------------------------------
-function MemoryList({
-  memories,
-  onDeleted,
-}: {
-  memories: MemoryResponse[];
-  onDeleted: () => void;
-}) {
-  return (
-    <ul className="space-y-2" data-testid="memories-list">
-      {memories.map((m) => (
-        <MemoryRow key={m.id} memory={m} onDeleted={onDeleted} />
-      ))}
-    </ul>
-  );
-}
-
-function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: () => void }) {
-  const t = useT("memories");
-  const [similarOpen, setSimilarOpen] = useState(false);
-
-  const deleteMutation = useMutation({
-    mutationFn: () => apiFetch<void>(`/memories/${memory.id}`, { method: "DELETE" }),
-    onSuccess: () => onDeleted(),
-  });
-
-  return (
-    <li
-      className="border-muted flex items-start justify-between gap-3 rounded border px-3 py-2 text-sm"
-      data-testid={`memory-${memory.id}`}
-      data-scope={memory.scope}
-      data-type={memory.type}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
-          <Badge variant={SCOPE_VARIANT[memory.scope] ?? "muted"}>
-            {t(SCOPE_KEY[memory.scope])}
-          </Badge>
-          <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>{t(TYPE_KEY[memory.type])}</Badge>
-          {memory.has_embedding ? (
-            <Badge variant="success">embedding</Badge>
-          ) : (
-            <SimilarUnavailableBadge memoryId={memory.id} />
-          )}
-          <SimilarCountBadge
-            memoryId={memory.id}
-            hasEmbedding={memory.has_embedding}
-            onClick={() => setSimilarOpen(true)}
-          />
-          {memory.tags.length > 0 ? (
-            <span className="text-muted-foreground ml-1 font-mono">{memory.tags.join(" · ")}</span>
-          ) : null}
-        </div>
-        <div className="mt-1 text-sm">{renderPlanDraft(memory.content)}</div>
-      </div>
-      <div className="flex gap-1">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => deleteMutation.mutate()}
-          disabled={deleteMutation.isPending}
-          data-testid={`memory-delete-${memory.id}`}
-          aria-label={t("delete")}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      {similarOpen && (
-        <SimilarMemoriesDialog
-          memory={memory}
-          onOpenChange={setSimilarOpen}
-          onChanged={onDeleted}
-        />
-      )}
-    </li>
-  );
-}
-
-// --------------------------------------------------------------------------
-// Similar count badge — pre-fetches /similar para cada memoria con
-// embedding y muestra "N similar/es" (amarillo, clickable) sólo si
-// N > 0. Si no hay candidatos sobre el umbral, no se renderiza nada.
-//
-// Coste: una query /similar por memoria con embedding. Para tenants
-// con muchas memorias conviene un endpoint batched
-// `/memories/similar-counts` (follow-up); para volúmenes normales el
-// caché de TanStack (staleTime 30s) lo hace barato.
-// --------------------------------------------------------------------------
-
-// --------------------------------------------------------------------------
-// Honestidad de estado (Plan 06.17 task_06_17_06): una memoria SIN embedding
-// no puede tener "similares" (cos-sim sobre un vector ausente) ni participar
-// del umbral. En vez de no mostrar nada (que parecía "0 similares, todo bien"),
-// se marca "No disponible aún" con el motivo en el tooltip accesible.
-// --------------------------------------------------------------------------
-function SimilarUnavailableBadge({ memoryId }: { memoryId: string }) {
-  const { lang } = useLang();
-  const state = memoryDetectorState(false, lang);
-  return (
-    <Tooltip content={state.note}>
-      <TooltipTrigger>
-        <Badge variant="muted" data-testid={`memory-similar-unavailable-${memoryId}`}>
-          {state.label}
-        </Badge>
-      </TooltipTrigger>
-    </Tooltip>
-  );
-}
-
-function SimilarCountBadge({
-  memoryId,
-  hasEmbedding,
-  onClick,
-}: {
-  memoryId: string;
-  hasEmbedding: boolean;
-  onClick: () => void;
-}) {
-  const t = useT("memories");
-  const query = useQuery<SimilarItem[], ApiError>({
-    queryKey: ["memory-similar", memoryId],
-    queryFn: () => apiFetch<SimilarItem[]>(`/memories/${memoryId}/similar`),
-    enabled: hasEmbedding,
-    refetchOnWindowFocus: false,
-    staleTime: 30_000,
-    retry: false,
-  });
-  const count = query.data?.length ?? 0;
-  if (!hasEmbedding || count === 0) return null;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={`memory-similar-badge-${memoryId}`}
-      className="bg-warning-soft text-warning-soft-foreground hover:bg-warning-soft/80 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors"
-      aria-label={t("similarAria", { count })}
-    >
-      {count === 1 ? t("similarBadgeOne") : t("similarBadgeMany", { count })}
-    </button>
-  );
-}
-
-// --------------------------------------------------------------------------
-// Similar memories dialog (Plan 06.7 task_06_7_08)
-// --------------------------------------------------------------------------
-
-interface SimilarItem {
-  memory: MemoryResponse;
-  similarity: number;
-}
-
-function SimilarMemoriesDialog({
-  memory,
-  onOpenChange,
-  onChanged,
-}: {
-  memory: MemoryResponse;
-  onOpenChange: (v: boolean) => void;
-  onChanged: () => void;
-}) {
-  const t = useT("memories");
-  const tCommon = useT("common");
-  const errorText = useErrorText();
-  const queryClient = useQueryClient();
-  const similarQuery = useQuery<SimilarItem[], ApiError>({
-    queryKey: ["memory-similar", memory.id],
-    queryFn: () => apiFetch<SimilarItem[]>(`/memories/${memory.id}/similar`),
-    refetchOnWindowFocus: false,
-  });
-
-  const refetchAll = () => {
-    void queryClient.invalidateQueries({ queryKey: ["memory-similar", memory.id] });
-    void queryClient.invalidateQueries({ queryKey: ["memories"] });
-    onChanged();
-  };
-
-  const mergeMutation = useMutation<MemoryResponse, ApiError, string>({
-    mutationFn: (sourceId: string) =>
-      apiFetch<MemoryResponse>(`/memories/${sourceId}/merge-into`, {
-        method: "POST",
-        body: { target_id: memory.id },
-      }),
-    onSuccess: () => refetchAll(),
-  });
-
-  const discardMutation = useMutation<void, ApiError, string>({
-    mutationFn: (candidateId: string) =>
-      apiFetch<void>(`/memories/${candidateId}`, { method: "DELETE" }),
-    onSuccess: () => refetchAll(),
-  });
-
-  return (
-    <Dialog open={true} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{t("similarTitle")}</DialogTitle>
-          <DialogDescription>{t("similarDescription")}</DialogDescription>
-        </DialogHeader>
-        <DialogBody className="space-y-3">
-          <Card className="bg-muted/40 p-3">
-            <p className="text-muted-foreground mb-1 text-[10px] uppercase tracking-wide">
-              {t("similarTarget")}
-            </p>
-            <div className="text-sm">{renderPlanDraft(memory.content)}</div>
-          </Card>
-
-          {similarQuery.isLoading && (
-            <p className="text-muted-foreground text-sm" data-testid="similar-loading">
-              {t("similarLoading")}
-            </p>
-          )}
-
-          {similarQuery.isError && (
-            <p
-              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
-              data-testid="similar-error"
-            >
-              {errorText(similarQuery.error)}
-            </p>
-          )}
-
-          {similarQuery.data && similarQuery.data.length === 0 && (
-            <p className="text-muted-foreground text-sm" data-testid="similar-empty">
-              {t("similarEmpty")}
-            </p>
-          )}
-
-          {similarQuery.data && similarQuery.data.length > 0 && (
-            <ul className="space-y-2" data-testid="similar-list">
-              {similarQuery.data.map((item) => (
-                <li
-                  key={item.memory.id}
-                  className="border-muted rounded border p-3"
-                  data-testid={`similar-item-${item.memory.id}`}
-                >
-                  <div className="mb-1 flex items-center justify-between">
-                    <Badge variant="info" data-testid={`similar-pct-${item.memory.id}`}>
-                      {t("similarPercent", { pct: (item.similarity * 100).toFixed(1) })}
-                    </Badge>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={mergeMutation.isPending}
-                        onClick={() => mergeMutation.mutate(item.memory.id)}
-                        data-testid={`similar-merge-${item.memory.id}`}
-                      >
-                        <GitMerge className="mr-1 h-3.5 w-3.5" />
-                        {t("merge")}
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        disabled={discardMutation.isPending}
-                        onClick={() => discardMutation.mutate(item.memory.id)}
-                        data-testid={`similar-discard-${item.memory.id}`}
-                      >
-                        <Trash2 className="mr-1 h-3.5 w-3.5" />
-                        {t("discard")}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="text-sm">{renderPlanDraft(item.memory.content)}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {tCommon("close")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// --------------------------------------------------------------------------
-// Create form
-// --------------------------------------------------------------------------
-function CreateMemoryCard({ onCreated }: { onCreated: () => void }) {
-  const t = useT("memories");
-  const errorText = useErrorText();
-  const [content, setContent] = useState("");
-  const [scope, setScope] = useState<MemoryScope>("team_shared");
-  const [type, setType] = useState<MemoryType>("semantic");
-  const [teamId, setTeamId] = useState("");
-  const [projectId, setProjectId] = useState("");
-  const [tagsRaw, setTagsRaw] = useState("");
-
-  const parsedTags = useMemo(
-    () =>
-      tagsRaw
-        .split(",")
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0),
-    [tagsRaw],
-  );
-
-  const mutation = useMutation({
-    mutationFn: () => {
-      const body: Record<string, unknown> = {
-        content,
-        scope,
-        type,
-        tags: parsedTags,
-      };
-      if (scope === "team_shared") body.team_id = teamId;
-      if (scope === "project_shared") body.project_id = projectId;
-      return apiFetch<MemoryResponse>("/memories", { method: "POST", body });
-    },
-    onSuccess: () => {
-      setContent("");
-      setTagsRaw("");
-      onCreated();
-    },
-  });
-
-  const canSubmit =
-    content.trim().length > 0 &&
-    !mutation.isPending &&
-    (scope !== "team_shared" || teamId.trim().length > 0) &&
-    (scope !== "project_shared" || projectId.trim().length > 0);
-
-  return (
-    <Card className="mt-6">
-      <CardHeader>
-        <CardTitle>{t("createTitle")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="space-y-3"
-          data-testid="memory-create-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (canSubmit) mutation.mutate();
-          }}
-        >
-          <div className="flex flex-col gap-1.5">
-            <Label>{t("fieldContent")}</Label>
-            <MarkdownTextarea
-              value={content}
-              onChange={setContent}
-              rows={5}
-              data-testid="memory-content-input"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="memory-scope-select">{t("fieldScope")}</Label>
-              <select
-                id="memory-scope-select"
-                value={scope}
-                onChange={(e) => setScope(e.target.value as MemoryScope)}
-                data-testid="memory-scope-select"
-                className="bg-background border-muted w-full rounded border px-2 py-1 text-sm"
-              >
-                <option value="private">{t("scopePrivate")}</option>
-                <option value="team_shared">{t("scopeTeam")}</option>
-                <option value="project_shared">{t("scopeProject")}</option>
-                <option value="global">{t("scopeGlobal")}</option>
-              </select>
-            </div>
-            <div>
-              <Label htmlFor="memory-type-select">{t("fieldType")}</Label>
-              <select
-                id="memory-type-select"
-                value={type}
-                onChange={(e) => setType(e.target.value as MemoryType)}
-                data-testid="memory-type-select"
-                className="bg-background border-muted w-full rounded border px-2 py-1 text-sm"
-              >
-                <option value="semantic">{t("typeSemantic")}</option>
-                <option value="episodic">{t("typeEpisodic")}</option>
-              </select>
-            </div>
-          </div>
-
-          {scope === "team_shared" ? (
-            <div className="flex flex-col gap-1.5">
-              <Label>{t("fieldTeam")}</Label>
-              <TeamCombobox
-                value={teamId || null}
-                onChange={(id) => setTeamId(id ?? "")}
-                data-testid="memory-team-id-input"
-              />
-            </div>
-          ) : null}
-
-          {scope === "project_shared" ? (
-            <div className="flex flex-col gap-1.5">
-              <Label>{t("fieldProject")}</Label>
-              <ProjectCombobox
-                value={projectId || null}
-                onChange={(id) => setProjectId(id ?? "")}
-                data-testid="memory-project-id-input"
-              />
-            </div>
-          ) : null}
-
-          <div>
-            <Label htmlFor="memory-tags-input">{t("fieldTags")}</Label>
-            <Input
-              id="memory-tags-input"
-              data-testid="memory-tags-input"
-              value={tagsRaw}
-              onChange={(e) => setTagsRaw(e.target.value)}
-              placeholder={t("tagsPlaceholder")}
-            />
-          </div>
-
-          {mutation.isError ? (
-            <p className="text-destructive text-xs" data-testid="memory-create-error">
-              {errorText(mutation.error)}
-            </p>
-          ) : null}
-
-          <div className="flex justify-end">
-            <Button type="submit" disabled={!canSubmit} data-testid="memory-create-submit">
-              {t("submit")}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
   );
 }

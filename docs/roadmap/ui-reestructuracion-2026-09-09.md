@@ -291,7 +291,7 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_11` — Tablero dentro del proyecto y portfolio del tenant
 
-- [ ] **Título**: `/admin/projects/{id}/board` con el doble Kanban (planes → tareas) acotado al proyecto;
+- [x] **Título**: `/admin/projects/{id}/board` con el doble Kanban (planes → tareas) acotado al proyecto;
       `/admin/board` pasa a ser el **portfolio**: lista de planes de todos los proyectos con la columna
       Proyecto siempre visible, filtros por estado, proyecto y responsable, y enlace al tablero del proyecto.
       **Test**: vitest del tablero de proyecto y del portfolio; los e2e del tablero global se rehacen como

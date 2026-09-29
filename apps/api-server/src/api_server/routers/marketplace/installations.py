@@ -21,9 +21,11 @@ from api_server.auth.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from api_server.db.domain.projects import Project
 from api_server.db.marketplace import (
     InstallationStatus,
     MarketplaceAuditAction,
+    MarketplaceDeployment,
     MarketplaceInstallation,
     MarketplaceListing,
 )
@@ -45,6 +47,7 @@ from api_server.routers.marketplace.common import (
 )
 from api_server.schemas.marketplace import (
     InstallationCreateRequest,
+    InstallationDeploymentRef,
     MarketplaceInstallationResponse,
     to_installation_response,
 )
@@ -399,7 +402,7 @@ async def list_installed(
     ),
     limit: int = limit_query(),
     offset: int = offset_query(),
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MarketplaceInstallationResponse]:
     """List the caller tenant's installations.
@@ -426,4 +429,48 @@ async def list_installed(
     )
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
-    return [to_installation_response(inst, listing=listing) for inst, listing in result.all()]
+    rows = result.all()
+    deployments = await _deployments_by_installation(
+        session, [inst.id for inst, _ in rows], tenant_id=principal.tenant_id
+    )
+    return [
+        to_installation_response(inst, listing=listing, deployments=deployments.get(inst.id))
+        for inst, listing in rows
+    ]
+
+
+async def _deployments_by_installation(
+    session: AsyncSession, installation_ids: list[UUID], *, tenant_id: UUID | None
+) -> dict[UUID, list[InstallationDeploymentRef]]:
+    """`{installation_id: [proyecto, ...]}` en UNA consulta (`task_ui_32`, sin N+1).
+
+    Sólo despliegues vivos (`active`/`disabled`): uno retirado es historial y lo
+    enseña la ficha de la instalación. `tenant_id` va explícito además de RLS.
+    """
+    if not installation_ids or tenant_id is None:
+        return {}
+    found = await session.execute(
+        select(
+            MarketplaceDeployment.installation_id,
+            MarketplaceDeployment.project_id,
+            Project.name,
+            MarketplaceDeployment.status,
+        )
+        .join(Project, Project.id == MarketplaceDeployment.project_id)
+        .where(
+            MarketplaceDeployment.tenant_id == tenant_id,
+            Project.tenant_id == tenant_id,
+            Project.deleted_at.is_(None),
+            MarketplaceDeployment.installation_id.in_(installation_ids),
+            MarketplaceDeployment.status.in_(("active", "disabled")),
+        )
+        .order_by(Project.name, MarketplaceDeployment.project_id)
+    )
+    grouped: dict[UUID, list[InstallationDeploymentRef]] = {}
+    for installation_id, project_id, project_name, dep_status in found.all():
+        grouped.setdefault(installation_id, []).append(
+            InstallationDeploymentRef(
+                project_id=project_id, project_name=project_name, status=dep_status
+            )
+        )
+    return grouped

@@ -6,12 +6,17 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Users } from "lucide-react";
 
-import { PageHeader } from "@/components/layout/page-header";
+import {
+  ResourceCard,
+  ResourceDetailPanel,
+  ResourceHeader,
+  ResourceLayout,
+  ResourceToolbar,
+} from "@/components/resource";
 import { StateBlock } from "@/components/shared/state-block";
 import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -48,7 +53,10 @@ export default function TeamsListPage() {
   const t = useT("teams");
   const router = useRouter();
   const queryClient = useQueryClient();
+  const tr = useT("resource");
   const [adopting, setAdopting] = useState<Team | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["teams", "list"],
@@ -77,42 +85,66 @@ export default function TeamsListPage() {
     return hasProjectLocal ? "project_local" : "tenant_template";
   };
 
-  const teams = data ?? [];
+  const allTeams = data ?? [];
+  const q = search.trim().toLowerCase();
+  const teams = q
+    ? allTeams.filter((x) => `${x.name} ${x.description ?? ""}`.toLowerCase().includes(q))
+    : allTeams;
   const builtins = teams.filter((t) => teamScope(t) === "built_in");
   const tenantTemplates = teams.filter((t) => teamScope(t) === "tenant_template");
   const projectLocal = teams.filter((t) => teamScope(t) === "project_local");
+  const selected = allTeams.find((x) => x.id === selectedId) ?? null;
+
+  const scopeLabel = (team: Team) => {
+    const s = teamScope(team);
+    return s === "built_in"
+      ? t("tabBuiltin")
+      : s === "tenant_template"
+        ? t("tabTemplate")
+        : t("tabLocal");
+  };
+  const membersText = (n: number) =>
+    tr(n === 1 ? "usageMembersOne" : "usageMembersMany", { count: n });
 
   function TeamGrid({ items, emptyText }: { items: Team[]; emptyText: string }) {
     if (items.length === 0) {
-      return <p className="text-muted-foreground py-6 text-sm">{emptyText}</p>;
+      return (
+        <p className="text-muted-foreground py-6 text-sm">{q ? tr("noMatches") : emptyText}</p>
+      );
     }
     return (
       <div
-        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
         data-testid="teams-grid"
       >
         {items.map((team) => (
-          <Card key={team.id} data-testid={`team-${team.id}`}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-base">{team.name}</CardTitle>
-              {team.is_builtin ? (
+          <ResourceCard
+            key={team.id}
+            testId={`team-${team.id}`}
+            name={team.name}
+            selected={selectedId === team.id}
+            onSelect={() => setSelectedId(team.id)}
+            badge={
+              team.is_builtin ? (
                 <Badge variant="muted" data-testid="team-builtin-badge">
                   {t("builtinBadge")}
                 </Badge>
               ) : team.forked_from_team_id ? (
                 <Badge variant="info">{t("adoptedBadge")}</Badge>
-              ) : null}
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              {team.description && (
-                <p className="text-muted-foreground text-sm">{team.description}</p>
-              )}
-              <p className="text-muted-foreground text-xs">
-                {team.members.length === 1
-                  ? t("memberOne", { n: team.members.length })
-                  : t("memberMany", { n: team.members.length })}
-              </p>
-              <div className="flex flex-wrap gap-2">
+              ) : undefined
+            }
+            provenance={
+              team.is_builtin
+                ? tr("provBuiltin")
+                : team.forked_from_team_id
+                  ? tr("provForked")
+                  : tr("provOwn")
+            }
+            scope={scopeLabel(team)}
+            usage={membersText(team.members.length)}
+            description={team.description ?? undefined}
+            actions={
+              <>
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/admin/teams/${team.id}`}>
                     {t("viewDetail")} <ArrowRight className="ml-1 h-3.5 w-3.5" />
@@ -127,9 +159,9 @@ export default function TeamsListPage() {
                     <Plus className="mr-1 h-3.5 w-3.5" /> {t("adopt")}
                   </Button>
                 )}
-              </div>
-            </CardContent>
-          </Card>
+              </>
+            }
+          />
         ))}
       </div>
     );
@@ -137,10 +169,14 @@ export default function TeamsListPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <PageHeader
+      <ResourceHeader
         icon={<Users className="h-6 w-6 sm:h-7 sm:w-7" />}
         title={t("title")}
         description={t("description")}
+        count={data ? allTeams.length : undefined}
+        countLabel={tr(allTeams.length === 1 ? "countTeamsOne" : "countTeamsMany", {
+          count: allTeams.length,
+        })}
       />
 
       <StateBlock
@@ -153,29 +189,67 @@ export default function TeamsListPage() {
         errorTestId="teams-error"
       >
         {data && (
-          <Tabs defaultValue="builtin" data-testid="teams-tabs">
-            <TabsList>
-              <TabsTrigger value="builtin" data-testid="tab-builtin">
-                {t("tabBuiltin")} ({builtins.length})
-              </TabsTrigger>
-              <TabsTrigger value="template" data-testid="tab-template">
-                {t("tabTemplate")} ({tenantTemplates.length})
-              </TabsTrigger>
-              <TabsTrigger value="local" data-testid="tab-local">
-                {t("tabLocal")} ({projectLocal.length})
-              </TabsTrigger>
-            </TabsList>
+          <>
+            <ResourceToolbar
+              search={search}
+              onSearchChange={setSearch}
+              searchPlaceholder={tr("searchTeams")}
+              searchTestId="teams-search"
+            />
+            <ResourceLayout
+              panel={
+                selected ? (
+                  <ResourceDetailPanel
+                    title={selected.name}
+                    detailHref={`/admin/teams/${selected.id}`}
+                    onClose={() => setSelectedId(null)}
+                    fields={[
+                      { key: "scope", label: tr("fieldScope"), value: scopeLabel(selected) },
+                      {
+                        key: "members",
+                        label: tr("fieldUsage"),
+                        value: membersText(selected.members.length),
+                      },
+                      ...(selected.description
+                        ? [
+                            {
+                              key: "description",
+                              label: tr("fieldDescription"),
+                              value: selected.description,
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                ) : undefined
+              }
+              list={
+                <Tabs defaultValue="builtin" data-testid="teams-tabs">
+                  <TabsList>
+                    <TabsTrigger value="builtin" data-testid="tab-builtin">
+                      {t("tabBuiltin")} ({builtins.length})
+                    </TabsTrigger>
+                    <TabsTrigger value="template" data-testid="tab-template">
+                      {t("tabTemplate")} ({tenantTemplates.length})
+                    </TabsTrigger>
+                    <TabsTrigger value="local" data-testid="tab-local">
+                      {t("tabLocal")} ({projectLocal.length})
+                    </TabsTrigger>
+                  </TabsList>
 
-            <TabsContent value="builtin">
-              <TeamGrid items={builtins} emptyText={t("emptyBuiltin")} />
-            </TabsContent>
-            <TabsContent value="template">
-              <TeamGrid items={tenantTemplates} emptyText={t("emptyTemplate")} />
-            </TabsContent>
-            <TabsContent value="local">
-              <TeamGrid items={projectLocal} emptyText={t("emptyLocal")} />
-            </TabsContent>
-          </Tabs>
+                  <TabsContent value="builtin">
+                    <TeamGrid items={builtins} emptyText={t("emptyBuiltin")} />
+                  </TabsContent>
+                  <TabsContent value="template">
+                    <TeamGrid items={tenantTemplates} emptyText={t("emptyTemplate")} />
+                  </TabsContent>
+                  <TabsContent value="local">
+                    <TeamGrid items={projectLocal} emptyText={t("emptyLocal")} />
+                  </TabsContent>
+                </Tabs>
+              }
+            />
+          </>
         )}
       </StateBlock>
 

@@ -139,6 +139,7 @@ async function setup(
 test("agrupa por categoría y pre-marca las skills asignadas", async ({ page }) => {
   const id = await setup(page, { assigned: [FASTAPI_ID] });
   await page.goto(`/admin/agents/${id}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
 
   await expect(page.getByTestId("agent-skills-section")).toBeVisible();
   await expect(page.getByTestId("agent-skills-group-backend")).toContainText("Backend");
@@ -160,6 +161,7 @@ test("marcar una skill y Guardar envía el conjunto declarativo completo", async
     },
   });
   await page.goto(`/admin/agents/${id}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
   await expect(page.getByTestId("agent-skills-list")).toBeVisible();
 
   await page.getByTestId(`agent-skill-checkbox-${JIRA_ID}`).click();
@@ -175,6 +177,7 @@ test("marcar una skill y Guardar envía el conjunto declarativo completo", async
 test("el buscador filtra el catálogo por nombre", async ({ page }) => {
   const id = await setup(page);
   await page.goto(`/admin/agents/${id}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
   await expect(page.getByTestId("agent-skills-list")).toBeVisible();
 
   await page.getByTestId("agent-skills-search").fill("pytest");
@@ -185,6 +188,7 @@ test("el buscador filtra el catálogo por nombre", async ({ page }) => {
 test("un agente global_builtin ve las skills en sólo lectura", async ({ page }) => {
   const id = await setup(page, { scope: "global_builtin", assigned: [PYTEST_ID] });
   await page.goto(`/admin/agents/${id}`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("agent-tab-skills").click();
   await expect(page.getByTestId("agent-skills-list")).toBeVisible();
 
   await expect(page.getByTestId("agent-skills-save")).toHaveCount(0);

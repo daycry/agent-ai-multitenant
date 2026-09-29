@@ -6,7 +6,8 @@ import { seedSession } from "./helpers/session";
  * E2E (subset mockeado, sin backend) de la cola de revisión del marketplace
  * (ADR 0142 D6) y de cómo se LLEGA a ella (`task_mk_13`, UI-05):
  *
- *   - la cabecera del marketplace enlaza la cola para el System Admin;
+ *   - la pestaña Publicar del marketplace enlaza la cola para el System Admin
+ *     (`task_ui_32`; antes estaba en la cabecera);
  *   - la cola lista lo `pending_review` y «Aprobar» hace el POST correcto;
  *   - tras aprobar, la cola se refresca y queda vacía;
  *   - el sidebar (grupo Plataforma) tiene su entrada.
@@ -63,12 +64,16 @@ async function setup(page: Page): Promise<{ approved: string[]; queue: unknown[]
   return state;
 }
 
-test("desde la cabecera del marketplace se llega a la cola y se aprueba un listing", async ({
-  page,
-}) => {
+test("desde la pestaña Publicar se llega a la cola y se aprueba un listing", async ({ page }) => {
   const state = await setup(page);
   await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
 
+  // `task_ui_32`: la cola cuelga de «Publicar», junto al alta de listings.
+  await page.getByTestId("marketplace-tab-publish").click();
+  await expect(page.getByTestId("marketplace-publish-tab-cta")).toHaveAttribute(
+    "href",
+    "/admin/marketplace/private",
+  );
   await page.getByTestId("marketplace-review-link").click();
   await expect(page).toHaveURL(/\/admin\/marketplace\/review$/);
 
@@ -91,4 +96,18 @@ test("el sidebar de Plataforma tiene la entrada de la cola de revisión", async 
   }
   await expect(link).toBeVisible();
   await expect(link).toHaveAttribute("href", "/admin/marketplace/review");
+});
+
+test("un tenant admin ve Publicar pero no la cola de revisión, que no es suya", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.route(apiRoute("/me"), (route) =>
+    json(route, { ...SYSTEM_ADMIN, is_system_admin: false }),
+  );
+  await page.goto("/admin/marketplace", { waitUntil: "domcontentloaded" });
+
+  await page.getByTestId("marketplace-tab-publish").click();
+  await expect(page.getByTestId("marketplace-publish-tab-cta")).toBeVisible();
+  await expect(page.getByTestId("marketplace-review-link")).toHaveCount(0);
 });

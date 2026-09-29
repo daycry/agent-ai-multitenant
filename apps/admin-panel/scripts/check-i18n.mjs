@@ -463,7 +463,7 @@ const ATTR_ALLOWLIST = {
   "app/admin/documents/page.tsx": 2,
   "app/admin/eval-quality/page.tsx": 4,
   "app/admin/executions/[id]/page.tsx": 5,
-  "app/admin/human-agents/page.tsx": 3,
+  "app/admin/human-agents/page.tsx": 2,
   "app/admin/inbox/history-tab.tsx": 3,
   "app/admin/inbox/submit-dialog.tsx": 3,
   "app/admin/office/page.tsx": 6,

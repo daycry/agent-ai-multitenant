@@ -3706,6 +3706,42 @@ export const dictionary = {
     submit: { es: "Guardar memoria", en: "Save memory" },
   },
   /**
+   * Memorias por ámbito con procedencia (`task_ui_31`): pestañas con contador,
+   * ficha de quién/cuándo/dónde/recuperaciones y buscador semántico. Lo que el
+   * dominio no guardó se enseña «desconocido»; no se rellena a ojo.
+   */
+  memoriesProvenance: {
+    tabsAria: { es: "Ámbito de la memoria", en: "Memory scope" },
+    searchLabel: { es: "Buscar en las memorias", en: "Search memories" },
+    searchPlaceholder: {
+      es: "Buscar por significado, p. ej. «cómo se cachean las dependencias»…",
+      en: "Search by meaning, e.g. “how dependencies are cached”…",
+    },
+    searching: { es: "Buscando…", en: "Searching…" },
+    searchEmpty: {
+      es: "Ninguna memoria visible casa con la búsqueda.",
+      en: "No visible memory matches the search.",
+    },
+    searchSubmit: { es: "Buscar", en: "Search" },
+    searchClear: { es: "Limpiar búsqueda", en: "Clear search" },
+    searchScore: { es: "relevancia {score}", en: "relevance {score}" },
+    who: { es: "Quién", en: "Who" },
+    when: { es: "Cuándo", en: "When" },
+    where: { es: "Dónde", en: "Where" },
+    recalled: { es: "Recuperada", en: "Recalled" },
+    execution: { es: "Ejecución", en: "Execution" },
+    recallTimes: { es: "{count} veces", en: "{count} times" },
+    unknown: { es: "desconocido", en: "unknown" },
+    byAgent: { es: "agente", en: "agent" },
+    byHuman: { es: "persona (sesión de trabajo)", en: "person (work session)" },
+    byUser: { es: "persona", en: "person" },
+    whereGlobal: { es: "Toda la organización", en: "Whole organization" },
+    wherePrivate: { es: "Sólo su dueño", en: "Owner only" },
+    project: { es: "Proyecto", en: "Project" },
+    team: { es: "Equipo", en: "Team" },
+    agent: { es: "Agente", en: "Agent" },
+  },
+  /**
    * SSO empresarial OIDC (`settings/sso/`): la pantalla, la tarjeta de la URL
    * base pública, la ficha de la config y el diálogo de alta/edición.
    *
@@ -5267,6 +5303,14 @@ export const dictionary = {
     tabCatalog: { es: "Catálogo", en: "Catalog" },
     tabInstalled: { es: "Instaladas", en: "Installed" },
     tabShares: { es: "Compartir", en: "Sharing" },
+    // `task_ui_32`: «Compartir» pasa a vivir dentro de «Publicar».
+    tabPublish: { es: "Publicar", en: "Publish" },
+    publishTabIntro: {
+      es: "Publica un listing propio (entra en la cola de revisión antes de llegar al catálogo) o compártelo con otro tenant.",
+      en: "Publish a listing of your own (it goes through the review queue before reaching the catalog) or share it with another tenant.",
+    },
+    publishTabPrivateCta: { es: "Publicar un listing", en: "Publish a listing" },
+    publishTabReviewCta: { es: "Ir a la cola de revisión", en: "Go to the review queue" },
     catalogEmpty: {
       es: "El catálogo está vacío. Publica tu primera skill o tool interna para empezar.",
       en: "The catalog is empty. Publish your first internal skill or tool to get started.",
@@ -7659,6 +7703,102 @@ export const dictionary = {
       en: "Host {host} not opened in egress",
     },
     configure: { es: "Configurar", en: "Configure" },
+  },
+  resource: {
+    fieldProvenance: { es: "Procedencia", en: "Provenance" },
+    fieldScope: { es: "Ámbito", en: "Scope" },
+    fieldUsage: { es: "Uso", en: "Usage" },
+    fieldLastActivity: { es: "Última actividad", en: "Last activity" },
+    provBuiltin: { es: "Plataforma", en: "Platform" },
+    provForked: { es: "Copia de una plantilla", en: "Copy of a template" },
+    provOwn: { es: "Propio del tenant", en: "Tenant-owned" },
+    panelLabel: { es: "Resumen del recurso", en: "Resource summary" },
+    close: { es: "Cerrar resumen", en: "Close summary" },
+    openFile: { es: "Abrir ficha completa", en: "Open full record" },
+    openFileShort: { es: "Abrir ficha", en: "Open record" },
+    selectAria: { es: "Ver resumen de {name}", en: "Show summary of {name}" },
+    usageTeamsOne: { es: "{count} equipo", en: "{count} team" },
+    usageTeamsMany: { es: "{count} equipos", en: "{count} teams" },
+    usageMembersOne: { es: "{count} miembro", en: "{count} member" },
+    usageMembersMany: { es: "{count} miembros", en: "{count} members" },
+    noTeam: { es: "Sin equipo", en: "No team" },
+    countAgentsOne: { es: "{count} agente", en: "{count} agent" },
+    countAgentsMany: { es: "{count} agentes", en: "{count} agents" },
+    countTeamsOne: { es: "{count} equipo", en: "{count} team" },
+    countTeamsMany: { es: "{count} equipos", en: "{count} teams" },
+    countHumansOne: { es: "{count} agente humano", en: "{count} human agent" },
+    countHumansMany: { es: "{count} agentes humanos", en: "{count} human agents" },
+    countToolsOne: { es: "{count} tool", en: "{count} tool" },
+    countToolsMany: { es: "{count} tools", en: "{count} tools" },
+    searchAgents: { es: "Buscar agente por nombre o rol", en: "Search agent by name or role" },
+    searchTeams: { es: "Buscar equipo por nombre", en: "Search team by name" },
+    searchHumans: {
+      es: "Buscar agente humano por nombre o rol",
+      en: "Search human agent by name or role",
+    },
+    noMatches: {
+      es: "Ningún resultado coincide con la búsqueda.",
+      en: "No result matches the search.",
+    },
+    fieldRole: { es: "Rol", en: "Role" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    fieldTeams: { es: "Equipos", en: "Teams" },
+    fieldAssignedTo: { es: "Asignado a", en: "Assigned to" },
+    unassigned: { es: "Sin asignar", en: "Unassigned" },
+    humanScope: { es: "Agente humano", en: "Human agent" },
+    globalTemplate: { es: "Plantilla global", en: "Global template" },
+    tenantCustom: { es: "Personalizada del tenant", en: "Tenant custom" },
+  },
+  // `task_ui_32` — la ficha del agente por pestañas.
+  agentTabs: {
+    identity: { es: "Identidad y modelo", en: "Identity and model" },
+    skills: { es: "Skills y tools", en: "Skills and tools" },
+    knowledge: { es: "Conocimiento", en: "Knowledge" },
+    memories: { es: "Memorias", en: "Memories" },
+    activity: { es: "Actividad", en: "Activity" },
+    tabsLabel: { es: "Secciones del agente", en: "Agent sections" },
+    memoriesIntro: {
+      es: "Ámbito de memoria: {scope}. Aquí se ven las últimas memorias que este agente escribió.",
+      en: "Memory scope: {scope}. The latest memories this agent wrote show up here.",
+    },
+    memoriesEmpty: {
+      es: "Este agente aún no ha escrito memorias.",
+      en: "This agent has not written any memories yet.",
+    },
+    memoriesLoadFailed: {
+      es: "No se pudieron cargar las memorias.",
+      en: "Could not load the memories.",
+    },
+    memoriesLink: { es: "Ver todas las memorias", en: "See all memories" },
+    memoryUnknownProject: { es: "sin proyecto", en: "no project" },
+    activityIntro: {
+      es: "Los últimos runs en los que ha trabajado este agente.",
+      en: "The latest runs this agent worked on.",
+    },
+    activityEmpty: {
+      es: "Este agente aún no ha ejecutado ningún run.",
+      en: "This agent has not run anything yet.",
+    },
+    activityLoadFailed: {
+      es: "No se pudo cargar la actividad.",
+      en: "Could not load the activity.",
+    },
+    runFallback: { es: "(tarea sin título)", en: "(untitled task)" },
+  },
+
+  // `task_ui_32` — «Instaladas» del marketplace: capacidad y dónde está desplegado.
+  marketplaceInstalled: {
+    capabilityCatalogRow: { es: "Crea su fila al habilitarse", en: "Creates its row when enabled" },
+    capabilityOnDeploy: { es: "Se crea al desplegar", en: "Created on deploy" },
+    deployedIn: { es: "Desplegada en", en: "Deployed in" },
+    notDeployed: {
+      es: "Aún no está desplegada en ningún proyecto.",
+      en: "Not deployed in any project yet.",
+    },
+    deploymentDisabled: { es: "deshabilitada", en: "disabled" },
+    deployPick: { es: "Elige un proyecto…", en: "Pick a project…" },
+    deployAction: { es: "Desplegar en un proyecto", en: "Deploy in a project" },
+    deployProjectLabel: { es: "Proyecto donde desplegar", en: "Project to deploy in" },
   },
 } as const satisfies Dictionary;
 
