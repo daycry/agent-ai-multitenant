@@ -898,7 +898,9 @@ def _unusable_calls(resp: CompletionResponse, calls: list[Any]) -> frozenset[int
     cortó, y si la cortó antes de empezar los argumentos llega como ``""``, que no
     parece corrupto pero tampoco es lo que el modelo quería mandar."""
     unusable = set(corrupt_tool_call_indexes(getattr(resp, "raw", None)))
-    if calls and _completion_signals(resp).truncated:
+    # Las rescatadas del texto (`text_call_*`) salieron de un bloque completo: la última
+    # de un turno truncado sólo es sospechosa si el tope pudo cortar sus argumentos.
+    if calls and _completion_signals(resp).truncated and not calls[-1].id.startswith("text_call_"):
         unusable.add(len(calls) - 1)
     return frozenset(unusable)
 
@@ -1647,7 +1649,11 @@ class _ProviderModelClient:
             noop = ToolCall(id="text_noop", name="noop", arguments={"reason": reason})
             return replace(resp, tool_calls=[noop], content="")
         cleaned = strip_think(resp.content)
-        return resp if cleaned == resp.content else replace(resp, content=cleaned)
+        if not cleaned or cleaned == resp.content:
+            # Un `<think>` inicial sin cerrar deja el contenido vacío: no se convierte en
+            # un FINISH vacío; el resto del flujo (guarda de truncado) decide con el original.
+            return resp
+        return replace(resp, content=cleaned)
 
     def assess_progress(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """ADR 0112 fase 2: mini-turno DEDICADO de reflexion (solo HTTP).

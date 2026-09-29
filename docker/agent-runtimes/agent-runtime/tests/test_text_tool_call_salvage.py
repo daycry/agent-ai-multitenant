@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from agent_runtime.model import DecisionKind
-from agent_runtime.providers import _ProviderModelClient
+from agent_runtime.providers import _decision_from, _ProviderModelClient
 from agent_runtime.text_tool_calls import salvage_tool_calls, strip_think
 from shared_llm import Message
 from shared_llm.types import CompletionResponse, Usage
@@ -148,8 +148,8 @@ def test_think_block_is_stripped_from_a_prose_finish() -> None:
 
 
 # --- el módulo puro -------------------------------------------------------------
-def test_strip_think_handles_an_unclosed_block() -> None:
-    assert strip_think("Respuesta.<think>se cortó aquí") == "Respuesta."
+def test_strip_think_handles_an_unclosed_block_that_opens_the_reply() -> None:
+    assert strip_think("<think>se cortó aquí") == ""
 
 
 def test_several_tagged_calls_are_all_returned_in_order() -> None:
@@ -198,3 +198,38 @@ def test_whitespace_and_think_around_the_call_still_count_as_the_whole_answer() 
     call = json.dumps({"name": "read_file", "arguments": {"path": "a.py"}})
     text = f"\n  <think>voy a leer</think>\n<tool_call>{call}</tool_call>\n"
     assert _decide(text).tool == "read_file"
+
+
+# --- revisión adversarial, intento 1 (lente B) ------------------------------------
+def test_strip_think_keeps_prose_that_mentions_an_unclosed_think_tag() -> None:
+    text = "Listo: ahora se eliminan las etiquetas <think> del texto. Tests en verde."
+    assert strip_think(text) == text
+
+
+def test_strip_think_drops_an_unclosed_think_that_opens_the_reply() -> None:
+    assert strip_think("  <think>razonando sin cerrar") == ""
+
+
+def test_strip_think_still_drops_closed_blocks_anywhere() -> None:
+    assert strip_think("a <think>x</think> b") == "a  b"
+
+
+def test_an_unclosed_leading_think_does_not_become_an_empty_finish() -> None:
+    d = _decide("<think>razonando sin cerrar")
+    assert d.kind == DecisionKind.FINISH
+    assert d.output == "<think>razonando sin cerrar"
+
+
+def test_a_rescued_call_with_valid_json_is_not_suspect_when_the_turn_is_truncated() -> None:
+    call = json.dumps({"name": "write_file", "arguments": _ARGS})
+    resp = CompletionResponse(
+        content=f"<tool_call>{call}</tool_call>",
+        model="m",
+        provider="fake",
+        usage=Usage(),
+        stop_reason="length",
+    )
+    client = _ProviderModelClient(provider=_Provider(""), model="m", tools=[_WRITE, _READ])
+    d = _decision_from(client._salvaged(resp, [_WRITE, _READ]), model="m").decision
+    assert d.tool == "write_file"
+    assert d.tool_args == _ARGS

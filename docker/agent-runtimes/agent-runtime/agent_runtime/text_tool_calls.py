@@ -32,17 +32,18 @@ from typing import Any
 from shared_llm.types import ToolCall
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S | re.I)
-_UNCLOSED_THINK = re.compile(r"<think>.*\Z", re.S | re.I)
+_UNCLOSED_THINK = re.compile(r"\A\s*<think>.*\Z", re.S | re.I)
 _TAGGED = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.S | re.I)
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S | re.I)
 
 
 def strip_think(text: str) -> str:
-    """El texto sin los bloques ``<think>…</think>``, incluido uno sin cerrar al final.
+    """El texto sin bloques ``<think>…</think>`` ni ``<think>`` sin cerrar que abra la respuesta.
 
     Algunos modelos de razonamiento los dejan en ``content``. No son parte del
     entregable, y dentro de ellos el modelo a veces «ensaya» una tool call que no
-    llegó a hacer, así que se retiran antes de buscar llamadas.
+    llegó a hacer, así que se retiran antes de buscar llamadas. Un ``<think>`` sin
+    cerrar en mitad de la prosa es una mención, no razonamiento: se deja intacto.
     """
     return _UNCLOSED_THINK.sub("", _THINK_BLOCK.sub("", text)).strip()
 
