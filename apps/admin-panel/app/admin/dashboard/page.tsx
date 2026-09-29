@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
+import Link from "next/link";
 
 import { PendingSection } from "@/components/dashboard/pending-section";
 import {
@@ -14,7 +15,7 @@ import { ProjectsSection, SpendSection } from "@/components/dashboard/work-secti
 import { PageHeader } from "@/components/layout/page-header";
 import { StateBlock } from "@/components/shared/state-block";
 import { apiFetch } from "@/lib/api";
-import type { TenantDashboard } from "@/lib/dashboard/tenant-dashboard";
+import { isNoTenantError, type TenantDashboard } from "@/lib/dashboard/tenant-dashboard";
 import { useT } from "@/lib/i18n";
 
 interface SystemHealthResponse {
@@ -53,9 +54,18 @@ export default function DashboardPage() {
         title={t("title")}
         description={t("description")}
       />
+      {dashboard.isError && isNoTenantError(dashboard.error) && (
+        <div className="border-border rounded-lg border p-4" data-testid="dashboard-no-tenant">
+          <p className="font-medium">{t("noTenantTitle")}</p>
+          <p className="text-muted-foreground mt-1 text-sm">{t("noTenantBody")}</p>
+          <Link href="/select-tenant" className="mt-2 inline-block text-sm font-medium underline">
+            {t("noTenantLink")}
+          </Link>
+        </div>
+      )}
       <StateBlock
         isLoading={dashboard.isLoading}
-        isError={dashboard.isError}
+        isError={dashboard.isError && !isNoTenantError(dashboard.error)}
         error={dashboard.error}
         loadingLabel={t("loading")}
         loadingSkeleton
@@ -68,7 +78,7 @@ export default function DashboardPage() {
             <div className="lg:col-span-2">
               <PendingSection pending={data.pending} />
             </div>
-            <SpendSection spend={data.spend} />
+            {data.spend.reason !== "forbidden" && <SpendSection spend={data.spend} />}
             <div className="lg:col-span-3">
               <IssuesSection issues={data.issues} services={degraded} />
             </div>

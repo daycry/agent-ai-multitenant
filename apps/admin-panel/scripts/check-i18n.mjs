@@ -459,7 +459,6 @@ const ATTR_ALLOWLIST = {
   // casillas pedían «ES+EN» y seguían abiertas justamente por esto.
   // Queda el chat (`cortex/page.tsx`), que es de la fase F1 y no de estas dos.
   "app/admin/cortex/page.tsx": 9,
-  "app/admin/dashboard/page.tsx": 3,
   "app/admin/documents/[id]/citations/page.tsx": 2,
   "app/admin/documents/[id]/ingestion/page.tsx": 2,
   "app/admin/documents/page.tsx": 2,

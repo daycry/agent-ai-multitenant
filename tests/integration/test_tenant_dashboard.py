@@ -32,6 +32,7 @@ _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 async def _seed_tenant(conn: asyncpg.Connection, *, slug: str) -> dict[str, UUID]:
     tenant, user, project, quiet = uuid4(), uuid4(), uuid4(), uuid4()
+    admin = uuid4()
     active_plan, waiting_plan = uuid4(), uuid4()
     await conn.execute(
         "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $2)", tenant, slug
@@ -47,6 +48,18 @@ async def _seed_tenant(conn: asyncpg.Connection, *, slug: str) -> dict[str, UUID
         uuid4(),
         tenant,
         user,
+    )
+    await conn.execute(
+        "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'h')",
+        admin,
+        f"{slug}-admin@t.test",
+    )
+    await conn.execute(
+        "INSERT INTO user_org_memberships (id, tenant_id, user_id, role)"
+        " VALUES ($1, $2, $3, 'tenant_admin')",
+        uuid4(),
+        tenant,
+        admin,
     )
     await conn.execute(
         "INSERT INTO projects (id, tenant_id, name, mcp_servers) VALUES ($1, $2, $3, $4::jsonb)",
@@ -104,7 +117,14 @@ async def _seed_tenant(conn: asyncpg.Connection, *, slug: str) -> dict[str, UUID
         tenant,
         tasks[0],
     )
-    return {"tenant": tenant, "user": user, "project": project, "quiet": quiet}
+    return {
+        "tenant": tenant,
+        "user": user,
+        "admin": admin,
+        "project": project,
+        "quiet": quiet,
+        "task_ready": tasks[2],
+    }
 
 
 async def _seed(dsn: str) -> dict[str, dict[str, UUID]]:
@@ -241,7 +261,7 @@ async def test_health_only_speaks_when_it_hurts(configured_app, migrations_pg_ds
         await conn.execute("UPDATE projects SET paused_by_budget = true WHERE id = $1", a["quiet"])
     finally:
         await conn.close()
-    body = await _get(configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"]))
+    body = await _get(configured_app, "/tenant/dashboard", await _token(a["admin"], a["tenant"]))
     kinds = sorted(i["kind"] for i in body["issues"])
     assert kinds == ["budget_paused_project", "mcp_egress_blocked"]
     assert all(i["url_path"].startswith("/admin/") for i in body["issues"])
@@ -285,3 +305,130 @@ async def test_requires_authentication(configured_app, migrations_pg_dsn: str) -
     ) as client:
         resp = await client.get("/tenant/dashboard")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_member_does_not_see_spend_nor_budget_pauses(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Gasto y pausas por presupuesto piden `tenant_admin` en sus endpoints de origen
+    (CWE-863): el miembro raso no los ve; el admin del mismo tenant sí (misma caché)."""
+    seeded = await _seed(migrations_pg_dsn)
+    a = seeded["a"]
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("UPDATE projects SET paused_by_budget = true WHERE id = $1", a["quiet"])
+        await conn.execute(
+            "UPDATE organizations SET tenant_paused_by_budget = true WHERE id = $1", a["tenant"]
+        )
+    finally:
+        await conn.close()
+    admin_body = await _get(
+        configured_app, "/tenant/dashboard", await _token(a["admin"], a["tenant"])
+    )
+    member_body = await _get(
+        configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"])
+    )
+    assert member_body["spend"] == {"available": False, "reason": "forbidden"}
+    assert not [i for i in member_body["issues"] if i["kind"].startswith("budget_paused")]
+    assert admin_body["spend"].get("reason") != "forbidden"
+    admin_kinds = {i["kind"] for i in admin_body["issues"]}
+    assert {"budget_paused_project", "budget_paused_tenant"} <= admin_kinds
+    # El recorte es por petición: leer la caché como admin no lo destapa al miembro.
+    again = await _get(configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"]))
+    assert again["spend"]["reason"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_spend_has_its_own_slow_cache(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a = seeded["a"]
+    await _get(configured_app, "/tenant/dashboard", await _token(a["admin"], a["tenant"]))
+    from api_server.auth.deps import get_redis
+
+    ttl = await get_redis().ttl(f"dashboard:tenant-spend:{a['tenant']}")
+    assert 30 < ttl <= 300
+
+
+@pytest.mark.asyncio
+async def test_project_row_carries_the_last_failure(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a = seeded["a"]
+    failed = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO executions (id, tenant_id, task_id, status, steps_log)"
+            " VALUES ($1, $2, $3, 'failed', '[]'::jsonb)",
+            failed,
+            a["tenant"],
+            a["task_ready"],
+        )
+    finally:
+        await conn.close()
+    body = await _get(configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"]))
+    assert body["projects"][0]["last_failure"] == {
+        "execution_id": str(failed),
+        "task_title": "Tarea ready",
+        "url_path": f"/admin/executions/{failed}",
+    }
+
+
+@pytest.mark.asyncio
+async def test_project_without_failures_has_null_last_failure(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a = seeded["a"]
+    body = await _get(configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"]))
+    assert body["projects"][0]["last_failure"] is None
+
+
+@pytest.mark.asyncio
+async def test_activity_orders_by_creation_and_reports_it(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a = seeded["a"]
+    body = await _get(configured_app, "/tenant/dashboard", await _token(a["user"], a["tenant"]))
+    ats = [r["at"] for r in body["activity"]]
+    assert ats == sorted(ats, reverse=True)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        created = await conn.fetchval(
+            "SELECT max(created_at) FROM executions WHERE tenant_id = $1", a["tenant"]
+        )
+    finally:
+        await conn.close()
+    assert body["activity"][0]["at"] == created.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_system_admin_without_tenant_gets_a_typed_400(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    await _seed(migrations_pg_dsn)
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        sysadmin = uuid4()
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash, is_system_admin)"
+            " VALUES ($1, 'sys@t.test', 'h', true)",
+            sysadmin,
+        )
+    finally:
+        await conn.close()
+    sid = uuid7()
+    await SessionStore(get_redis()).create(sid, user_id=sysadmin, tenant_id=None, ttl_seconds=3600)
+    token = encode_jwt(user_id=sysadmin, session_id=sid, tenant_id=None)
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/tenant/dashboard", headers={"Authorization": f"Bearer {token}"})
+    # 4xx tipado (nunca un 500): el panel lo reconoce por el detalle y pide elegir tenant.
+    assert resp.status_code in (400, 403), resp.text
+    assert "tenant" in resp.json()["detail"]

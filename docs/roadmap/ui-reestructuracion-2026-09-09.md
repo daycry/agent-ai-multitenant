@@ -199,6 +199,22 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
     filtro de «proyectos en curso» pone rojo su test, y pintar la salud siempre pone rojo el caso «nada
     pendiente». El e2e (`e2e/admin-login.spec.ts`, ahora contra `dashboard-grid`) necesita el stack completo
     y no se ejecutó.
+  - **Revisión adversarial, intento 1 (2026-09-29)**, skill `adversarial-review` del plugin, lentes A+B+C+D
+    con el agente `reviewer`; correcciones con el agente `implementer`. Gaps de esta tarea y su estado:
+
+    | #   | Grado     | Lente | Gap                                                                                                      | Estado                                                         |
+    | --- | --------- | ----- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+    | 1   | Important | D     | `_projects` recorría todas las tareas del tenant por proyecto (subconsulta por el `project_id` del plan) | corregido: agregados con GROUP BY por `t.project_id`           |
+    | 2   | Important | D     | `_activity` ordenaba por `coalesce(...)`: sin índice ni poda de particiones                              | corregido: `created_at DESC`                                   |
+    | 3   | Important | D     | el gasto (3 consultas por proyecto con presupuesto) en la ruta de polling de 30 s                        | corregido: caché propia de 300 s                               |
+    | 4   | Important | A     | un System Admin sin tenant activo veía el bloque de error                                                | corregido: aviso con enlace a `/select-tenant`                 |
+    | 5   | Important | A     | casilla `[x]` con el e2e sin ejecutar                                                                    | casilla reabierta                                              |
+    | 6   | Minor     | C     | gasto y pausas visibles a un `tenant_member` (CWE-863)                                                   | corregido: recorte por rol tras la caché                       |
+    | 7   | Minor     | A     | faltaba «último fallo» por proyecto                                                                      | corregido: `last_failure` con enlace                           |
+    | 8   | Minor     | A     | la tarjeta de gasto no enlazaba                                                                          | corregido: enlace a `/admin/tenant-stats`                      |
+    | 9   | Minor     | D     | la caché no tiene single-flight: N reconstrucciones a la vez al caducar                                  | deuda aceptada: con 1-3 corregidos la reconstrucción es barata |
+
+    Verificado por el orquestador: integración 16 passed (con cross-tenant y los dos roles), vitest 11 passed.
 
 ### `task_ui_03` — Bandeja humana unificada
 

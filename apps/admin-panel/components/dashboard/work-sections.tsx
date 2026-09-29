@@ -41,6 +41,15 @@ export function ProjectsSection({ projects }: { projects: DashboardProject[] }) 
                   {t("projectTasks", { done: p.tasks_done, total: p.tasks_total })}
                   {p.running > 0 ? ` · ${t("projectRunning", { count: p.running })}` : ""}
                 </span>
+                {p.last_failure && (
+                  <Link
+                    href={p.last_failure.url_path}
+                    className="text-danger mt-0.5 block text-xs hover:underline"
+                    data-testid={`dashboard-project-${p.project_id}-failure`}
+                  >
+                    {t("projectLastFailure", { task: p.last_failure.task_title })}
+                  </Link>
+                )}
               </li>
             );
           })}
@@ -53,6 +62,8 @@ export function ProjectsSection({ projects }: { projects: DashboardProject[] }) 
 /** 3 — Dinero contra presupuesto, o el aviso de que no hay presupuesto. */
 export function SpendSection({ spend }: { spend: DashboardSpend }) {
   const t = useT("tenantDashboard");
+  // Sin rol de admin el endpoint no cuenta el gasto: no es «no hay presupuesto».
+  if (spend.reason === "forbidden") return null;
   const budget = headlineBudget(spend);
   return (
     <SectionCard title={t("spendTitle")} testid="dashboard-spend">
@@ -74,6 +85,13 @@ export function SpendSection({ spend }: { spend: DashboardSpend }) {
           {budget.over_budget && (
             <span className="text-danger text-xs font-medium">{t("spendOver")}</span>
           )}
+          <Link
+            href="/admin/tenant-stats"
+            className="text-xs font-medium hover:underline"
+            data-testid="dashboard-spend-link"
+          >
+            {t("spendOpen")}
+          </Link>
         </div>
       )}
     </SectionCard>

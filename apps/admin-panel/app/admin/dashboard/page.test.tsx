@@ -13,6 +13,7 @@ vi.mock("@/lib/api", async (orig) => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
+import { ApiError } from "@/lib/api";
 import DashboardPage from "@/app/admin/dashboard/page";
 import {
   ageParts,
@@ -51,6 +52,11 @@ const FULL: TenantDashboard = {
       tasks_done: 1,
       tasks_total: 4,
       running: 2,
+      last_failure: {
+        task_title: "Migrar login",
+        execution_id: "f1",
+        url_path: "/admin/executions/f1",
+      },
       url_path: "/admin/projects/w",
     },
   ],
@@ -171,6 +177,46 @@ describe("dashboard del tenant (task_ui_02)", () => {
     wire(EMPTY, new Error("403"));
     mount();
     await screen.findByTestId("dashboard-grid");
+    expect(screen.queryByTestId("dashboard-error")).toBeNull();
+  });
+});
+
+describe("gasto, último fallo y tenant activo (revisión task_ui_02)", () => {
+  it("la tarjeta de gasto enlaza a /admin/tenant-stats", async () => {
+    wire(FULL, { status: "ok", services: [] });
+    mount();
+    const link = await screen.findByTestId("dashboard-spend-link");
+    expect(link.getAttribute("href")).toBe("/admin/tenant-stats");
+  });
+
+  it("el último fallo del proyecto se pinta con enlace al run", async () => {
+    wire(FULL, { status: "ok", services: [] });
+    mount();
+    const link = await screen.findByTestId("dashboard-project-w-failure");
+    expect(link.textContent).toContain("Migrar login");
+    expect(link.getAttribute("href")).toBe("/admin/executions/f1");
+  });
+
+  it("gasto «forbidden» oculta la tarjeta: no dice que no hay presupuesto", async () => {
+    wire(
+      { ...EMPTY, spend: { available: false, reason: "forbidden" } },
+      { status: "ok", services: [] },
+    );
+    mount();
+    await screen.findByTestId("dashboard-grid");
+    expect(screen.queryByTestId("dashboard-spend")).toBeNull();
+    expect(screen.queryByTestId("dashboard-spend-none")).toBeNull();
+  });
+
+  it("un System Admin sin tenant activo ve el aviso de elegir tenant, no el error", async () => {
+    apiFetchMock.mockImplementation((path: string) =>
+      path === "/tenant/dashboard"
+        ? Promise.reject(new ApiError(403, '{"detail":"no active tenant context"}'))
+        : Promise.reject(new Error("403")),
+    );
+    mount();
+    const notice = await screen.findByTestId("dashboard-no-tenant");
+    expect(notice.querySelector("a")?.getAttribute("href")).toBe("/select-tenant");
     expect(screen.queryByTestId("dashboard-error")).toBeNull();
   });
 });

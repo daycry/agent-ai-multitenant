@@ -51,38 +51,88 @@ async def _pending(session: AsyncSession, tenant_id: UUID) -> dict[str, Any]:
 
 
 async def _projects(session: AsyncSession, tenant_id: UUID) -> list[dict[str, Any]]:
-    rows = await session.execute(
-        sa_text(
-            "SELECT pr.id, pr.name,"
-            " (SELECT count(*) FROM plans p WHERE p.project_id = pr.id"
-            "   AND p.tenant_id = :tid AND p.status = ANY(:active)) AS active_plans,"
-            " (SELECT count(*) FROM tasks t JOIN plans p ON p.id = t.plan_id"
-            "   WHERE p.project_id = pr.id AND t.tenant_id = :tid"
-            "   AND p.status = ANY(:active)) AS tasks_total,"
-            " (SELECT count(*) FROM tasks t JOIN plans p ON p.id = t.plan_id"
-            "   WHERE p.project_id = pr.id AND t.tenant_id = :tid"
-            "   AND p.status = ANY(:active) AND t.status = 'done') AS tasks_done,"
-            " (SELECT count(*) FROM executions e JOIN tasks t ON t.id = e.task_id"
-            "   WHERE t.project_id = pr.id AND e.tenant_id = :tid"
-            "   AND e.status = 'running') AS running"
-            " FROM projects pr"
-            " WHERE pr.tenant_id = :tid AND pr.deleted_at IS NULL"
-            " ORDER BY pr.name"
-        ),
-        {"tid": tenant_id, "active": list(_ACTIVE_PLAN_STATUSES)},
-    )
+    """Trabajo en curso por proyecto, con consultas agregadas (sin subconsultas
+    correlacionadas): las tareas se cuentan por ``t.project_id``, que tiene índice
+    ``(project_id, plan_id)``, y sólo las de planes activos y no borrados."""
+    params = {"tid": tenant_id, "active": list(_ACTIVE_PLAN_STATUSES)}
+    projects = (
+        await session.execute(
+            sa_text(
+                "SELECT id, name FROM projects"
+                " WHERE tenant_id = :tid AND deleted_at IS NULL ORDER BY name"
+            ),
+            params,
+        )
+    ).all()
+    plans = {
+        row.project_id: int(row.n)
+        for row in await session.execute(
+            sa_text(
+                "SELECT project_id, count(*) AS n FROM plans"
+                " WHERE tenant_id = :tid AND deleted_at IS NULL AND status = ANY(:active)"
+                " GROUP BY project_id"
+            ),
+            params,
+        )
+    }
+    tasks = {
+        row.project_id: (int(row.total), int(row.done))
+        for row in await session.execute(
+            sa_text(
+                "SELECT t.project_id, count(*) AS total,"
+                " count(*) FILTER (WHERE t.status = 'done') AS done"
+                " FROM tasks t JOIN plans p ON p.id = t.plan_id"
+                " WHERE t.tenant_id = :tid AND p.tenant_id = :tid"
+                " AND p.deleted_at IS NULL AND p.status = ANY(:active)"
+                " GROUP BY t.project_id"
+            ),
+            params,
+        )
+    }
+    running = {
+        row.project_id: int(row.n)
+        for row in await session.execute(
+            sa_text(
+                "SELECT t.project_id, count(*) AS n"
+                " FROM executions e JOIN tasks t ON t.id = e.task_id"
+                " WHERE e.tenant_id = :tid AND t.tenant_id = :tid AND e.status = 'running'"
+                " GROUP BY t.project_id"
+            ),
+            params,
+        )
+    }
+    failures = {
+        row.project_id: {
+            "task_title": row.task_title,
+            "execution_id": str(row.id),
+            "url_path": f"/admin/executions/{row.id}",
+        }
+        for row in await session.execute(
+            sa_text(
+                "SELECT DISTINCT ON (t.project_id) t.project_id, e.id, t.title AS task_title"
+                " FROM executions e JOIN tasks t ON t.id = e.task_id"
+                " JOIN plans p ON p.id = t.plan_id"
+                " WHERE e.tenant_id = :tid AND t.tenant_id = :tid AND p.tenant_id = :tid"
+                " AND p.deleted_at IS NULL AND p.status = ANY(:active)"
+                " AND e.status IN ('failed', 'aborted')"
+                " ORDER BY t.project_id, e.created_at DESC"
+            ),
+            params,
+        )
+    }
     return [
         {
-            "project_id": str(row.id),
-            "project_name": row.name,
-            "active_plans": int(row.active_plans),
-            "tasks_done": int(row.tasks_done),
-            "tasks_total": int(row.tasks_total),
-            "running": int(row.running),
-            "url_path": f"/admin/projects/{row.id}",
+            "project_id": str(pr.id),
+            "project_name": pr.name,
+            "active_plans": plans.get(pr.id, 0),
+            "tasks_done": tasks.get(pr.id, (0, 0))[1],
+            "tasks_total": tasks.get(pr.id, (0, 0))[0],
+            "running": running.get(pr.id, 0),
+            "last_failure": failures.get(pr.id),
+            "url_path": f"/admin/projects/{pr.id}",
         }
-        for row in rows
-        if row.active_plans or row.running
+        for pr in projects
+        if plans.get(pr.id) or running.get(pr.id)
     ]
 
 
@@ -90,13 +140,13 @@ async def _activity(session: AsyncSession, tenant_id: UUID) -> list[dict[str, An
     rows = await session.execute(
         sa_text(
             "SELECT e.id, e.status, t.title AS task_title, pr.name AS project_name,"
-            " a.name AS agent_name, coalesce(e.updated_at, e.started_at, e.created_at) AS at"
+            " a.name AS agent_name, e.created_at AS at"
             " FROM executions e"
             " JOIN tasks t ON t.id = e.task_id"
             " LEFT JOIN projects pr ON pr.id = t.project_id"
             " LEFT JOIN agents a ON a.id = e.agent_id"
             " WHERE e.tenant_id = :tid"
-            " ORDER BY coalesce(e.updated_at, e.started_at, e.created_at) DESC"
+            " ORDER BY e.created_at DESC"
             " LIMIT :limit"
         ),
         {"tid": tenant_id, "limit": ACTIVITY_LIMIT},
@@ -182,13 +232,22 @@ async def _mcp_and_issues(
     return mcp, issues
 
 
-async def build_tenant_dashboard(session: AsyncSession, tenant_id: UUID) -> dict[str, Any]:
-    """Las seis secciones del dashboard del tenant, en su orden."""
+async def build_tenant_dashboard(
+    session: AsyncSession, tenant_id: UUID, *, spend: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Las seis secciones del dashboard del tenant, en su orden.
+
+    ``spend`` permite aportar el gasto ya calculado (el router lo cachea aparte, con
+    TTL más largo); sin él se calcula aquí."""
     mcp, issues = await _mcp_and_issues(session, tenant_id)
     return {
         "pending": await _pending(session, tenant_id),
         "projects": await _projects(session, tenant_id),
-        "spend": await tenant_budget_summary(session, tenant_id=tenant_id),
+        "spend": (
+            spend
+            if spend is not None
+            else await tenant_budget_summary(session, tenant_id=tenant_id)
+        ),
         "issues": issues,
         "activity": await _activity(session, tenant_id),
         "mcp": mcp,

@@ -29,6 +29,8 @@ export interface DashboardProject {
   tasks_done: number;
   tasks_total: number;
   running: number;
+  /** El run más reciente fallido o abortado de un plan activo, o `null`. */
+  last_failure: { task_title: string; execution_id: string; url_path: string } | null;
   url_path: string;
 }
 
@@ -85,6 +87,14 @@ export interface TenantDashboard {
   activity: DashboardActivity[];
   mcp: DashboardMcp[];
   generated_at: string;
+}
+
+/** ¿Es el error de «no hay tenant activo» (System Admin recién logueado, sin `tid`)? */
+export function isNoTenantError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { status, body } = error as { status?: unknown; body?: unknown };
+  if (status !== 400 && status !== 403) return false;
+  return typeof body === "string" && /no active tenant context|active tenant required/.test(body);
 }
 
 /** Porcentaje de tareas terminadas, redondeado; `0` si el plan aún no tiene tareas. */

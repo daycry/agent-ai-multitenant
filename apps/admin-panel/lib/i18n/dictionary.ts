@@ -7220,6 +7220,13 @@ export const dictionary = {
     projectPlans: { es: "{count} planes activos", en: "{count} active plans" },
     projectTasks: { es: "{done} de {total} tareas", en: "{done} of {total} tasks" },
     projectRunning: { es: "{count} runs en marcha", en: "{count} runs in progress" },
+    projectLastFailure: { es: "Último fallo: {task}", en: "Last failure: {task}" },
+    noTenantTitle: { es: "Elige un tenant", en: "Pick a tenant" },
+    noTenantBody: {
+      es: "No hay un tenant activo en tu sesión, así que no hay dashboard que enseñar.",
+      en: "There is no active tenant in your session, so there is no dashboard to show.",
+    },
+    noTenantLink: { es: "Elegir tenant", en: "Choose tenant" },
     // --- 3. dinero ---------------------------------------------------------------
     spendTitle: { es: "Gasto del periodo", en: "Spend this period" },
     spendNoBudget: {
@@ -7229,6 +7236,7 @@ export const dictionary = {
     spendUsed: { es: "{spent} USD de {budget} USD", en: "{spent} USD of {budget} USD" },
     spendPercent: { es: "{percent} % consumido", en: "{percent} % used" },
     spendOver: { es: "Por encima del presupuesto", en: "Over budget" },
+    spendOpen: { es: "Ver el detalle del gasto", en: "See spend details" },
     spendScopeTenant: { es: "Presupuesto del tenant", en: "Tenant budget" },
     spendScopeProject: { es: "Presupuesto de {name}", en: "{name} budget" },
     // --- 4. salud -------------------------------------------------------------------
