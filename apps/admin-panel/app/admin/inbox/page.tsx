@@ -14,7 +14,7 @@
  * `/admin/notifications/inbox` redirigen aquí a la suya.
  */
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Bell,
@@ -60,9 +60,26 @@ function InboxHub() {
   const router = useRouter();
   const requested = useSearchParams()?.get("tab");
   const counts = useInboxCounts();
-  // Lo que el usuario pulsa manda sobre el default calculado al llegar los datos.
-  const [picked, setPicked] = useState<InboxTabId | null>(null);
-  const initial: InboxTabId = isTab(requested) ? requested : (picked ?? defaultTab(counts));
+  // Pestaña ACTIVA, controlada: nada la remonta por un cambio de contador (un
+  // `key` derivado de los contadores tiraba lo que el usuario escribía en el
+  // sondeo de 30 s). El default por contadores se decide UNA vez, cuando los dos
+  // contadores que lo determinan cargan por primera vez; `?tab=` o un clic lo
+  // deciden antes y mandan siempre.
+  const [active, setActive] = useState<InboxTabId>(isTab(requested) ? requested : "approvals");
+  const decided = useRef(isTab(requested));
+  const relevantLoaded =
+    counts.approvals.state !== "loading" && counts.assigned.state !== "loading";
+  useEffect(() => {
+    if (isTab(requested)) {
+      decided.current = true;
+      setActive(requested);
+    }
+  }, [requested]);
+  useEffect(() => {
+    if (decided.current || !relevantLoaded) return;
+    decided.current = true;
+    setActive(defaultTab(counts));
+  }, [relevantLoaded, counts]);
   const allClear = isAllClear(counts);
 
   const labels: Record<InboxTabId, { text: string; icon: React.ReactNode }> = {
@@ -94,11 +111,13 @@ function InboxHub() {
       )}
 
       <Tabs
-        // `key` re-monta al cambiar el `?tab=` desde fuera (p. ej. un enlace).
-        key={initial}
-        defaultValue={initial}
+        defaultValue={active}
+        value={active}
         onValueChange={(next) => {
-          if (isTab(next)) setPicked(next);
+          if (isTab(next)) {
+            decided.current = true;
+            setActive(next);
+          }
           router.replace(`/admin/inbox?tab=${next}`, { scroll: false });
         }}
         className="mt-6"

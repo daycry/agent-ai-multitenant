@@ -23,9 +23,12 @@ import type { KbRef } from "./kb-types";
 export function ActivateExistingKb({
   projectId,
   grantedKbIds,
+  grantedReady,
 }: {
   projectId: string;
   grantedKbIds: ReadonlySet<string>;
+  /** El listado de bases del proyecto cargó SIN error: sin él no se sabe qué está ya concedido. */
+  grantedReady: boolean;
 }) {
   const t = useT("knowledgeWizard");
   const errorText = useErrorText();
@@ -48,7 +51,9 @@ export function ActivateExistingKb({
     },
   });
 
-  const candidates = (catalogQuery.data ?? []).filter((k) => !grantedKbIds.has(k.id));
+  const candidates = grantedReady
+    ? (catalogQuery.data ?? []).filter((k) => !grantedKbIds.has(k.id))
+    : [];
   if (candidates.length === 0) return null;
 
   return (

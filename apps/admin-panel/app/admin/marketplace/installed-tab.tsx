@@ -260,7 +260,24 @@ function DeploymentsLine({
   const t = useT("marketplaceInstalled");
   const router = useRouter();
   const [projectId, setProjectId] = useState("");
-  const deployments = install.deployments ?? [];
+  // Un proyecto puede tener un despliegue `disabled` y otro `active`: se muestra
+  // UNA vez, con el estado «vivo» si alguno lo está.
+  const byProject = new Map<
+    string,
+    { id: string; name: string; active: boolean; disabled: boolean }
+  >();
+  for (const d of install.deployments ?? []) {
+    const cur = byProject.get(d.project_id) ?? {
+      id: d.project_id,
+      name: d.project_name,
+      active: false,
+      disabled: false,
+    };
+    if (d.status === "active") cur.active = true;
+    else cur.disabled = true;
+    byProject.set(d.project_id, cur);
+  }
+  const deployments = Array.from(byProject.values());
   const canDeploy = !deferred && install.status === "enabled";
   return (
     <div className="mt-2 space-y-2 text-xs">
@@ -273,13 +290,13 @@ function DeploymentsLine({
           <span className="text-muted-foreground">{t("deployedIn")}</span>
           {deployments.map((d) => (
             <Link
-              key={d.project_id}
-              href={`/admin/projects/${d.project_id}/capabilities`}
-              data-testid={`installed-deployment-${install.id}-${d.project_id}`}
+              key={d.id}
+              href={`/admin/projects/${d.id}/capabilities`}
+              data-testid={`installed-deployment-${install.id}-${d.id}`}
             >
-              <Badge variant={d.status === "active" ? "success" : "warning"}>
-                {d.project_name}
-                {d.status === "active" ? "" : ` · ${t("deploymentDisabled")}`}
+              <Badge variant={d.active ? "success" : "warning"}>
+                {d.name}
+                {d.disabled ? ` · ${t("deploymentDisabled")}` : ""}
               </Badge>
             </Link>
           ))}

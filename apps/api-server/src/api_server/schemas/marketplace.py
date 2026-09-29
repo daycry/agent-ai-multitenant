@@ -149,6 +149,8 @@ class InstallationDeploymentRef(BaseModel):
 
     model_config = _BASE_CONFIG
 
+    #: Id del despliegue: un proyecto puede tener uno `disabled` y otro `active`.
+    id: UUID
     project_id: UUID
     project_name: str
     status: str

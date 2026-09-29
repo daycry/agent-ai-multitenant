@@ -17,6 +17,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 import { ApiError } from "@/lib/api";
 
+/** Simula `GET …/documents?ids=…`: devuelve de `store` sólo los ids pedidos. */
+function listOf(store: Record<string, unknown>) {
+  return (path: string) => {
+    const ids = new URL(path, "http://x").searchParams.getAll("ids");
+    return Promise.resolve(ids.filter((i) => i in store).map((i) => store[i]));
+  };
+}
+
 import { useIndexingBatch } from "./use-indexing-batch";
 
 const doc = (id: string, status: string) => ({ id, title: id, status, error_message: null });
@@ -26,7 +34,7 @@ afterEach(() => apiFetchMock.mockReset());
 
 describe("useIndexingBatch", () => {
   it("indexed_empty es terminal: deja de sondear", async () => {
-    apiFetchMock.mockResolvedValue(doc("a", "indexed_empty"));
+    apiFetchMock.mockImplementation(listOf({ a: doc("a", "indexed_empty") }));
     const { result } = renderHook(() =>
       useIndexingBatch({ kbId: "kb", docIds: ["a"], enabled: true, ...FAST }),
     );
@@ -34,15 +42,11 @@ describe("useIndexingBatch", () => {
     const calls = apiFetchMock.mock.calls.length;
     await new Promise((r) => setTimeout(r, 80));
     expect(apiFetchMock.mock.calls.length).toBe(calls);
-    expect(apiFetchMock).toHaveBeenCalledWith("/knowledge-bases/kb/documents/a");
+    expect(apiFetchMock.mock.calls[0][0]).toMatch(/^\/knowledge-bases\/kb\/documents\?/);
   });
 
-  it("un 404 es terminal (documento borrado) y no bloquea a los demás", async () => {
-    apiFetchMock.mockImplementation((path: string) =>
-      path.endsWith("/a")
-        ? Promise.reject(new ApiError(404, "gone"))
-        : Promise.resolve(doc("b", "indexed")),
-    );
+  it("un id que ya no vuelve en la respuesta es terminal (borrado) y no bloquea a los demás", async () => {
+    apiFetchMock.mockImplementation(listOf({ b: doc("b", "indexed") }));
     const { result } = renderHook(() =>
       useIndexingBatch({ kbId: "kb", docIds: ["a", "b"], enabled: true, ...FAST }),
     );
@@ -51,15 +55,49 @@ describe("useIndexingBatch", () => {
     expect(result.current.timedOut).toBe(false);
   });
 
+  it("hace UNA petición por ciclo con todos los pendientes, y sólo los no terminales", async () => {
+    let n = 0;
+    apiFetchMock.mockImplementation((path: string) => {
+      n += 1;
+      const ids = new URL(path, "http://x").searchParams.getAll("ids");
+      return Promise.resolve(
+        ids.map((i) => doc(i, i === "slow" && n < 3 ? "processing" : "indexed")),
+      );
+    });
+    const { result } = renderHook(() =>
+      useIndexingBatch({ kbId: "kb", docIds: ["a", "b", "slow"], enabled: true, ...FAST }),
+    );
+    await waitFor(() => expect(result.current.docs.slow?.status).toBe("indexed"));
+    const first = new URL(apiFetchMock.mock.calls[0][0], "http://x").searchParams.getAll("ids");
+    expect(first).toEqual(["a", "b", "slow"]);
+    for (const [path] of apiFetchMock.mock.calls.slice(1)) {
+      expect(new URL(path, "http://x").searchParams.getAll("ids")).toEqual(["slow"]);
+    }
+    expect(apiFetchMock.mock.calls.length).toBe(3);
+  });
+
+  it("un error transitorio se reintenta sin marcar el documento como borrado", async () => {
+    let n = 0;
+    apiFetchMock.mockImplementation((path: string) => {
+      n += 1;
+      if (n === 1) return Promise.reject(new ApiError(500, "boom"));
+      return listOf({ a: doc("a", "indexed") })(path);
+    });
+    const { result } = renderHook(() =>
+      useIndexingBatch({ kbId: "kb", docIds: ["a"], enabled: true, ...FAST }),
+    );
+    await waitFor(() => expect(result.current.docs.a?.status).toBe("indexed"));
+  });
+
   it("no sondea con el diálogo cerrado", async () => {
-    apiFetchMock.mockResolvedValue(doc("a", "processing"));
+    apiFetchMock.mockImplementation(listOf({ a: doc("a", "processing") }));
     renderHook(() => useIndexingBatch({ kbId: "kb", docIds: ["a"], enabled: false, ...FAST }));
     await new Promise((r) => setTimeout(r, 60));
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
   it("tiene un tope de duración y lo declara", async () => {
-    apiFetchMock.mockResolvedValue(doc("a", "processing"));
+    apiFetchMock.mockImplementation(listOf({ a: doc("a", "processing") }));
     const { result } = renderHook(() =>
       useIndexingBatch({ kbId: "kb", docIds: ["a"], enabled: true, pollMs: 10, maxMs: 60 }),
     );

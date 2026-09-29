@@ -312,3 +312,47 @@ async def test_search_respects_private_and_tenant(configured_app, migrations_pg_
     assert str(ids["m_priv_amy"]) not in found and str(ids["m_b"]) not in found
     assert all(isinstance(r["score"], float) for r in resp.json())
     assert {r["memory"]["scope"] for r in scoped.json()} == {"global"}
+
+
+@pytest.mark.asyncio
+async def test_builtin_agent_is_resolved_but_other_tenants_agent_is_not(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Revisión adversarial (intento 2): una memoria escrita por un agente built-in
+    (`scope = 'global_builtin'`, bajo el tenant de plataforma) sale con su nombre, no
+    «desconocido»; el agente de OTRO tenant sigue sin resolverse."""
+    ids = await _seed(migrations_pg_dsn)
+    builtin, foreign = uuid4(), uuid4()
+    m_builtin, m_foreign = uuid4(), uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
+            " VALUES ($1,$2,'PM Builtin','project_manager','x','global_builtin')",
+            builtin,
+            _PLATFORM_TENANT_ID,
+        )
+        await conn.execute(
+            "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
+            " VALUES ($1,$2,'Agente Ajeno','backend_dev','x','global_tenant_template')",
+            foreign,
+            ids["tb"],
+        )
+        for mid, agent in ((m_builtin, builtin), (m_foreign, foreign)):
+            await conn.execute(
+                "INSERT INTO memory_entries (id, tenant_id, scope, type, content, project_id,"
+                " agent_id) VALUES ($1,$2,'project_shared','semantic','recuerdo',$3,$4)",
+                mid,
+                ids["ta"],
+                ids["project"],
+                agent,
+            )
+    finally:
+        await conn.close()
+    h = await _headers(ids["alice"], ids["ta"])
+    async with _client(configured_app) as c:
+        rows = {r["id"]: r for r in (await c.get("/memories", headers=h)).json()}
+    assert rows[str(m_builtin)]["created_by"]["name"] == "PM Builtin"
+    assert rows[str(m_builtin)]["agent_name"] == "PM Builtin"
+    assert rows[str(m_foreign)]["created_by"]["name"] is None
+    assert rows[str(m_foreign)]["agent_name"] is None

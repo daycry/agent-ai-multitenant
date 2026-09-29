@@ -17,7 +17,7 @@
  */
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, Search } from "lucide-react";
 
 import { CreateMemoryCard } from "@/components/memories/create-memory-card";
@@ -36,6 +36,9 @@ import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
+
+/** Tamaño de página por defecto de `GET /memories` (`limit=50`). */
+const PAGE_SIZE = 50;
 
 const SCOPE_OPTIONS: (MemoryScope | "all")[] = [
   "all",
@@ -57,12 +60,19 @@ export default function MemoriesPage() {
   const searching = term.length > 0;
   const scopeParam = scopeFilter === "all" ? "" : `&scope=${scopeFilter}`;
 
-  const listQuery = useQuery({
-    queryKey: ["memories", scopeFilter],
-    queryFn: () =>
-      apiFetch<MemoryResponse[]>(
-        scopeFilter === "all" ? "/memories" : `/memories?scope=${scopeFilter}`,
-      ),
+  // Paginado con el `offset` de `GET /memories` (el backend corta en PAGE).
+  const listQuery = useInfiniteQuery({
+    queryKey: ["memories", "list", scopeFilter],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => {
+      const qs = [
+        scopeFilter === "all" ? "" : `scope=${scopeFilter}`,
+        pageParam > 0 ? `offset=${pageParam}` : "",
+      ].filter(Boolean);
+      return apiFetch<MemoryResponse[]>(`/memories${qs.length ? `?${qs.join("&")}` : ""}`);
+    },
+    getNextPageParam: (last, pages) =>
+      last.length >= PAGE_SIZE ? pages.reduce((n, p) => n + p.length, 0) : undefined,
     refetchOnWindowFocus: false,
   });
 
@@ -88,7 +98,8 @@ export default function MemoriesPage() {
   const active = searching ? searchQuery : listQuery;
   const memories: MemoryResponse[] = searching
     ? (searchQuery.data ?? []).map((h) => h.memory)
-    : (listQuery.data ?? []);
+    : (listQuery.data?.pages.flat() ?? []);
+  const total = counts?.[scopeFilter];
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
 
   return (
@@ -177,7 +188,29 @@ export default function MemoriesPage() {
               {searching ? tp("searchEmpty") : t("empty")}
             </p>
           ) : (
-            <MemoryList memories={memories} onDeleted={invalidate} />
+            <>
+              <MemoryList memories={memories} onDeleted={invalidate} />
+              {searching ? null : (
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <p className="text-muted-foreground text-xs" data-testid="memories-showing">
+                    {total === undefined
+                      ? tp("showingUnknown", { shown: memories.length })
+                      : tp("showing", { shown: memories.length, total })}
+                  </p>
+                  {listQuery.hasNextPage ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={listQuery.isFetchingNextPage}
+                      onClick={() => void listQuery.fetchNextPage()}
+                      data-testid="memories-load-more"
+                    >
+                      {tp("loadMore")}
+                    </Button>
+                  ) : null}
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

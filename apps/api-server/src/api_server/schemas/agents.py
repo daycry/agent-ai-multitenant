@@ -279,6 +279,9 @@ class AgentResponse(BaseModel):
     #: Sólo lo rellena el `PUT` que tocó el prompt (`task_gov_05`). Ver
     #: :class:`EvalGateNoticeResponse`.
     eval_gate: EvalGateNoticeResponse | None = None
+    #: Fecha del último run del agente en la ventana reciente (`task_ui_30`). Sólo
+    #: la rellena el listado; ``None`` = sin runs en la ventana (o sin dato).
+    last_activity_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +508,11 @@ class AgentSkillResponse(BaseModel):
     source_version: str | None = None
 
 
-def to_agent_response(a: Agent, teams: list[tuple[UUID, str]] | None = None) -> AgentResponse:
+def to_agent_response(
+    a: Agent,
+    teams: list[tuple[UUID, str]] | None = None,
+    last_activity_at: datetime | None = None,
+) -> AgentResponse:
     """ORM -> DTO with the `model_config` rename baked in.
 
     We go through `model_validate` with a dict because the field is
@@ -540,6 +547,7 @@ def to_agent_response(a: Agent, teams: list[tuple[UUID, str]] | None = None) -> 
         "created_at": a.created_at,
         "updated_at": a.updated_at,
         "deleted_at": a.deleted_at,
+        "last_activity_at": last_activity_at,
     }
     return AgentResponse.model_validate(payload)
 

@@ -54,8 +54,8 @@ const DESPLEGADA = {
   capability: "on_deploy",
   capability_reason: null,
   deployments: [
-    { project_id: "p-1", project_name: "Web", status: "active" },
-    { project_id: "p-2", project_name: "API", status: "disabled" },
+    { id: "d-1", project_id: "p-1", project_name: "Web", status: "active" },
+    { id: "d-2", project_id: "p-2", project_name: "API", status: "disabled" },
   ],
 };
 const SIN_DESPLEGAR = {
@@ -113,6 +113,26 @@ describe("Instaladas", () => {
     expect(web.textContent).toContain("Web");
     expect(web.getAttribute("href")).toBe("/admin/projects/p-1/capabilities");
     expect(screen.getByTestId("installed-deployment-inst-1-p-2").textContent).toContain("API");
+  });
+
+  it("un proyecto con un despliegue activo y otro desactivado se muestra UNA vez, sin claves duplicadas", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    mount([
+      {
+        ...DESPLEGADA,
+        deployments: [
+          { id: "d-1", project_id: "p-1", project_name: "Web", status: "active" },
+          { id: "d-3", project_id: "p-1", project_name: "Web", status: "disabled" },
+        ],
+      },
+    ]);
+    const link = await screen.findByTestId("installed-deployment-inst-1-p-1");
+    expect(screen.getAllByTestId("installed-deployment-inst-1-p-1")).toHaveLength(1);
+    expect(link.textContent).toContain("Web");
+    expect(link.textContent).toContain("deshabilitada");
+    const dupKey = errors.mock.calls.some(([m]) => String(m).includes("same key"));
+    errors.mockRestore();
+    expect(dupKey).toBe(false);
   });
 
   it("sin despliegues lo dice, y «Desplegar en un proyecto» lleva a Capacidades", async () => {

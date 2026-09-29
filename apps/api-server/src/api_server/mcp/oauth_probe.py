@@ -50,6 +50,7 @@ __all__ = [
     "PROBE_CONCURRENCY",
     "OAuthConnected",
     "clear_oauth_probe_cache",
+    "invalidate_oauth_probe",
     "oauth_connected_probe",
     "probe_many",
 ]
@@ -62,6 +63,13 @@ def _monotonic() -> float:
 def clear_oauth_probe_cache() -> None:
     """Vacía la caché (tests, cambio de resolver)."""
     _CACHE.clear()
+
+
+def invalidate_oauth_probe(tenant_id: UUID, project_id: UUID, server_name: str) -> None:
+    """Olvida el estado cacheado de UN servidor: «Conectar» o desconectar lo cambian y
+    la caché de 30 s seguiría diciendo lo de antes. Sólo vale para ESTE proceso; los
+    demás la renuevan al caducar su entrada."""
+    _CACHE.pop((tenant_id, project_id, server_name), None)
 
 
 def _read(resolver: VaultResolver, path: str) -> bool | None:

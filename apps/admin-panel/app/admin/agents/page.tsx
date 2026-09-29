@@ -109,6 +109,11 @@ function AgentList({
                 ? tr("noTeam")
                 : tr(n === 1 ? "usageTeamsOne" : "usageTeamsMany", { count: n })
             }
+            lastActivity={
+              agent.last_activity_at
+                ? new Date(agent.last_activity_at).toLocaleDateString(lang)
+                : undefined
+            }
             description={
               agent.description ? <p className="text-sm">{agent.description}</p> : undefined
             }

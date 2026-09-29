@@ -2555,6 +2555,31 @@ export const dictionary = {
       en: "Browse the platform tools and manage your tenant's custom ones. Built-ins are read-only.",
     },
     newTool: { es: "Nueva tool", en: "New tool" },
+    // --- `task_ui_30`: pestañas Tools · Skills ---
+    pageTabsAria: { es: "Skills y tools", en: "Skills and tools" },
+    tabTools: { es: "Tools", en: "Tools" },
+    tabSkills: { es: "Skills", en: "Skills" },
+    skillsTitle: { es: "Catálogo de skills", en: "Skills catalog" },
+    skillsDescription: {
+      es: "Las skills que los agentes pueden llevar: las de plataforma y las de tu tenant.",
+      en: "The skills agents can carry: the platform ones and your tenant ones.",
+    },
+    skillsSearchPlaceholder: {
+      es: "Buscar por nombre, descripción o categoría…",
+      en: "Search by name, description or category…",
+    },
+    skillsSearchAria: { es: "Buscar skill", en: "Search skill" },
+    skillsErrorTitle: {
+      es: "No se pudo cargar el catálogo de skills",
+      en: "The skills catalog could not be loaded",
+    },
+    skillsEmpty: { es: "No hay skills en el catálogo", en: "There are no skills in the catalog" },
+    countSkillsOne: { es: "{count} skill", en: "{count} skill" },
+    countSkillsMany: { es: "{count} skills", en: "{count} skills" },
+    skillRequiredToolsOne: { es: "{count} tool requerida", en: "{count} required tool" },
+    skillRequiredToolsMany: { es: "{count} tools requeridas", en: "{count} required tools" },
+    skillFieldCategory: { es: "Categoría", en: "Category" },
+    skillFieldPrompt: { es: "Fragmento de prompt", en: "Prompt fragment" },
 
     // --- facetas y búsqueda ---
     searchPlaceholder: {
@@ -3729,6 +3754,9 @@ export const dictionary = {
     searchSubmit: { es: "Buscar", en: "Search" },
     searchClear: { es: "Limpiar búsqueda", en: "Clear search" },
     searchScore: { es: "relevancia {score}", en: "relevance {score}" },
+    showing: { es: "Mostrando {shown} de {total}", en: "Showing {shown} of {total}" },
+    showingUnknown: { es: "Mostrando {shown}", en: "Showing {shown}" },
+    loadMore: { es: "Cargar más", en: "Load more" },
     who: { es: "Quién", en: "Who" },
     when: { es: "Cuándo", en: "When" },
     where: { es: "Dónde", en: "Where" },

@@ -770,3 +770,67 @@ async def test_team_tab_lists_builtin_members_but_not_other_tenants_agents(
     names = {m["name"] for m in body["members"]}
     assert "Built-in QA" in names
     assert "Ajeno" not in names
+
+
+# ---------------------------------------------------------------------------
+# Revisión adversarial (intento 2): un estado OAuth transitorio no se cachea y «Conectar»
+# invalida el Resumen.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_vault_unavailable_payload_is_not_cached_in_redis(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    from api_server.auth.deps import get_redis
+    from api_server.mcp import oauth_probe
+    from api_server.routers.mcp import get_vault_resolver
+
+    oauth_probe.clear_oauth_probe_cache()
+    a = (await _seed(migrations_pg_dsn))["a"]
+    await _bust_overview_cache()
+    configured_app.dependency_overrides[get_vault_resolver] = _SealedVault
+    try:
+        body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    finally:
+        configured_app.dependency_overrides.pop(get_vault_resolver, None)
+    assert "vault_unavailable" in _by_kind(body)
+    key = f"dashboard:project:{a['tenant']}:{a['project']}"
+    assert await get_redis().get(key) is None, "un Vault sellado es transitorio: no dura 30 s"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_project_oauth_state_drops_the_overview_and_the_probe(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    from api_server.auth.deps import get_redis
+    from api_server.mcp import oauth_probe
+    from api_server.routers.mcp import get_vault_resolver
+    from api_server.routers.project_overview import invalidate_project_oauth_state
+    from shared_mcp import StaticVaultResolver, oauth_vault_path
+
+    oauth_probe.clear_oauth_probe_cache()
+    seeded = await _seed(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    await _bust_overview_cache()
+    data: dict[str, dict[str, str]] = {}
+    configured_app.dependency_overrides[get_vault_resolver] = lambda: StaticVaultResolver(data)
+    try:
+        token = await _token(a["user"], a["tenant"])
+        before = await _overview(configured_app, a["project"], token)
+        assert "mcp_not_connected" in _by_kind(before)
+        key_a = f"dashboard:project:{a['tenant']}:{a['project']}"
+        assert await get_redis().get(key_a) is not None
+        # «Conectar» termina: aparece el token y se invalida ESE proyecto.
+        path = oauth_vault_path(
+            tenant_id=str(a["tenant"]), project_id=str(a["project"]), server_name="atlassian"
+        )
+        data[path] = {"oauth_token": json.dumps({"access_token": "x", "token_type": "Bearer"})}
+        # Una clave de OTRO proyecto/tenant no se toca.
+        other_key = f"dashboard:project:{b['tenant']}:{b['project']}"
+        await get_redis().setex(other_key, 30, "{}")
+        await invalidate_project_oauth_state(a["tenant"], a["project"], "atlassian")
+        assert await get_redis().get(key_a) is None
+        assert await get_redis().get(other_key) is not None
+        after = await _overview(configured_app, a["project"], token)
+        assert "mcp_not_connected" not in _by_kind(after)
+    finally:
+        configured_app.dependency_overrides.pop(get_vault_resolver, None)

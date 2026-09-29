@@ -11,11 +11,12 @@ reexporta, así que renombrarlo aquí sería un cambio de API encubierto.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal
@@ -29,6 +30,7 @@ from api_server.db.domain import (
     TeamMember,
     Tool,
 )
+from api_server.db.domain.executions import Execution
 from api_server.db.knowledge import AgentKnowledgeBase
 from api_server.db.marketplace import MarketplaceListing
 from api_server.routers._helpers import get_writable_or_404
@@ -88,6 +90,34 @@ async def _teams_by_agent(
     for agent_id, team_id, team_name in rows.all():
         out.setdefault(agent_id, []).append((team_id, team_name))
     return out
+
+
+#: Ventana del «última actividad» del listado. `executions` es la tabla más grande y
+#: está particionada por `created_at` (ADR 0151): acotar por fecha deja que Postgres
+#: pode particiones en vez de recorrerlas todas. Un agente sin runs en la ventana
+#: sale sin fecha, que es lo honesto («sin actividad reciente»).
+LAST_ACTIVITY_WINDOW: Final = timedelta(days=90)
+
+
+async def _last_activity_by_agent(
+    session: AsyncSession, tenant_id: UUID, agent_ids: list[UUID]
+) -> dict[UUID, datetime]:
+    """`{agent_id: max(executions.created_at)}` en UNA consulta agrupada, con
+    `tenant_id` (además de RLS: un built-in lo comparten todos los tenants, pero
+    sólo cuentan los runs del propio) y la ventana `LAST_ACTIVITY_WINDOW`."""
+    if not agent_ids:
+        return {}
+    since = datetime.now(tz=UTC) - LAST_ACTIVITY_WINDOW
+    rows = await session.execute(
+        select(Execution.agent_id, func.max(Execution.created_at))
+        .where(
+            Execution.tenant_id == tenant_id,
+            Execution.agent_id.in_(agent_ids),
+            Execution.created_at >= since,
+        )
+        .group_by(Execution.agent_id)
+    )
+    return {aid: last for aid, last in rows.all() if aid is not None}
 
 
 async def _merge_agent_capabilities(

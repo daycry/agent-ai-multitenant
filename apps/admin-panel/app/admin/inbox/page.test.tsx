@@ -182,6 +182,57 @@ describe("bandeja humana unificada", () => {
   });
 });
 
+describe("bandeja humana: la pestaña por defecto se decide UNA vez", () => {
+  it("un cambio posterior de contadores no cambia de pestaña ni remonta la bandeja", async () => {
+    routes({ "/approvals": [APPROVAL], "/notifications/logs": NOTIFS(0) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <InboxPage />
+      </QueryClientProvider>,
+    );
+    const card = await screen.findByTestId("approval-card-ap1");
+    const tablist = screen.getByTestId("inbox-hub-tabs");
+    const box = card.querySelector("textarea") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "mi motivo" } });
+    expect(box.value).toBe("mi motivo");
+    expect(screen.getByTestId("inbox-tab-approvals").getAttribute("aria-selected")).toBe("true");
+
+    // Llega una tarea asignada y la solicitud desaparece: el default calculado
+    // «ahora» sería Asignadas, pero la elección ya está tomada.
+    routes({
+      "/approvals": [],
+      "/inbox/assignments": [{ assignment_id: "a1", task_id: "t9" }],
+      "/notifications/logs": NOTIFS(0),
+    });
+    await client.invalidateQueries();
+    await waitFor(() => expect(count("assigned")).toBe("1"));
+    expect(screen.getByTestId("inbox-hub-tabs")).toBe(tablist);
+    expect(screen.getByTestId("inbox-tab-approvals").getAttribute("aria-selected")).toBe("true");
+    expect(card.isConnected).toBe(false); // la solicitud resuelta se va; el árbol no se remonta
+  });
+
+  it("la elección por defecto llega una sola vez, cuando cargan los contadores relevantes", async () => {
+    routes({
+      "/approvals": [],
+      "/inbox/assignments": [{ assignment_id: "a1", task_id: "t9" }],
+      "/notifications/logs": NOTIFS(0),
+    });
+    mount();
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-tab-assigned").getAttribute("aria-selected")).toBe("true"),
+    );
+  });
+
+  it("si el usuario ya eligió pestaña, los contadores que cargan después no la cambian", async () => {
+    routes({ "/approvals": [], "/notifications/logs": NOTIFS(0) });
+    mount();
+    fireEvent.click(screen.getByTestId("inbox-tab-reviews"));
+    await waitFor(() => expect(count("approvals")).toBe("0"));
+    expect(screen.getByTestId("inbox-tab-reviews").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
 describe("bandeja humana: carga y error no son «nada pendiente»", () => {
   function failing(failPaths: string[], data: Record<string, unknown> = {}) {
     apiFetchMock.mockImplementation((path: string) => {

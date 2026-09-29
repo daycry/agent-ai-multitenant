@@ -55,6 +55,10 @@ describe("dictionary — invariantes", () => {
       "projectCapabilities.tabSkills",
       // `task_ui_30` — «{count} tool(s)» es la misma palabra en los dos idiomas (ya la usa el
       // catálogo de tools); el patrón de recurso la repite en el contador de la cabecera.
+      "tools.tabTools",
+      "tools.tabSkills",
+      "tools.countSkillsOne",
+      "tools.countSkillsMany",
       "resource.countToolsOne",
       "resource.countToolsMany",
       "nav.dashboard",

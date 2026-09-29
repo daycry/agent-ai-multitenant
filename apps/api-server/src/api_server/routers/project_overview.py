@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
 from api_server.dashboard.project import build_project_overview
-from api_server.mcp.oauth_probe import oauth_connected_probe
+from api_server.mcp.oauth_probe import invalidate_oauth_probe, oauth_connected_probe
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.dashboard import (
     DASHBOARD_CACHE_TTL_SECONDS,
@@ -36,6 +36,25 @@ _SPEND_FORBIDDEN: dict[str, Any] = {"available": False, "reason": "forbidden"}
 #: DESPUÉS de la caché, así que se guarda el payload completo.
 OVERVIEW_CACHE_TTL_SECONDS = DASHBOARD_CACHE_TTL_SECONDS
 OVERVIEW_CACHE_PREFIX = "dashboard:project:"
+#: Aviso de un estado TRANSITORIO (Vault sellado o caído): un payload que lo lleva no se
+#: guarda en Redis, o el aviso duraría el TTL entero después de que Vault vuelva.
+_TRANSIENT_WARNING_KINDS = frozenset({"vault_unavailable"})
+
+
+async def invalidate_project_oauth_state(
+    tenant_id: UUID, project_id: UUID, server_name: str
+) -> None:
+    """«Conectar» o desconectar un servidor OAuth cambió su estado: olvida la sonda de
+    ese (tenant, proyecto, servidor) y el Resumen cacheado del proyecto, para que
+    Capacidades y Resumen lo reflejen ya y no 30 s después. Best-effort: sin Redis no
+    hay caché que invalidar."""
+    invalidate_oauth_probe(tenant_id, project_id, server_name)
+    try:
+        from api_server.auth.deps import get_redis
+
+        await get_redis().delete(f"{OVERVIEW_CACHE_PREFIX}{tenant_id}:{project_id}")
+    except Exception:
+        return
 
 
 @router.get("/{project_id}/overview")
@@ -60,7 +79,8 @@ async def project_overview(
         )
         if payload is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-        await _store(key, payload, OVERVIEW_CACHE_TTL_SECONDS)
+        if not any(w.get("kind") in _TRANSIENT_WARNING_KINDS for w in payload["warnings"]):
+            await _store(key, payload, OVERVIEW_CACHE_TTL_SECONDS)
     if not is_admin:
         payload = dict(payload)
         payload["spend"] = dict(_SPEND_FORBIDDEN)

@@ -11,6 +11,8 @@ export interface Agent {
   is_template: boolean;
   // ADR 0071: equipos a los que pertenece el agente (badge + filtros).
   teams: { id: string; name: string }[];
+  // `task_ui_30`: fecha del último run (ventana reciente); null = sin runs.
+  last_activity_at?: string | null;
   // Bilingual: the seed stores prompts under model_config.system_prompts.{es,en}.
   // The API exposes it as `model_config` (Pydantic alias of `llm_config`).
   model_config?: {

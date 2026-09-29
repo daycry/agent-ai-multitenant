@@ -47,6 +47,7 @@ from api_server.mcp_oauth_flow import (
 )
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.mcp import get_vault_resolver
+from api_server.routers.project_overview import invalidate_project_oauth_state
 
 # `sso.common`, no `sso` a secas: al partir el router en paquete (prod-16
 # `task_prod16_10`) esta pieza compartida se quedó donde le toca — el módulo sin
@@ -144,6 +145,14 @@ async def _enqueue_import_after_connect(tenant_id: str, project_id: str, server_
     )
 
 
+async def _on_oauth_connected(tenant_id: str, project_id: str, server_name: str) -> None:
+    """Hook de «Conectar» completado: primero el estado visible (sonda + Resumen), luego el
+    import diferido. La invalidación va antes y aparte: un broker caído no puede dejar a
+    Capacidades diciendo «sin conectar» cuando el token ya está en Vault."""
+    await invalidate_project_oauth_state(UUID(tenant_id), UUID(project_id), server_name)
+    await _enqueue_import_after_connect(tenant_id, project_id, server_name)
+
+
 @router.get("/callback")
 async def oauth_callback(
     project_id: UUID,
@@ -182,7 +191,7 @@ async def oauth_callback(
                 http_client=client,
                 # ADR 0166 D5: «Conectar» completado es el disparador del import
                 # automático de un servidor OAuth (el guardado nunca lo fue).
-                on_connected=_enqueue_import_after_connect,
+                on_connected=_on_oauth_connected,
             )
     except McpOAuthError as exc:
         return RedirectResponse(

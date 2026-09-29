@@ -48,7 +48,7 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
-from api_server.routers.agents.common import _teams_by_agent
+from api_server.routers.agents.common import _last_activity_by_agent, _teams_by_agent
 from api_server.schemas.agents import (
     AgentCreateRequest,
     AgentProviderOptionsResponse,
@@ -72,7 +72,7 @@ async def list_agents(
     agent_type: str | None = Query(default=None, description="Filter by agent_type (ai|human)"),
     limit: int = limit_query(),
     offset: int = offset_query(),
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[AgentResponse]:
     """List agents visible to the caller.
@@ -100,8 +100,13 @@ async def list_agents(
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     agents = list(result.scalars().all())
-    teams_by_agent = await _teams_by_agent(session, [a.id for a in agents])
-    return [to_agent_response(a, teams_by_agent.get(a.id, [])) for a in agents]
+    agent_ids = [a.id for a in agents]
+    teams_by_agent = await _teams_by_agent(session, agent_ids)
+    # `task_ui_30`: «última actividad» de cada agente, en una sola consulta agrupada.
+    last_by_agent = await _last_activity_by_agent(session, require_tenant_id(principal), agent_ids)
+    return [
+        to_agent_response(a, teams_by_agent.get(a.id, []), last_by_agent.get(a.id)) for a in agents
+    ]
 
 
 # ---------------------------------------------------------------------------

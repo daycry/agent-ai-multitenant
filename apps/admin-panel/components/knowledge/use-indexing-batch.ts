@@ -3,23 +3,24 @@
 /**
  * Sondeo del lote de documentos que acaba de subir el asistente (`task_ui_21`).
  *
- * Pide `GET …/documents/{id}` sólo de los ids del lote que aún no son terminales
- * (no la página entera del listado, que se queda corta con lotes grandes). Acaba
- * cuando todos son terminales — `indexed_empty` incluido —, cuando un documento
- * responde 404 (borrado: terminal, `null`), cuando el diálogo se cierra
+ * UNA petición por ciclo, `GET …/documents?ids=…`, con sólo los ids del lote que
+ * aún no son terminales (no la página entera del listado). Acaba cuando todos son
+ * terminales — `indexed_empty` incluido —, cuando un id deja de volver en la
+ * respuesta (borrado: terminal, `null`), cuando el diálogo se cierra
  * (`enabled` = false) o al pasar `maxMs`, con `timedOut` para avisar de que sigue
  * indexando en segundo plano.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 import { isTerminal, type KbDocument } from "./kb-types";
 
 export const POLL_MS = 1500;
 export const MAX_POLL_MS = 5 * 60 * 1000;
-const CHUNK = 10;
+/** Tope del filtro `ids` del backend (= tamaño máximo de un lote de subida). */
+const MAX_IDS = 200;
 
 export interface UseIndexingBatchOptions {
   kbId: string | null;
@@ -52,13 +53,25 @@ export function useIndexingBatch({
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (startedAt.current === null) startedAt.current = Date.now();
 
-    async function fetchOne(id: string): Promise<[string, KbDocument | null | undefined]> {
-      try {
-        return [id, await apiFetch<KbDocument>(`/knowledge-bases/${kbId}/documents/${id}`)];
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) return [id, null];
-        return [id, undefined]; // error transitorio: se reintenta en el siguiente ciclo
+    /** UNA petición con todos los pendientes (`?ids=`); lo que no vuelve = borrado. */
+    async function fetchPending(
+      pending: string[],
+    ): Promise<Record<string, KbDocument | null> | undefined> {
+      const fresh: Record<string, KbDocument | null> = {};
+      for (let i = 0; i < pending.length; i += MAX_IDS) {
+        const slice = pending.slice(i, i + MAX_IDS);
+        const qs = slice.map((id) => `ids=${encodeURIComponent(id)}`).join("&");
+        try {
+          const rows = await apiFetch<KbDocument[]>(
+            `/knowledge-bases/${kbId}/documents?${qs}&limit=${MAX_IDS}`,
+          );
+          const byId = new Map(rows.map((d) => [d.id, d]));
+          for (const id of slice) fresh[id] = byId.get(id) ?? null;
+        } catch {
+          // error transitorio: se reintenta en el siguiente ciclo
+        }
       }
+      return fresh;
     }
 
     async function tick() {
@@ -71,11 +84,7 @@ export function useIndexingBatch({
         setTimedOut(true);
         return;
       }
-      const fresh: Record<string, KbDocument | null> = {};
-      for (let i = 0; i < pending.length; i += CHUNK) {
-        const entries = await Promise.all(pending.slice(i, i + CHUNK).map(fetchOne));
-        for (const [id, value] of entries) if (value !== undefined) fresh[id] = value;
-      }
+      const fresh = await fetchPending(pending);
       if (cancelled) return;
       setDocs((prev) => ({ ...prev, ...fresh }));
       timer = setTimeout(() => void tick(), pollMs);

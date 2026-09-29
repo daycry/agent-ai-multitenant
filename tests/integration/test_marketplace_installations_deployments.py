@@ -35,6 +35,7 @@ async def test_installations_list_names_the_projects_they_are_deployed_in(
         assert before.status_code == 200, before.text
         assert before.json()[0]["deployments"] == []
 
+        deployment_ids: list[str] = []
         for project in ("project_a", "project_a2"):
             created = await client.post(
                 f"/marketplace/installations/{installation}/deployments",
@@ -42,6 +43,7 @@ async def test_installations_list_names_the_projects_they_are_deployed_in(
                 headers=headers,
             )
             assert created.status_code == 201, created.text
+            deployment_ids.append(created.json()["deployment"]["id"])
         retired_id = created.json()["deployment"]["id"]
         await client.post(f"/marketplace/deployments/{retired_id}/retire", headers=headers)
 
@@ -50,7 +52,12 @@ async def test_installations_list_names_the_projects_they_are_deployed_in(
     assert len(body) == 1
     assert body[0]["listing_name"] == "status-checker"
     assert body[0]["deployments"] == [
-        {"project_id": str(ids["project_a"]), "project_name": "API A1", "status": "active"}
+        {
+            "id": deployment_ids[0],
+            "project_id": str(ids["project_a"]),
+            "project_name": "API A1",
+            "status": "active",
+        }
     ]
 
 

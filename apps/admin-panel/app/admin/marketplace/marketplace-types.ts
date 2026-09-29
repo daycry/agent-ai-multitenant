@@ -27,6 +27,8 @@ export interface MarketplaceListing {
 
 /** `GET /marketplace/installations` — espeja `MarketplaceInstallationResponse`. */
 export interface InstallationDeployment {
+  /** Id del despliegue (un proyecto puede tener uno `disabled` y otro `active`). */
+  id: string;
   project_id: string;
   project_name: string;
   status: string;

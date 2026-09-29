@@ -103,7 +103,11 @@ export default function ProjectKnowledgeBasesPage() {
         </div>
       )}
 
-      <ActivateExistingKb projectId={projectId} grantedKbIds={new Set(kbs.map((k) => k.id))} />
+      <ActivateExistingKb
+        projectId={projectId}
+        grantedKbIds={new Set(kbs.map((k) => k.id))}
+        grantedReady={kbsQuery.isSuccess}
+      />
 
       <AddKnowledgeWizard
         key={wizardKey}

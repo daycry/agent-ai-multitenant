@@ -21,7 +21,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -129,6 +139,10 @@ async def _verify_project_in_tenant(session: AsyncSession, project_id: UUID) -> 
     )
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+
+
+#: Tope del filtro `ids` del listado de documentos (tamaño máximo de un lote de subida).
+MAX_DOCUMENT_IDS_FILTER = 200
 
 
 def _storage_key(*, tenant_id: UUID, kb_id: UUID, document_id: UUID, filename: str) -> str:
@@ -745,10 +759,15 @@ async def list_documents(
     kb_id: UUID,
     limit: int = limit_query(),
     offset: int = offset_query(),
-    _: AuthPrincipal = Depends(require_tenant_member),
+    ids: list[UUID] | None = Query(default=None, max_length=MAX_DOCUMENT_IDS_FILTER),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[DocumentResponse]:
     """Los documentos de la KB, más reciente primero, PAGINADO (prod-13, api-6).
+
+    `ids` (opcional, aditivo, ≤ 200): devuelve sólo esos documentos de ESTA base;
+    el sondeo del asistente de subida lo usa para una petición por ciclo en vez de
+    una por documento. Un id ausente en la respuesta = borrado o de otra base.
 
     Una KB de manuales tiene miles de documentos y este listado los devolvía
     todos. El desempate por `id` da orden total: sin él, dos documentos subidos en
@@ -757,9 +776,15 @@ async def list_documents(
     await _load_kb(session, kb_id)
     stmt = (
         select(Document)
-        .where(Document.kb_id == kb_id, Document.deleted_at.is_(None))
+        .where(
+            Document.kb_id == kb_id,
+            Document.tenant_id == require_tenant_id(principal),
+            Document.deleted_at.is_(None),
+        )
         .order_by(Document.created_at.desc(), Document.id)
     )
+    if ids is not None:
+        stmt = stmt.where(Document.id.in_(ids))
     result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))
     return [to_document_response(d) for d in result.scalars().all()]
 

@@ -59,11 +59,11 @@ function wire(documentSequence: Record<string, unknown>[][]) {
       return Promise.resolve({ ...KB, id: "kb-new", name: (init.body as { name: string }).name });
     if (path.endsWith("/projects") && init?.method === "POST") return Promise.resolve({});
     if (path.endsWith("/reindex")) return Promise.resolve(doc("pending"));
-    // El sondeo pide cada documento del lote por su id, no la página del listado.
-    if (/\/documents\/doc-1$/.test(path)) {
+    // El sondeo pide el lote con UNA petición `?ids=`, no la página del listado.
+    if (/\/documents\?.*ids=doc-1/.test(path)) {
       const seq = documentSequence[Math.min(call, documentSequence.length - 1)];
       call += 1;
-      return Promise.resolve(seq[0]);
+      return Promise.resolve([seq[0]]);
     }
     return Promise.resolve([]);
   });
@@ -198,11 +198,11 @@ describe("AddKnowledgeWizard", () => {
     await waitFor(() => expect(row.getAttribute("data-status")).toBe("indexed_empty"));
     expect(row.textContent).toContain("Indexado sin contenido");
     const polls = () =>
-      apiFetchMock.mock.calls.filter(([p]) => String(p).endsWith("/documents/doc-1")).length;
+      apiFetchMock.mock.calls.filter(([p]) => /\/documents\?.*ids=doc-1/.test(String(p))).length;
     const before = polls();
     await new Promise((r) => setTimeout(r, 1800));
     expect(polls()).toBe(before);
-    // Nunca pide la página entera del listado.
+    // Nunca pide la página entera del listado (siempre con `ids`).
     expect(
       apiFetchMock.mock.calls.some(([p]) => String(p).endsWith("/knowledge-bases/kb-1/documents")),
     ).toBe(false);

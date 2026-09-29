@@ -116,14 +116,17 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
   // list and POST upload). Using one regex avoids order-of-registration
   // bugs that the previous two split routes had.
   await page.route(
-    new RegExp(`http://localhost:8001/knowledge-bases/${KB_ID}/documents$`),
+    new RegExp(`http://localhost:8001/knowledge-bases/${KB_ID}/documents(\\?.*)?$`),
     (route) => {
       const method = route.request().method();
       if (method === "GET") {
+        // Filtro aditivo `?ids=` (sondeo del asistente de subida).
+        const wanted = new URL(route.request().url()).searchParams.getAll("ids");
+        const rows = wanted.length ? documents.filter((d) => wanted.includes(d.id)) : documents;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify(documents),
+          body: JSON.stringify(rows),
         });
       }
       if (method === "POST") {

@@ -452,6 +452,7 @@ async def _deployments_by_installation(
     found = await session.execute(
         select(
             MarketplaceDeployment.installation_id,
+            MarketplaceDeployment.id,
             MarketplaceDeployment.project_id,
             Project.name,
             MarketplaceDeployment.status,
@@ -467,10 +468,13 @@ async def _deployments_by_installation(
         .order_by(Project.name, MarketplaceDeployment.project_id)
     )
     grouped: dict[UUID, list[InstallationDeploymentRef]] = {}
-    for installation_id, project_id, project_name, dep_status in found.all():
+    for installation_id, deployment_id, project_id, project_name, dep_status in found.all():
         grouped.setdefault(installation_id, []).append(
             InstallationDeploymentRef(
-                project_id=project_id, project_name=project_name, status=dep_status
+                id=deployment_id,
+                project_id=project_id,
+                project_name=project_name,
+                status=dep_status,
             )
         )
     return grouped

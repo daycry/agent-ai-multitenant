@@ -77,7 +77,9 @@ export default function BoardPortfolioPage() {
   const [owner, setOwner] = useState("");
 
   const projectsQuery = useQuery({
-    queryKey: ["projects", "tenant"],
+    // Otra FORMA de dato (`{items, truncated}`): no comparte clave con los listados
+    // que guardan un array bajo `["projects","tenant"]`.
+    queryKey: ["projects", "tenant", "all-pages"],
     queryFn: () => fetchAllPages<Project>("/projects"),
     refetchOnWindowFocus: false,
   });

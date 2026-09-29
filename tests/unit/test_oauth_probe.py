@@ -108,3 +108,23 @@ async def test_probe_many_runs_in_parallel() -> None:
     assert result == dict.fromkeys(names, True)
     assert time.monotonic() - started < 0.9, "en serie serían 1.2 s"
     assert asyncio.get_running_loop() is not None
+
+
+async def test_invalidate_drops_only_that_server_from_the_cache() -> None:
+    """«Conectar»/desconectar cambian el estado: la caché de 30 s no puede seguir
+    diciendo lo de antes (revisión adversarial, intento 2)."""
+    data = {_path("a"): _token(), _path("b"): _token()}
+    resolver = StaticVaultResolver(data)
+    probe = oauth_probe.oauth_connected_probe(resolver, TENANT, PROJECT)
+    assert await probe("a") is True
+    assert await probe("b") is True
+    del data[_path("a")]
+    del data[_path("b")]
+    assert await probe("a") is True, "sin invalidar, la caché sigue"
+    oauth_probe.invalidate_oauth_probe(TENANT, PROJECT, "a")
+    assert await probe("a") is False
+    assert await probe("b") is True, "otro servidor: su entrada no se toca"
+    # Otro proyecto u otro tenant tampoco.
+    oauth_probe.invalidate_oauth_probe(uuid4(), PROJECT, "b")
+    oauth_probe.invalidate_oauth_probe(TENANT, uuid4(), "b")
+    assert await probe("b") is True

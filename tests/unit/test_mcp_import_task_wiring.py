@@ -18,7 +18,9 @@ from __future__ import annotations
 import inspect
 import re
 from pathlib import Path
+from uuid import uuid4
 
+import pytest
 from api_server import celery_client
 from api_server.marketplace import deploy as deploy_module
 from api_server.routers import mcp_oauth as oauth_router
@@ -64,7 +66,7 @@ def test_la_firma_del_productor_cubre_lo_que_mandan_los_dos_disparadores() -> No
 
 def test_el_callback_de_conectar_engancha_el_import() -> None:
     src = inspect.getsource(oauth_router.oauth_callback)
-    assert "on_connected=_enqueue_import_after_connect" in src
+    assert "on_connected=_on_oauth_connected" in src
 
 
 def test_el_despliegue_encola_tras_el_commit_y_no_en_linea() -> None:
@@ -75,3 +77,21 @@ def test_el_despliegue_encola_tras_el_commit_y_no_en_linea() -> None:
     body = inspect.getsource(deploy_module._materialize_mcp_server)
     assert "tras importarlas, vuelve a desplegar" not in body
     assert "_queue_import(" in body
+
+
+@pytest.mark.asyncio
+async def test_conectar_invalida_la_sonda_y_el_resumen_antes_de_encolar(monkeypatch) -> None:
+    """El estado OAuth cambió: caché de la sonda y Resumen en Redis se invalidan."""
+    tenant, project = uuid4(), uuid4()
+    calls: list[str] = []
+
+    async def fake_invalidate(tenant_id, project_id, server_name) -> None:
+        calls.append(f"invalidate:{tenant_id}:{project_id}:{server_name}")
+
+    async def fake_enqueue(tenant_id, project_id, server_name) -> None:
+        calls.append(f"enqueue:{server_name}")
+
+    monkeypatch.setattr(oauth_router, "invalidate_project_oauth_state", fake_invalidate)
+    monkeypatch.setattr(oauth_router, "_enqueue_import_after_connect", fake_enqueue)
+    await oauth_router._on_oauth_connected(str(tenant), str(project), "atlassian")
+    assert calls == [f"invalidate:{tenant}:{project}:atlassian", "enqueue:atlassian"]

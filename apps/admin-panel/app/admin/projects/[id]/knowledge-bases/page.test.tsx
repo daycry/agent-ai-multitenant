@@ -127,6 +127,26 @@ describe("pestaña Conocimiento del proyecto", () => {
     );
   });
 
+  it("no ofrece candidatos mientras el listado del proyecto carga ni si falla", async () => {
+    const base = apiFetchMock.getMockImplementation()!;
+    for (const behaviour of ["pending", "error"] as const) {
+      apiFetchMock.mockImplementation((path: string, init?: { method?: string }) => {
+        if (path === `/projects/${PROJECT_ID}/knowledge-bases`)
+          return behaviour === "pending"
+            ? new Promise(() => {})
+            : Promise.reject(new Error("boom"));
+        return base(path, init);
+      });
+      mount();
+      await waitFor(() => expect(paths().includes("/knowledge-bases")).toBe(true));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(screen.queryByTestId("kb-activate-section")).toBeNull();
+      expect(screen.queryByTestId("kb-activate-kb-1")).toBeNull();
+      cleanup();
+      apiFetchMock.mockClear();
+    }
+  });
+
   it("los términos de ingesta y el error crudo sólo viven en un detalle plegado", async () => {
     mount();
     fireEvent.click(await screen.findByTestId("kb-toggle-kb-1"));

@@ -25,10 +25,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Agent, HumanWorkSession, Project, Team
+from api_server.db.domain import Agent, AgentScope, HumanWorkSession, Project, Team
 from api_server.db.memory import MemoryEntry
 from api_server.db.models import User
 from api_server.memorizer.recall import fuse_rankings
@@ -68,7 +68,11 @@ async def resolve_names(
     if agent_ids:
         res = await session.execute(
             select(Agent.id, Agent.name).where(
-                Agent.tenant_id == tenant_id, Agent.id.in_(agent_ids)
+                # Mismo criterio de visibilidad que `dashboard/project_team.py`: los del
+                # tenant y los built-in de plataforma (escriben memorias bajo el tenant
+                # de plataforma); nunca los de otro tenant.
+                or_(Agent.tenant_id == tenant_id, Agent.scope == AgentScope.GLOBAL_BUILTIN.value),
+                Agent.id.in_(agent_ids),
             )
         )
         names.agents = {row[0]: row[1] for row in res.all()}

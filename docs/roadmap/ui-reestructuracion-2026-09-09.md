@@ -319,6 +319,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       pestaña Costes (gasto por plan, agente y modelo contra presupuesto; pausa por presupuesto).
       **Test**: vitest de las tres pestañas; e2e de filtrar runs por plan.
       **Coste**: 2,5 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /projects/{id}/team`
+    (miembro) y `/costs` (sólo `tenant_admin`), filtro `project_id` en `/runs` y en `tenant_stats`, y las tres
+    pestañas. El hueco de rol tiene una sola definición (`dashboard/project_team.role_gaps`), compartida con el
+    aviso del Resumen. **Queda una incoherencia registrada** (revisión, intento 2): Equipo enseña a los miembros
+    built-in, pero `team_role_agents` (el dispatch del ADR 0091) no los cuenta, así que un built-in miembro no tapa
+    su hueco. Cambiarlo cambia a quién asigna el dispatch, así que **decide el operador**. Gasto humano: no se
+    desglosa por proyecto (`compute_human_cost_usd` va por tenant o plan), y Costes enseña sólo el de IA.
 
 ## Ola 3 — Capacidades y Conocimiento (P1 · ~5 d)
 
@@ -332,6 +339,10 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Test**: integración del endpoint; vitest de las tres pestañas y de la procedencia; e2e de desplegar
       desde el marketplace y verlo aparecer en Capacidades.
       **Coste**: 2,5 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /projects/{id}/capabilities`
+    ampliado de forma aditiva (procedencia, OAuth con tres estados, tools importadas y egress) y la pestaña
+    `/capabilities` con MCP · Tools · Skills. «Capacidades disponibles» se funde en ella. Lo no persistido está
+    en §«Revisión adversarial de las olas 2 y 3» (gap 17).
 
 ### `task_ui_21` — Conocimiento como flujo guiado
 
@@ -343,6 +354,12 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       «documento»; los ids y los términos de ingesta sólo en el detalle de un fallo.
       **Test**: vitest del asistente (tres pasos, fallo con reintento); e2e de añadir conocimiento a un proyecto.
       **Coste**: 2,5 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta en su mitad URL.** Asistente de tres pasos (elegir o crear
+    base → subir ficheros o pegar texto → indexado en vivo con reintento), concesión implícita, «activar una base
+    existente» sin subir (incluidas las built-in), y tarjetas con cifras exactas calculadas en SQL. **La URL no
+    existe en el dominio** y añadirla abre SSRF: la decide el operador en el
+    [ADR 0170](../05-architecture-decisions/0170-ingesta-de-conocimiento-por-url.md) (`proposed`). Si elige A, este
+    ADR la retira con `rejects:`; si elige B, se abre casilla nueva.
 
 ## Ola 4 — Recursos del tenant con patrón común (P1 · ~5 d)
 
@@ -353,6 +370,11 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       actividad) y panel lateral de detalle; se aplica a Agentes, Equipos, Agentes humanos y Skills y tools.
       **Test**: vitest del patrón y de cada pantalla migrada.
       **Coste**: 1,5 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `components/resource/`
+    (cabecera, barra, tarjeta con campos fijos y panel lateral), aplicado a Agentes, Equipos, Agentes humanos y a
+    Skills y tools, que tiene dos pestañas. Los campos del patrón salen sólo donde el dominio los tiene: «última
+    actividad» sólo en Agentes, calculada de `executions`. En Equipos, Agentes humanos y Tools no existe ese dato
+    y no se inventa. «Uso» es el número de equipos del agente y de miembros del equipo; el resto no lo guarda.
 
 ### `task_ui_31` — Memorias por ámbito con procedencia
 
@@ -363,6 +385,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       el dominio no guarda la procedencia, esta casilla propone la migración en un ADR antes de inventarla.
       **Test**: integración del endpoint (cross-tenant y ámbito privado); vitest de las pestañas y la ficha.
       **Coste**: 2 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /memories` con
+    procedencia resuelta en lote y filtros nuevos, más `/memories/counts` y `/memories/search` (híbrido), todos con
+    la regla de privadas del listado. **«Cuántas veces se recuperó» sale «desconocido»** porque la columna
+    `recall_count` la crea `task_mem_02` del plan
+    [`memoria-agentes-2026-09-09`](memoria-agentes-2026-09-09.md), por la regla de reparto de ese plan («este
+    entrega el dato y la API; el de UI, el sitio donde se ve»). La API ya expone el campo a `null`. «Categoría»
+    es `type`: el `kind` tipado es de `task_mem_04`.
 
 ### `task_ui_32` — Agentes por pestañas y marketplace con «dónde está desplegado»
 
@@ -372,6 +401,10 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       y «Desplegar en un proyecto» que lleva a Capacidades.
       **Test**: vitest de la ficha por pestañas y de Instaladas; e2e de la cola de revisión enlazada.
       **Coste**: 1,5 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** Ficha del agente en
+    cinco pestañas; marketplace en Catálogo · Instaladas · Publicar; `GET /marketplace/installations` con
+    `deployments` en una consulta. «Desplegar en un proyecto» navega a Capacidades del proyecto, porque el
+    despliegue vive allí: no hay acción de despliegue global.
 
 ## Ola 5 — Piel (P3 · opcional · ~3 d)
 
@@ -434,6 +467,32 @@ viven bajo el tenant de plataforma (lo encontró el implementador y es correcto)
 Minor nueva**: la pestaña Equipo ya enseña a los miembros built-in, pero `team_role_agents` (dispatch del
 ADR 0091) sigue sin contarlos, así que un built-in miembro no tapa su hueco de rol. Cambiar eso cambia a quién
 asigna el dispatch, así que se lleva al intento 2 en vez de tocarlo aquí.
+
+**Intento 2 (2026-09-29)** sobre `aa1cc4e8..e0aa4feb`: la ola 4 más las correcciones del intento 1, con las
+cuatro lentes y la tabla anterior traspasada. Las catorce correcciones del intento 1 se confirman una a una, cada
+una con su test. La lente C, sin hallazgos. Gaps nuevos:
+
+| #   | Grado     | Lente | Gap                                                                                                    | Tarea         | Estado                                                                                                                     |
+| --- | --------- | ----- | ------------------------------------------------------------------------------------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 20  | Important | D     | El sondeo del asistente hace una petición por documento cada 1,5 s                                     | ui_21         | en corrección: una petición con `ids`                                                                                      |
+| 21  | Important | B     | `["projects","tenant"]` guarda dos formas de dato y la pestaña Instaladas cae al error boundary        | ui_32         | en corrección: una clave por forma                                                                                         |
+| 22  | Important | B     | La pestaña por defecto de la bandeja se recalcula con el sondeo y remonta lo que se está escribiendo   | ui_03         | en corrección                                                                                                              |
+| 23  | Important | A     | «Skills y tools» se quedó sin la pestaña Skills, y `GET /skills` existe                                | ui_30         | en corrección                                                                                                              |
+| 24  | Minor     | A     | «Última actividad» no se pinta, y para Agentes el dato está en `executions`                            | ui_30         | en corrección                                                                                                              |
+| 25  | Minor     | B     | La caché de la sonda OAuth no se invalida al conectar, y el Resumen cachea `vault_unavailable`         | ui_20         | en corrección                                                                                                              |
+| 26  | Minor     | B     | Memorias: la cabecera cuenta todas y la lista corta en 50 sin aviso                                    | ui_31         | en corrección                                                                                                              |
+| 27  | Minor     | B     | Clave React duplicada con un despliegue activo y otro deshabilitado en el mismo proyecto               | ui_32         | en corrección                                                                                                              |
+| 28  | Minor     | B     | «Activar una base existente» ofrece candidatos antes de saber cuáles ya están concedidas               | ui_21         | en corrección                                                                                                              |
+| 29  | Minor     | B     | La procedencia de una memoria escrita por un agente built-in sale «desconocida»                        | ui_31         | en corrección                                                                                                              |
+| 30  | Minor     | D, A  | La migración 0150 no usa `CREATE INDEX CONCURRENTLY`, que pide `conventions.md`                        | ui_21         | en corrección                                                                                                              |
+| 31  | Minor     | D     | Memorias precarga `/similar` fila a fila, también en la búsqueda                                       | ui_31         | deuda aceptada: viene de antes del plan y su comentario ya la marcaba; pasarla a lote es trabajo del buscador de similares |
+| 32  | Minor     | A     | Las casillas de la ola 4 no tenían nota, y la dependencia `recall_count` sólo constaba en un docstring | ui_30, 31, 32 | corregido: notas en cada casilla                                                                                           |
+| 33  | Minor     | A     | El ADR 0170 remitía a una nota de `task_ui_21` que no existía                                          | ui_21         | corregido                                                                                                                  |
+| 34  | Minor     | A     | Built-in miembros del equipo que el dispatch no cuenta (el pendiente del intento 1)                    | ui_12         | **decisión del operador**, anotada en la casilla                                                                           |
+
+Descartado con evidencia de la lente B: las bases built-in salen con 0 documentos en el agregado, pero ya
+salían así antes del diff, porque la RLS de `documents` no tiene política de lectura built-in. No lo introduce
+esta ola.
 
 ## Tests humanos
 
