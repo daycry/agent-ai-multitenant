@@ -193,6 +193,9 @@ class ExecutionRequest:
             "agent_persona": self.agent_persona,
             "integrations": self.integrations,
             "agent_prompt_version": self.agent_prompt_version,
+            # `task_h00_02`: faltaba aquí aunque `from_dict` la leyera; sin ella, un
+            # payload serializado desde la dataclass perdía la identidad de la reclamación.
+            "claim_id": self.claim_id,
         }
 
     @classmethod

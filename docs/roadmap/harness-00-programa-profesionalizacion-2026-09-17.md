@@ -1,7 +1,7 @@
 ---
 plan_id: harness-00-programa-profesionalizacion-2026-09-17
 title: Programa de profesionalización del agent harness — coordinación, ADR y evidencia
-status: pending_approval
+status: approved
 blocking_plan: []
 started_at: null
 completed_at: null
@@ -87,7 +87,7 @@ harness-03 + harness-04 + harness-05
 
 #### `task_h00_01` — ADR 0168: garantías del harness y cambios de política
 
-- [ ] **Título**: redactar `docs/05-architecture-decisions/0168-garantias-del-agent-harness.md`
+- [x] **Título**: redactar `docs/05-architecture-decisions/0168-garantias-del-agent-harness.md`
       con las decisiones que los planes hijos necesitan y que hoy contradicen
       código o decisiones vigentes: (1) **memoria y KB pueden ser `REQUIRED`** — hoy
       «nunca rompen el run» (`__main__.py`); se decide si el default sigue siendo
@@ -103,10 +103,14 @@ harness-03 + harness-04 + harness-05
       El ADR actualiza CLAUDE.md en el mismo commit si cambia un principio.
       **Test**: `tests/docs/test_adr_precedence.py` (ya existe: valida `rejects:` y
       frontmatter). **Coste**: 1 d. **Requiere aprobación humana.**
+  - ✅ **Entregada el 2026-09-29.** ADR 0168 `accepted` bajo la delegación del
+    operador para los ADR de plataforma. Las dos decisiones que rozan producto (D1, D2)
+    se resuelven sin cambiar el default de ningún proyecto, así que no hizo falta parar
+    a preguntar. Añade D7: medir antes de construir checkpoints.
 
 #### `task_h00_02` — El `claim_id` viaja también por el serializador canónico
 
-- [ ] **Título**: `ExecutionRequest.as_dict()` emite `claim_id` (hoy lo omite aunque
+- [x] **Título**: `ExecutionRequest.as_dict()` emite `claim_id` (hoy lo omite aunque
       `from_dict` lo lea), y el orchestrator construye el payload con
       `ExecutionRequest(...).as_dict()` en vez de un dict a mano, para que no haya
       dos definiciones del contrato. Es la corrección más barata de la auditoría y
@@ -116,6 +120,11 @@ harness-03 + harness-04 + harness-05
       **Test**: `tests/unit/test_execution_request_roundtrip_all_fields.py`;
       ampliar `tests/unit/test_la_reclamacion_viaja_con_identidad.py` con el caso
       `as_dict`. **Coste**: 0,5 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo: de los 24 campos, `claim_id` era
+    el único que `as_dict` no emitía. El round-trip recorre `dataclasses.fields`, así
+    que el próximo campo olvidado también falla. La mitad «el orquestador construye el
+    payload con `as_dict()`» se deja a `task_h01_08`, que es donde se sustituye el dict
+    a mano por el envelope V1: hacerlo dos veces sería tocar el dispatch para nada.
 
 #### `task_h00_03` — Baseline ejecutable
 
