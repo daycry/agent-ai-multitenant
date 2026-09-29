@@ -100,8 +100,8 @@ describe("el shell elige la barra por ruta", () => {
     expect(screen.getByTestId("nav-project-overview").getAttribute("href")).toBe(
       `/admin/projects/${PROJECT_ID}`,
     );
-    expect(screen.getByTestId("nav-project-plans").getAttribute("href")).toBe(
-      `/admin/projects/${PROJECT_ID}/plans`,
+    expect(screen.getByTestId("nav-project-board").getAttribute("href")).toBe(
+      `/admin/projects/${PROJECT_ID}/board`,
     );
   });
 

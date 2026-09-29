@@ -115,7 +115,7 @@ test("opening the delivery form: submit is disabled until there is a deliverable
   page,
 }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   // Empty form -> nothing to deliver -> submit disabled.
@@ -128,7 +128,7 @@ test("opening the delivery form: submit is disabled until there is a deliverable
 test("submitting posts output + attachments + hours", async ({ page }) => {
   let captured: Record<string, unknown> | null = null;
   await setup(page, { onSubmit: (body) => (captured = body) });
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   await page
@@ -163,7 +163,7 @@ test("submitting posts output + attachments + hours", async ({ page }) => {
 
 test("an incomplete attachment is not counted as valid", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   // Add a URL row but leave it blank -> 0 valid -> still cannot submit.
@@ -180,7 +180,7 @@ test("an incomplete attachment is not counted as valid", async ({ page }) => {
 
 test("negative hours are rejected client-side", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   await page.getByTestId("submit-output-edit").fill("Trabajo hecho.");
@@ -192,7 +192,7 @@ test("negative hours are rejected client-side", async ({ page }) => {
 
 test("an attachment can be removed", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   await page.getByTestId("submit-add-file").click();

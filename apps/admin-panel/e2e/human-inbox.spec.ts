@@ -135,7 +135,7 @@ async function setup(
 
 test("the inbox lists the caller's own assignments with status + context", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId(`inbox-assignment-${PENDING.assignment_id}`)).toBeVisible();
   await expect(page.getByTestId(`inbox-assignment-${ACCEPTED.assignment_id}`)).toBeVisible();
@@ -147,7 +147,7 @@ test("the inbox lists the caller's own assignments with status + context", async
 test("a pending assignment offers accept + reject; accept transitions it", async ({ page }) => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await setup(page, { onAction: (path, body) => calls.push({ path, body }) });
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId(`inbox-accept-${PENDING.assignment_id}`)).toBeVisible();
   await expect(page.getByTestId(`inbox-reject-${PENDING.assignment_id}`)).toBeVisible();
@@ -162,7 +162,7 @@ test("a pending assignment offers accept + reject; accept transitions it", async
 
 test("reject requires a justification before confirming", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-reject-${PENDING.assignment_id}`).click();
   // The confirm button is disabled until a justification is typed.
@@ -174,7 +174,7 @@ test("reject requires a justification before confirming", async ({ page }) => {
 test("reject with a justification posts it and removes the row", async ({ page }) => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await setup(page, { onAction: (path, body) => calls.push({ path, body }) });
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-reject-${PENDING.assignment_id}`).click();
   await page.getByTestId("inbox-action-text-edit").fill("Fuera de mi área de competencia");
@@ -199,7 +199,7 @@ test("an accepted assignment can be marked complete", async ({ page }) => {
   // bandeja lleva a él y que la entrega viaja.
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await setup(page, { onAction: (path, body) => calls.push({ path, body }) });
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`)).toBeVisible();
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
@@ -218,7 +218,7 @@ test("an accepted assignment can be marked complete", async ({ page }) => {
 test("any assignment can be escalated to the admin", async ({ page }) => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await setup(page, { onAction: (path, body) => calls.push({ path, body }) });
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
 
   await page.getByTestId(`inbox-escalate-${PENDING.assignment_id}`).click();
   // Escalate's reason is optional — confirm is enabled with an empty field.
@@ -243,6 +243,6 @@ test("an empty inbox shows the empty state", async ({ page }) => {
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 
-  await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
+  await page.goto("/admin/inbox?tab=assigned", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("inbox-empty")).toBeVisible();
 });

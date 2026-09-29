@@ -17,6 +17,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "proj-1" }) }));
+
 vi.mock("@/lib/ws", () => ({
   useWebSocket: () => {},
   wsUrl: (p: string) => `ws://test${p}`,
@@ -29,7 +31,7 @@ vi.mock("@/components/tasks/task-detail-sheet", () => ({
     open ? <div data-testid="task-detail-open" /> : null,
 }));
 
-import BoardPage from "@/app/admin/board/page";
+import ProjectBoardPage from "@/app/admin/projects/[id]/board/page";
 
 const PLAN = {
   id: "plan-1",
@@ -99,7 +101,7 @@ function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <BoardPage />
+      <ProjectBoardPage />
     </QueryClientProvider>,
   );
 }
@@ -122,9 +124,7 @@ describe("Board gerencial (T11 + C2)", () => {
     await waitFor(() => expect(screen.getByTestId(`plan-card-${PLAN.id}`)).toBeTruthy());
     const card = screen.getByTestId(`plan-card-${PLAN.id}`);
     expect(card.textContent).toContain("Plan CI4");
-    // El nombre del proyecto es una etiqueta DE la tarjeta del plan, no la tarjeta.
-    expect(card.textContent).toContain("Proyecto Demo");
-    expect(apiFetchMock).toHaveBeenCalledWith("/plans?limit=100&offset=0");
+    expect(apiFetchMock).toHaveBeenCalledWith("/plans?project_id=proj-1&limit=100&offset=0");
   });
 
   it("a clean click on a task card opens the detail panel (C2)", async () => {

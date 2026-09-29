@@ -11,7 +11,9 @@ import { seedSession } from "./helpers/session";
  * plans. The board uses native HTML5 drag & drop (no extra dep).
  *
  * Scope of this spec:
- *   1. The nav item lands on /admin/board.
+ *   1. The nav item lands on /admin/board, that since task_ui_11 is the plans
+ *      PORTFOLIO (columna Proyecto, filtros, enlace al tablero del proyecto); the
+ *      double Kanban lives at /admin/projects/{id}/board.
  *   2. With no plans, the Plans section shows its empty state and the Tasks
  *      section says "no selection".
  *   3. The 8 status columns are present, in order, with a plan selected.
@@ -93,6 +95,10 @@ async function setupBoard(page: Page, opts: BoardOptions = {}): Promise<void> {
     if (route.request().method() !== "GET") return route.continue();
     return json(route, plans.length > 0 ? [PROJECT] : []);
   });
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return json(route, PROJECT);
+  });
   await page.route(apiRoute("/plans?*"), (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return json(route, plans);
@@ -109,7 +115,7 @@ async function setupBoard(page: Page, opts: BoardOptions = {}): Promise<void> {
   });
 }
 
-test("nav-tablero opens the board and shows empty state for tenants with no plans", async ({
+test("nav-tablero opens the portfolio and shows empty state for tenants with no plans", async ({
   page,
 }) => {
   await setupBoard(page, { plans: [] });
@@ -118,8 +124,33 @@ test("nav-tablero opens the board and shows empty state for tenants with no plan
   await page.getByTestId("nav-board").click();
   await expect(page).toHaveURL(/\/admin\/board$/);
 
-  await expect(page.getByTestId("plans-empty")).toBeVisible();
-  await expect(page.getByTestId("board-no-selection")).toBeVisible();
+  await expect(page.getByTestId("portfolio-empty-tenant")).toBeVisible();
+});
+
+test("portfolio lists plans with the Project column and links to the project board", async ({
+  page,
+}) => {
+  await setupBoard(page);
+  await page.goto("/admin/board", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("portfolio-col-project")).toBeVisible();
+  await expect(page.getByTestId(`portfolio-project-${PLAN_ID}`)).toHaveText("Proyecto demo");
+  // El portfolio no es un Kanban plano: no hay columnas de tareas.
+  await expect(page.getByTestId("board-columns")).toHaveCount(0);
+
+  await page.getByTestId(`portfolio-board-link-${PLAN_ID}`).click();
+  await expect(page).toHaveURL(new RegExp(`/admin/projects/${PROJECT_ID}/board$`));
+  await expect(page.getByTestId(`plan-card-${PLAN_ID}`)).toBeVisible();
+});
+
+test("portfolio filters by status and hides non-matching plans", async ({ page }) => {
+  await setupBoard(page);
+  await page.goto("/admin/board", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId(`portfolio-row-${PLAN_ID}`)).toBeVisible();
+  await page.getByTestId("portfolio-filter-status").selectOption("archived");
+  await expect(page.getByTestId(`portfolio-row-${PLAN_ID}`)).toHaveCount(0);
+  await expect(page.getByTestId("portfolio-empty")).toBeVisible();
 });
 
 test("board renders the 8 status columns with a selected plan", async ({ page }) => {
@@ -129,7 +160,7 @@ test("board renders the 8 status columns with a selected plan", async ({ page })
       task(TASK_IN_PROGRESS, "Migración inicial", "in_progress", "medium"),
     ],
   });
-  await page.goto("/admin/board", { waitUntil: "domcontentloaded" });
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`, { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId("plans-grid")).toBeVisible();
   // La tarjeta de arriba es un PLAN, no un proyecto (doble Kanban, §6).
@@ -179,7 +210,7 @@ test("drag a card to another column triggers PUT and updates UI optimistically",
       putBody = body;
     },
   });
-  await page.goto("/admin/board", { waitUntil: "domcontentloaded" });
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`, { waitUntil: "domcontentloaded" });
 
   const source = page.getByTestId(`task-card-${TASK_BACKLOG}`);
   await expect(source).toBeVisible();

@@ -230,11 +230,21 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_03` — Bandeja humana unificada
 
-- [ ] **Título**: `/admin/inbox` pasa a tener pestañas Aprobaciones · Preguntas (`ask_human`) · Revisiones ·
+- [x] **Título**: `/admin/inbox` pasa a tener pestañas Aprobaciones · Preguntas (`ask_human`) · Revisiones ·
       Notificaciones con contador por pestaña, reutilizando los endpoints existentes; `/admin/approvals`,
       `/admin/human-queue` y `/admin/notifications/inbox` siguen respondiendo (redirigen a la pestaña).
       **Test**: vitest de las cuatro pestañas y contadores; e2e de aprobar desde la bandeja.
       **Coste**: 1,5 d.
+  - ✅ **Cerrada el 2026-09-29**, con el agente `implementer` del plugin. `/admin/inbox` es un hub con cinco
+    pestañas: Aprobaciones · Preguntas · Revisiones · Notificaciones y «Asignadas a mí». La última es la bandeja
+    de tareas humanas de antes, movida a `assignments-panel.tsx`: ya existía y retirarla dejaba sin camino a los
+    agentes humanos. Las piezas viven en `components/inbox/`. `/admin/approvals` y `/admin/human-queue`
+    redirigen a `?tab=approvals` y `/admin/notifications/inbox` a `?tab=notifications`; la guarda de rutas
+    conservadas sigue verde. Verificado por el orquestador: vitest completo **1698 en 190 ficheros**, `tsc`,
+    eslint, `check-i18n` y `check-component-size` en verde. E2E contra `next dev` con el subset mockeado:
+    `inbox-approve.spec.ts` (aprobar hace POST y vacía la pestaña; la redirección de `/admin/approvals`) y
+    los tres `human-*.spec.ts` rehechos, **en verde**. Excepción i18n declarada: `inboxHub.age*` (min, h y d
+    son símbolos).
 
 ### `task_ui_04` — Guarda de rutas y mapa de pantallas
 
@@ -267,6 +277,17 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Test**: integración del overview (cross-tenant; avisos calculados); vitest del Resumen; e2e de
       navegación entre pestañas del proyecto.
       **Coste**: 2 d.
+  - ⏳ **Implementada el 2026-09-29, casilla abierta por un aviso.** `GET /projects/{id}/overview`
+    (`dashboard/project.py` más un router fino) con planes activos, runs, gasto y actividad, y cinco avisos
+    calculados: MCP sin conectar, MCP sin tools, egress bloqueado, repo sin sincronizar y pausa por
+    presupuesto. La barra del proyecto tiene las ocho entradas; Runs, Equipo y Costes salen deshabilitadas
+    hasta `task_ui_12`. Integración **8 passed**, con cross-tenant y los dos roles (verificado por el
+    orquestador); e2e `project-hub-tabs.spec.ts` **4 passed**. Al correrlo se encontraron dos defectos del
+    propio spec: el comodín de rutas registrado el último tapaba `/overview`, y un `[]` para
+    `/capabilities` rompía la ficha. **Falta el aviso «rol sin agente»**. El implementador lo omitió porque
+    creyó que el dominio no guarda roles requeridos, pero sí los guarda: cada tarea del `specification` de
+    un plan lleva su `role` (ADR 0091), y `team_role_agents` dice qué roles cubre el equipo. Lo añade
+    `task_ui_12`, que necesita el mismo cálculo para los huecos de rol de la pestaña Equipo.
 
 ### `task_ui_11` — Tablero dentro del proyecto y portfolio del tenant
 
@@ -276,6 +297,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Test**: vitest del tablero de proyecto y del portfolio; los e2e del tablero global se rehacen como
       portfolio (sin `test.skip`).
       **Coste**: 2,5 d.
+  - ✅ **Cerrada el 2026-09-29**, con el agente `implementer`. `components/board/plan-kanban.tsx` (movido con
+    `git mv`) monta el doble Kanban en `/admin/projects/[id]/board`, acotado al proyecto. `/admin/board` es el
+    portfolio: planes de todos los proyectos con la columna Proyecto, filtros por estado, proyecto y
+    responsable, y enlace al tablero de cada proyecto. `docs/04-reference/mapa-de-pantallas-del-panel.md` gana
+    la fila de la ruta nueva. E2E `dual-kanban`, `kanban-live` y `kanban-realtime` rehechos como portfolio y
+    tablero de proyecto, sin `test.skip`, **en verde** junto al resto del bloque (30 de 30). Excepción i18n
+    declarada: `portfolio.colPlan` y `portfolio.countOne` («Plan» se escribe igual en los dos idiomas).
 
 ### `task_ui_12` — Runs, Equipo y Costes del proyecto
 

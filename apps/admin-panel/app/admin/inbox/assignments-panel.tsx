@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Bandeja personal "Tareas asignadas a mí" (Plan 16 task_16_08).
+ * Bandeja personal "Tareas asignadas a mí" (Plan 16 task_16_08). Desde task_ui_03
+ * es la pestaña «Asignadas a mí» de /admin/inbox (antes era la página entera).
  *
  * Vista personal de CUALQUIER usuario: lista sus HumanTaskAssignments activas
  * (status assigned / accepted) con la tarea, proyecto, plan y la fecha límite de
@@ -31,26 +32,25 @@
  */
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Clock,
   FolderKanban,
   History,
-  Home,
   Inbox,
   ListChecks,
   ShieldAlert,
   XCircle,
 } from "lucide-react";
 
-import { PageHeader } from "@/components/layout/page-header";
-import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useAssignments } from "@/components/inbox/use-inbox-data";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 import { HistoryTab } from "./history-tab";
@@ -249,7 +249,8 @@ type DialogMode = "reject" | "escalate";
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
-export default function InboxPage() {
+export function AssignmentsPanel() {
+  const t = useT("inboxHub");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<{ mode: DialogMode; item: InboxAssignment } | null>(null);
@@ -258,11 +259,7 @@ export default function InboxPage() {
   const [submit, setSubmit] = useState<{ item: InboxAssignment } | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
-  const query = useQuery({
-    queryKey: ["inbox", "assignments"],
-    queryFn: () => apiFetch<InboxAssignment[]>("/inbox/assignments"),
-    refetchOnWindowFocus: false,
-  });
+  const query = useAssignments();
 
   const items = query.data ?? [];
 
@@ -305,18 +302,8 @@ export default function InboxPage() {
       : null;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-      <Breadcrumb
-        items={[
-          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
-          { label: "Mis tareas" },
-        ]}
-      />
-      <PageHeader
-        icon={<Inbox className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Tareas asignadas a mí"
-        description="Las tareas humanas que tienes asignadas. Acéptalas, recházalas con una justificación, márcalas como completadas o escálalas a un administrador."
-      />
+    <div className="w-full">
+      <p className="text-muted-foreground text-sm">{t("assignedHint")}</p>
 
       <InboxJustifyDialog
         request={dialog}
@@ -340,7 +327,7 @@ export default function InboxPage() {
         }}
       />
 
-      <Tabs defaultValue="active" className="mt-6">
+      <Tabs defaultValue="active" className="mt-4">
         <TabsList data-testid="inbox-tabs">
           <TabsTrigger value="active" data-testid="inbox-tab-active">
             <ListChecks className="mr-1.5 h-4 w-4" />

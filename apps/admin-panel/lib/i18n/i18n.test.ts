@@ -54,6 +54,10 @@ describe("dictionary — invariantes", () => {
       // `task_ui_01` — «Chat» es la misma palabra en los dos idiomas, y es la
       // que la UI castellana ya usaba para esa pestaña del proyecto.
       "nav.projectChat",
+      // `task_ui_10` — «Runs» es el término de la plataforma en los dos idiomas (ya lo
+      // es `nav.runs`): la pestaña del proyecto y el bloque del Resumen lo repiten.
+      "nav.projectRuns",
+      "projectOverview.runsTitle",
       "nav.knowledgeBases",
       "nav.guardrails",
       "nav.marketplace",
@@ -100,6 +104,13 @@ describe("dictionary — invariantes", () => {
       "tenantStats.colPlan",
       "tenantStats.colTokens",
       "tenantStats.colVerdict",
+      // ui-reestructuracion `task_ui_11` y `task_ui_03`: «Plan» se escribe igual en
+      // las dos lenguas y las unidades de antigüedad (min, h, d) son símbolos.
+      "portfolio.colPlan",
+      "portfolio.countOne",
+      "inboxHub.ageMinutes",
+      "inboxHub.ageHours",
+      "inboxHub.ageDays",
       // prod-16 `task_prod16_04` — llm-providers. Vocabulario que no se traduce:
       // "Slug" y "Endpoint" son los términos que la UI castellana ya usaba en
       // inglés, y los tres "API key (…)" nombran el credencial tal y como lo

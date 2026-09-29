@@ -1,0 +1,327 @@
+"""GET /projects/{id}/overview — el Resumen del proyecto (`task_ui_10`).
+
+Lo mismo que el dashboard del tenant pero acotado a UN proyecto, más sus avisos. Lo que
+estos tests fijan porque se rompe sin avisar:
+
+* **Los avisos se calculan del dominio**, no se inventan: MCP OAuth sin conectar, MCP sin
+  tools importadas (mismo criterio derivado que `count_imported_tools`), egress bloqueado
+  (misma función que la ficha y el dashboard), repo sin sincronizar (`last_git_sync` que
+  escribe el worker) y pausa por presupuesto.
+* **Cross-tenant.** Un proyecto de otro tenant es 404, y nada suyo asoma en el Resumen.
+* **Acotado al proyecto**: el otro proyecto del mismo tenant no cuenta.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from uuid import UUID, uuid4
+
+import asyncpg
+import pytest
+from alembic import command
+from httpx import ASGITransport, AsyncClient
+from uuid6 import uuid7
+
+pytestmark = pytest.mark.integration
+
+_PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
+
+_SERVERS = [
+    {
+        "name": "atlassian",
+        "transport": "streamable_http",
+        "url": "https://mcp.atlassian.com/v1/mcp",
+    },
+    {"name": "docs", "transport": "http", "url": "https://docs.example.com/mcp"},
+]
+
+
+async def _seed_tenant(conn: asyncpg.Connection, *, slug: str) -> dict[str, UUID]:
+    tenant, user, admin = uuid4(), uuid4(), uuid4()
+    project, other = uuid4(), uuid4()
+    plan, other_plan = uuid4(), uuid4()
+    await conn.execute(
+        "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $2)", tenant, slug
+    )
+    for uid, mail, role in (
+        (user, f"{slug}@t.test", "tenant_member"),
+        (admin, f"{slug}-admin@t.test", "tenant_admin"),
+    ):
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'h')", uid, mail
+        )
+        await conn.execute(
+            "INSERT INTO user_org_memberships (id, tenant_id, user_id, role)"
+            " VALUES ($1, $2, $3, $4)",
+            uuid4(),
+            tenant,
+            uid,
+            role,
+        )
+    await conn.execute(
+        "INSERT INTO projects (id, tenant_id, name, mcp_servers, git_config)"
+        " VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)",
+        project,
+        tenant,
+        f"Proyecto {slug}",
+        json.dumps(_SERVERS),
+        json.dumps({"remote_url": "https://git.example.com/x.git"}),
+    )
+    await conn.execute(
+        "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3)",
+        other,
+        tenant,
+        f"Otro {slug}",
+    )
+    # Una tool importada del servidor `docs` (el criterio derivado del ADR 0166 D4).
+    await conn.execute(
+        "INSERT INTO tools (id, tenant_id, name, description, category,"
+        " implementation_type, security_level, is_builtin)"
+        " VALUES ($1, $2, 'docs.search', 'x', 'mcp', 'mcp_tool', 'safe', false)",
+        uuid4(),
+        tenant,
+    )
+    for pid, pl, title in ((project, plan, "Plan activo"), (other, other_plan, "Plan ajeno")):
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, specification)"
+            " VALUES ($1, $2, $3, $4, 'in_progress', '{}'::jsonb)",
+            pl,
+            tenant,
+            pid,
+            title,
+        )
+    tasks = [uuid4(), uuid4()]
+    for task, status in zip(tasks, ("done", "in_progress"), strict=True):
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status)"
+            " VALUES ($1, $2, $3, $4, $5, $6)",
+            task,
+            tenant,
+            project,
+            plan,
+            f"Tarea {status}",
+            status,
+        )
+    other_task = uuid4()
+    await conn.execute(
+        "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status)"
+        " VALUES ($1, $2, $3, $4, 'Tarea ajena', 'in_progress')",
+        other_task,
+        tenant,
+        other,
+        other_plan,
+    )
+    for task, status in ((tasks[1], "running"), (tasks[0], "failed"), (other_task, "running")):
+        await conn.execute(
+            "INSERT INTO executions (id, tenant_id, task_id, status, steps_log)"
+            " VALUES ($1, $2, $3, $4, '[]'::jsonb)",
+            uuid4(),
+            tenant,
+            task,
+            status,
+        )
+    return {
+        "tenant": tenant,
+        "user": user,
+        "admin": admin,
+        "project": project,
+        "other": other,
+    }
+
+
+async def _seed(dsn: str) -> dict[str, dict[str, UUID]]:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE approval_requests, executions, tasks, plans, tools, projects,"
+            " user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'P', 'ov-p')",
+            _PLATFORM_TENANT_ID,
+        )
+        a = await _seed_tenant(conn, slug="ov-a")
+        b = await _seed_tenant(conn, slug="ov-b")
+    finally:
+        await conn.close()
+    return {"a": a, "b": b}
+
+
+@pytest.fixture()
+def configured_app(
+    alembic_config,
+    app_database_url: str,
+    admin_database_url: str,
+    test_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    command.upgrade(alembic_config, "head")
+    from tests.integration.conftest import _flush_redis, _grant_app_user_existing_tables
+
+    asyncio.run(_grant_app_user_existing_tables())
+    asyncio.run(_flush_redis(test_redis_url))
+    monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
+    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
+    monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+    from api_server.db.session import reset_engine_cache
+
+    get_settings.cache_clear()
+    reset_engine_cache()
+    reset_redis_cache()
+    from api_server.main import create_app
+
+    app = create_app()
+    try:
+        yield app
+    finally:
+        reset_engine_cache()
+        reset_redis_cache()
+        get_settings.cache_clear()
+
+
+async def _token(user_id: UUID, tenant_id: UUID) -> str:
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+
+    sid = uuid7()
+    await SessionStore(get_redis()).create(
+        sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=3600
+    )
+    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
+
+
+async def _overview(app, project: UUID, token: str, *, expect: int = 200) -> dict:  # type: ignore[no-untyped-def]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/projects/{project}/overview", headers={"Authorization": f"Bearer {token}"}
+        )
+    assert resp.status_code == expect, resp.text
+    return resp.json()
+
+
+def _by_kind(body: dict) -> dict[str, dict]:
+    return {w["kind"]: w for w in body["warnings"]}
+
+
+@pytest.mark.asyncio
+async def test_sections_come_in_one_response(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    body = await _overview(configured_app, a["project"], await _token(a["admin"], a["tenant"]))
+    assert list(body) == [
+        "project",
+        "plans",
+        "runs",
+        "spend",
+        "warnings",
+        "activity",
+        "generated_at",
+    ]
+    assert body["project"]["id"] == str(a["project"])
+
+
+@pytest.mark.asyncio
+async def test_plans_and_runs_are_scoped_to_this_project(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    assert [(p["title"], p["tasks_done"], p["tasks_total"]) for p in body["plans"]] == [
+        ("Plan activo", 1, 2)
+    ]
+    assert body["runs"]["running"] == 1
+    assert body["runs"]["last_failure"]["task_title"] == "Tarea done"
+    assert {r["task_title"] for r in body["activity"]} == {"Tarea in_progress", "Tarea done"}
+    assert "Plan ajeno" not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+async def test_mcp_and_repo_warnings_are_computed(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    body = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    warnings = _by_kind(body)
+    # `atlassian` usa OAuth y no hay token en Vault; `docs` no es OAuth.
+    assert warnings["mcp_not_connected"]["names"] == ["atlassian"]
+    # `docs` tiene la tool `docs.search` importada; `atlassian` ninguna.
+    assert warnings["mcp_no_tools"]["names"] == ["atlassian"]
+    assert warnings["mcp_egress_blocked"]["count"] == 2
+    assert warnings["repo_not_synced"]["count"] == 1
+    for w in body["warnings"]:
+        assert w["url_path"].startswith(f"/admin/projects/{a['project']}")
+
+
+@pytest.mark.asyncio
+async def test_repo_warning_follows_last_git_sync(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    token = await _token(a["user"], a["tenant"])
+
+    async def set_sync(payload: dict | None) -> None:
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            await conn.execute(
+                "UPDATE projects SET repository_config = $2::jsonb WHERE id = $1",
+                a["project"],
+                json.dumps({"last_git_sync": payload} if payload else {}),
+            )
+        finally:
+            await conn.close()
+
+    await set_sync({"at": "2026-09-29T10:00:00+00:00", "status": "ok"})
+    assert "repo_not_synced" not in _by_kind(await _overview(configured_app, a["project"], token))
+    await set_sync({"at": "2026-09-29T10:00:00+00:00", "status": "error", "error": "boom"})
+    assert "repo_not_synced" in _by_kind(await _overview(configured_app, a["project"], token))
+
+
+@pytest.mark.asyncio
+async def test_project_without_git_or_mcp_has_no_such_warnings(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    body = await _overview(configured_app, a["other"], await _token(a["user"], a["tenant"]))
+    assert body["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_budget_pause_and_spend_are_admin_only(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE projects SET paused_by_budget = true WHERE id = $1", a["project"]
+        )
+    finally:
+        await conn.close()
+    admin = await _overview(configured_app, a["project"], await _token(a["admin"], a["tenant"]))
+    member = await _overview(configured_app, a["project"], await _token(a["user"], a["tenant"]))
+    assert "budget_paused_project" in _by_kind(admin)
+    assert admin["spend"].get("reason") != "forbidden"
+    assert "budget_paused_project" not in _by_kind(member)
+    assert member["spend"] == {"available": False, "reason": "forbidden"}
+
+
+@pytest.mark.asyncio
+async def test_another_tenants_project_is_404(configured_app, migrations_pg_dsn: str) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    a, b = seeded["a"], seeded["b"]
+    await _overview(configured_app, b["project"], await _token(a["admin"], a["tenant"]), expect=404)
+    # Y su Resumen propio no filtra nada del otro.
+    body = await _overview(configured_app, a["project"], await _token(a["admin"], a["tenant"]))
+    text = json.dumps(body)
+    assert "ov-b" not in text
+    assert str(b["project"]) not in text
+
+
+@pytest.mark.asyncio
+async def test_requires_authentication(configured_app, migrations_pg_dsn: str) -> None:
+    a = (await _seed(migrations_pg_dsn))["a"]
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get(f"/projects/{a['project']}/overview")
+    assert resp.status_code == 401

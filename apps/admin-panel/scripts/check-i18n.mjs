@@ -451,7 +451,6 @@ export function looksSpanish(value) {
 const ATTR_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
   "app/admin/approval-policy/page.tsx": 2,
-  "app/admin/approvals/page.tsx": 3,
   // El córtex baja de 20 a 9 al cerrarse las dos casillas de UI (F2 «MindPanel»
   // y F3.6 «IdentityCard»): el Panel de Mente (`mind/page.tsx` 3 +
   // `mind/affect-panel.tsx` 1) y la identidad (`identity/page.tsx` 7) están a
@@ -466,7 +465,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/executions/[id]/page.tsx": 5,
   "app/admin/human-agents/page.tsx": 3,
   "app/admin/inbox/history-tab.tsx": 3,
-  "app/admin/inbox/page.tsx": 2,
   "app/admin/inbox/submit-dialog.tsx": 3,
   "app/admin/office/page.tsx": 6,
   "app/developers/api-reference/page.tsx": 3,
@@ -611,7 +609,6 @@ const JSX_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 5,
   "app/admin/agents/[id]/agent-skills-section.tsx": 2,
   "app/admin/approval-policy/page.tsx": 9,
-  "app/admin/approvals/page.tsx": 1,
   "app/admin/approvals/prior-approvals-notice.tsx": 1,
   "app/admin/assistant/settings/page.tsx": 1,
   "app/admin/cortex/mind/autonomy-panel.tsx": 5,
@@ -624,10 +621,9 @@ const JSX_ALLOWLIST = {
   "app/admin/executions/[id]/page.tsx": 4,
   "app/admin/human-agents/human-agent-form-dialog.tsx": 13,
   "app/admin/human-agents/page.tsx": 6,
-  "app/admin/human-queue/page.tsx": 3,
   "app/admin/inbox/history-tab.tsx": 6,
   "app/admin/inbox/justify-dialog.tsx": 1,
-  "app/admin/inbox/page.tsx": 4,
+  "app/admin/inbox/assignments-panel.tsx": 4,
   "app/admin/inbox/submit-dialog.tsx": 8,
   "app/admin/leaderboard/page.tsx": 5,
   "app/admin/model-prices/price-history-dialog.tsx": 2,

@@ -69,6 +69,7 @@ Todas cuelgan de `/admin/projects/[id]`; conservan su ruta y pasan a ser pestañ
 | Ruta                                          | Pestaña                         | Notas                                            |
 | --------------------------------------------- | ------------------------------- | ------------------------------------------------ |
 | `/admin/projects/[id]`                        | Resumen                         | `GET /projects/{id}/overview` (`task_ui_10`)     |
+| `/admin/projects/[id]/board`                  | Tablero                         | Doble Kanban acotado al proyecto (`task_ui_11`)  |
 | `/admin/projects/[id]/plans`                  | Tablero (planes)                | Doble Kanban del principio 6                     |
 | `/admin/projects/[id]/plans/[planId]`         | Tablero (tareas del plan)       |                                                  |
 | `/admin/projects/[id]/tasks`                  | Tablero (tareas)                |                                                  |

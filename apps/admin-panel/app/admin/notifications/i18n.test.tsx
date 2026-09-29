@@ -39,7 +39,7 @@ const currentUser = {
 vi.mock("@/lib/use-current-user", () => ({ useCurrentUser: () => currentUser }));
 
 import NotificationConfigPage from "@/app/admin/notifications/page";
-import NotificationInboxPage from "@/app/admin/notifications/inbox/page";
+import { NotificationsPanel as NotificationInboxPage } from "@/components/inbox/notifications-panel";
 import { LanguageProvider } from "@/lib/lang-context";
 
 const STORAGE_KEY = "admin-panel.lang";
@@ -244,7 +244,7 @@ describe("bandeja de notificaciones en castellano", () => {
     wireInbox();
     renderIn("es", <NotificationInboxPage />);
 
-    expect(await screen.findByText("Bandeja de notificaciones")).toBeDefined();
+    expect(await screen.findByText(/Histórico de notificaciones enviadas/)).toBeDefined();
     await waitFor(() => expect(screen.getByTestId("inbox-list")).toBeTruthy());
     expect(screen.getByTestId("inbox-unread-badge").textContent).toBe("1 sin leer");
     expect(screen.getByText("Solo sin leer")).toBeDefined();
@@ -260,7 +260,9 @@ describe("bandeja de notificaciones en inglés", () => {
     wireInbox();
     renderIn("en", <NotificationInboxPage />);
 
-    expect(await screen.findByText("Notification inbox")).toBeDefined();
+    expect(
+      await screen.findByText(/History of the notifications sent to your channels/),
+    ).toBeDefined();
     expect(screen.getByTestId("inbox-scope-tenant").textContent).toBe("Tenant");
     expect(screen.getByTestId("inbox-scope-platform").textContent).toBe("Platform");
     await waitFor(() => expect(screen.getByTestId("inbox-list")).toBeTruthy());
@@ -279,7 +281,7 @@ describe("bandeja de notificaciones en inglés", () => {
     // El estado del envío NO se traduce: es el enum del backend.
     expect(screen.getByTestId("inbox-status-log-1").textContent).toBe("dead_letter");
 
-    expect(screen.queryByText("Bandeja de notificaciones")).toBeNull();
+    expect(screen.queryByText(/Histórico de notificaciones enviadas/)).toBeNull();
     expect(screen.queryByText("Solo sin leer")).toBeNull();
     expect(screen.queryByText("Anterior")).toBeNull();
   });

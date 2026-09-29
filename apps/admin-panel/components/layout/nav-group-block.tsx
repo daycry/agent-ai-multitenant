@@ -117,6 +117,7 @@ export function NavLink({
   active,
   onClick,
   testId,
+  disabled = false,
 }: {
   href: string;
   labelKey: NavGroup["items"][number]["labelKey"];
@@ -130,8 +131,26 @@ export function NavLink({
    * ningún test podría apuntarlo.
    */
   testId?: string;
+  /**
+   * Visible pero sin enlace: la pestaña existe en el plan y su pantalla todavía
+   * no. Un `<span aria-disabled>` y no un `<Link>` a una ruta que devolvería 404.
+   */
+  disabled?: boolean;
 }) {
   const t = useT("nav");
+  if (disabled) {
+    return (
+      <span
+        aria-disabled="true"
+        title={t("projectTabSoon")}
+        data-testid={testId ?? `nav-${href.split("/").pop()}`}
+        className="text-sidebar-muted-foreground flex cursor-not-allowed items-center gap-3 rounded-md px-3 py-2 text-sm font-medium opacity-50"
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        <span>{t(labelKey)}</span>
+      </span>
+    );
+  }
   return (
     <Link
       href={href}

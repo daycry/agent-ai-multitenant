@@ -1,6 +1,9 @@
 "use client";
 
 /**
+ * (task_ui_03: ahora es la pestaña «Notificaciones» de /admin/inbox; la ruta
+ * /admin/notifications/inbox redirige aquí.)
+ *
  * Plan 10 task_10_16 — Inbox in-app con histórico de notificaciones.
  *
  * Lista el histórico de `NotificationLog` del tenant del usuario (status
@@ -30,9 +33,8 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Inbox, RefreshCw } from "lucide-react";
+import { CheckCheck, RefreshCw } from "lucide-react";
 
-import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -104,7 +106,7 @@ function formatTimestamp(iso: string): string {
 // --------------------------------------------------------------------------
 // Page
 // --------------------------------------------------------------------------
-export default function NotificationInboxPage() {
+export function NotificationsPanel() {
   const t = useT("notificationsInbox");
   const tCommon = useT("common");
   const errorText = useErrorText();
@@ -177,19 +179,11 @@ export default function NotificationInboxPage() {
   }
 
   return (
-    <div
-      className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8"
-      data-testid="notification-inbox-page"
-    >
-      <PageHeader
-        icon={<Inbox className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title={t("title")}
-        description={t("description")}
-        data-testid="notification-inbox-header"
-      />
+    <div className="w-full" data-testid="notification-inbox-page">
+      <p className="text-muted-foreground text-sm">{t("description")}</p>
 
       {/* Toolbar: filtros + marcar todo como leído */}
-      <div className="mt-6 flex flex-wrap items-center gap-3">
+      <div className="mt-4 flex flex-wrap items-center gap-3">
         {/* AUD16-10: scope de PLATAFORMA (tenant NULL) — solo System Admin. */}
         <RoleGuard min="system_admin">
           <div className="flex rounded-md border" role="group" aria-label={t("scopeGroupAria")}>

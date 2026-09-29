@@ -143,28 +143,61 @@ describe("projectIdFromPath", () => {
 });
 
 describe("projectNavItems", () => {
+  const suffix = (href: string) => href.replace(`/admin/projects/${PROJECT_ID}`, "");
+
   it("todas sus entradas cuelgan de ESE proyecto", () => {
-    const items = projectNavItems(PROJECT_ID);
-    expect(items.length).toBeGreaterThan(4);
-    for (const item of items) {
+    for (const item of projectNavItems(PROJECT_ID)) {
       expect(item.href.startsWith(`/admin/projects/${PROJECT_ID}`), item.href).toBe(true);
+      expect(item.id, item.href).toBeTruthy();
     }
   });
 
-  it("empieza por el resumen, que es la raíz del proyecto", () => {
-    expect(projectNavItems(PROJECT_ID)[0]?.href).toBe(`/admin/projects/${PROJECT_ID}`);
+  it("son las ocho del plan, en su orden, empezando por el resumen", () => {
+    const items = projectNavItems(PROJECT_ID);
+    expect(items[0]?.href).toBe(`/admin/projects/${PROJECT_ID}`);
+    expect(items.map((item) => item.labelKey)).toEqual([
+      "projectOverview",
+      "projectBoard",
+      "projectRuns",
+      "projectTeam",
+      "projectCapabilities",
+      "projectKnowledge",
+      "projectCosts",
+      "projectSettings",
+    ]);
   });
 
-  it("sólo ofrece rutas que el panel sirve hoy", () => {
-    // La guarda de rutas (`tests/unit/test_admin_panel_routes_preserved.py`) fija
-    // las 81 que existen; una entrada de menú a una pestaña que aún no existe
-    // sería un 404 con aspecto de producto. Las pestañas que el plan añade
-    // (Tablero, Equipo, Costes) las cablean `task_ui_11` y `task_ui_12`.
-    const suffixes = projectNavItems(PROJECT_ID).map((item) =>
-      item.href.replace(`/admin/projects/${PROJECT_ID}`, ""),
+  it("apunta a las rutas actuales del proyecto, conservándolas", () => {
+    const bySuffix = Object.fromEntries(
+      projectNavItems(PROJECT_ID).map((item) => [item.labelKey, suffix(item.href)]),
     );
-    expect(suffixes).not.toContain("/board");
-    expect(suffixes).not.toContain("/team");
-    expect(suffixes).not.toContain("/costs");
+    expect(bySuffix.projectCapabilities).toBe("/mcp-servers");
+    expect(bySuffix.projectKnowledge).toBe("/knowledge-bases");
+    expect(bySuffix.projectBoard).toBe("/board");
+    // Ajustes es la ficha del proyecto (la raíz), con ancla a su sección.
+    expect(bySuffix.projectSettings).toBe("#settings");
+  });
+
+  it("deja VISIBLES pero DESHABILITADAS las pestañas cuya pantalla aún no existe", () => {
+    // Runs, Equipo y Costes las hace `task_ui_12`. Una entrada de menú a una ruta
+    // que nadie sirve es un 404 con aspecto de producto: se pinta, no se enlaza.
+    // Cuando esa tarea cree cada `page.tsx`, quita la entrada de este conjunto.
+    const disabled = projectNavItems(PROJECT_ID)
+      .filter((item) => item.disabled === true)
+      .map((item) => item.labelKey);
+    expect(disabled).toEqual(["projectRuns", "projectTeam", "projectCosts"]);
+  });
+
+  it("agrupa bajo cada pestaña las pantallas que antes eran entradas sueltas", () => {
+    const items = projectNavItems(PROJECT_ID);
+    const owner = (path: string) =>
+      items.find((item) => item.activeSuffixes?.includes(path))?.labelKey;
+    expect(owner("/plans")).toBe("projectBoard");
+    expect(owner("/tasks")).toBe("projectBoard");
+    expect(owner("/commands")).toBe("projectCapabilities");
+    expect(owner("/agent-tools-diagnostic")).toBe("projectCapabilities");
+    expect(owner("/memories")).toBe("projectSettings");
+    expect(owner("/incoming-webhooks")).toBe("projectSettings");
+    expect(owner("/dep-cache")).toBe("projectSettings");
   });
 });

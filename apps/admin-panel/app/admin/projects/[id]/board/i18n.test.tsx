@@ -44,6 +44,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "proj-1" }) }));
+
 vi.mock("@/lib/ws", () => ({
   useWebSocket: () => {},
   wsUrl: (p: string) => `ws://test${p}`,
@@ -75,7 +77,7 @@ vi.mock("@/components/tasks/task-detail-sheet", () => ({
     open ? <div data-testid="task-detail-open" /> : null,
 }));
 
-import BoardPage from "@/app/admin/board/page";
+import ProjectBoardPage from "@/app/admin/projects/[id]/board/page";
 
 const STORAGE_KEY = "admin-panel.lang";
 
@@ -107,7 +109,7 @@ function mount(lang: "es" | "en") {
   return render(
     <QueryClientProvider client={client}>
       <LanguageProvider>
-        <BoardPage />
+        <ProjectBoardPage />
       </LanguageProvider>
     </QueryClientProvider>,
   );

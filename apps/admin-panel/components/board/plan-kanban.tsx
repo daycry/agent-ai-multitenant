@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * task_01_22 — Doble Kanban estático.
+ * task_01_22 — Doble Kanban estático (task_ui_11: acotado a un proyecto,
+ * lo monta `/admin/projects/{id}/board`; `/admin/board` es el portfolio).
  *
  * Doctrine (CLAUDE.md §6): the Kanban is *double*. Top section shows
  * Plans (gerencial); bottom shows Tasks of the *selected* plan only,
@@ -41,15 +42,6 @@ import { useWebSocket, wsUrl } from "@/lib/ws";
 // --------------------------------------------------------------------------
 // Types
 // --------------------------------------------------------------------------
-interface Project {
-  id: string;
-  name: string;
-  description: string | null;
-  status: string;
-  team_id: string | null;
-  is_template: boolean;
-}
-
 interface Task {
   id: string;
   project_id: string;
@@ -182,7 +174,7 @@ function describeMoveError(
 // --------------------------------------------------------------------------
 // Page
 // --------------------------------------------------------------------------
-export default function BoardPage() {
+export function PlanKanban({ projectId }: { projectId: string }) {
   const errorText = useErrorText();
   const lang = useLangOptional();
   const t = useT("taskStatus");
@@ -192,24 +184,20 @@ export default function BoardPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
 
-  const projectsQuery = useQuery({
-    queryKey: ["projects", "tenant"],
-    queryFn: () => fetchAllPages<Project>("/projects"),
-    refetchOnWindowFocus: false,
-  });
-
-  // c8/T11: the top row is a Kanban of real PLANS across the tenant's projects
-  // (GET /plans). projectsQuery stays only to label each plan with its project name.
+  // c8/T11: la fila superior son PLANES reales (ADR 0008), no proyectos.
   // PROY2-08: fetchAllPages agota las páginas (>100 planes ya no desaparecen).
+  // task_ui_11: acotado a UN proyecto (`GET /plans?project_id=`, filtro que el
+  // endpoint ya admite). El filtro local es la segunda cerradura: el doble
+  // Kanban de un proyecto jamás pinta planes de otro.
+  const plansKey = useMemo(() => ["plans", "project", projectId], [projectId]);
   const plansQuery = useQuery({
-    queryKey: ["plans", "tenant"],
-    queryFn: () => fetchAllPages<Plan>("/plans"),
+    queryKey: plansKey,
+    queryFn: () => fetchAllPages<Plan>(`/plans?project_id=${projectId}`),
     refetchOnWindowFocus: false,
   });
-  const plans = useMemo(() => plansQuery.data?.items ?? [], [plansQuery.data]);
-  const projectsById = useMemo(
-    () => new Map((projectsQuery.data?.items ?? []).map((p) => [p.id, p] as const)),
-    [projectsQuery.data],
+  const plans = useMemo(
+    () => (plansQuery.data?.items ?? []).filter((p) => p.project_id === projectId),
+    [plansQuery.data, projectId],
   );
 
   // Auto-select the first plan once data lands.
@@ -242,7 +230,7 @@ export default function BoardPage() {
     mutationFn: async (planId: string) =>
       apiFetch<{ status: string }>(`/plans/${planId}/unblock`, { method: "POST" }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["plans", "tenant"] });
+      void queryClient.invalidateQueries({ queryKey: ["plans"] });
       void queryClient.invalidateQueries({ queryKey: ["tasks", "by-plan"] });
     },
   });
@@ -348,7 +336,7 @@ export default function BoardPage() {
       const event = data as { type?: string; plan_id?: string; payload?: { new_status?: string } };
       const newStatus = event.payload?.new_status;
       if (event.type !== "plan.status_changed" || !event.plan_id || !newStatus) return;
-      queryClient.setQueryData<PaginatedResult<Plan>>(["plans", "tenant"], (prev) => ({
+      queryClient.setQueryData<PaginatedResult<Plan>>(plansKey, (prev) => ({
         truncated: prev?.truncated ?? false,
         items: (prev?.items ?? []).map((p) =>
           p.id === event.plan_id ? { ...p, status: newStatus } : p,
@@ -359,7 +347,7 @@ export default function BoardPage() {
       // se deduce del estado nuevo.
       void queryClient.invalidateQueries({ queryKey: ["plan-status", event.plan_id] });
     },
-    [queryClient],
+    [queryClient, plansKey],
   );
 
   useWebSocket(plansUrl, onPlanEvent);
@@ -416,7 +404,6 @@ export default function BoardPage() {
             data-testid="plans-grid"
           >
             {plans.map((p) => {
-              const project = projectsById.get(p.project_id);
               const active = effectiveSelected === p.id;
               return (
                 <Card
@@ -429,11 +416,6 @@ export default function BoardPage() {
                 >
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base">{p.title}</CardTitle>
-                    {project && (
-                      <Badge variant="info" className="w-fit">
-                        {project.name}
-                      </Badge>
-                    )}
                   </CardHeader>
                   <CardContent className="flex items-center justify-end gap-2">
                     {/* hallazgo #3 (QA 2026-07-07): un plan bloqueado ofrece el

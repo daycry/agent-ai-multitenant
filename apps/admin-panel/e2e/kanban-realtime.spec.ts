@@ -66,6 +66,16 @@ async function setupBoard(page: Page): Promise<{ socket: () => WebSocketRoute }>
       body: JSON.stringify([PROJECT]),
     });
   });
+  // task_ui_11: el doble Kanban vive dentro del proyecto; el layout del proyecto
+  // pide la ficha del proyecto.
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(PROJECT),
+    });
+  });
   await page.route(apiRoute("/plans?*"), (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({
@@ -97,7 +107,7 @@ async function setupBoard(page: Page): Promise<{ socket: () => WebSocketRoute }>
 
 test("the board wires up a live kanban socket for the selected plan", async ({ page }) => {
   const { socket } = await setupBoard(page);
-  await page.goto("/admin/board");
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`);
 
   await expect(page.getByTestId(`plan-card-${PLAN_ID}`)).toBeVisible();
   await expect(page.getByTestId("board-live-indicator")).toBeVisible();
@@ -115,7 +125,7 @@ test("the board wires up a live kanban socket for the selected plan", async ({ p
 
 test("a task.status_changed frame moves the card to its new column", async ({ page }) => {
   const { socket } = await setupBoard(page);
-  await page.goto("/admin/board");
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`);
 
   await expect(page.getByTestId("col-backlog").getByTestId(`task-card-${TASK_ID}`)).toBeVisible();
 

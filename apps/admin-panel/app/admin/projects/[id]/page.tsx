@@ -67,6 +67,7 @@ import {
   type GitPolicies,
   type LastGitSync,
 } from "@/components/projects/git-config-section";
+import { ProjectOverview } from "@/components/projects/overview/project-overview";
 import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { ProjectGovernanceSection } from "@/components/projects/governance-section";
 import { ProjectIntegrationsSection } from "@/components/projects/integrations-section";
@@ -308,6 +309,10 @@ export default function ProjectHubPage() {
           </div>
         </Card>
       )}
+
+      {/* Resumen (task_ui_10): planes, runs, gasto y avisos. La ficha de abajo es «Ajustes». */}
+      <ProjectOverview projectId={projectId} />
+      <div id="settings" className="scroll-mt-24" />
 
       {project && (
         <>

@@ -79,6 +79,16 @@ const CAPABILITIES = {
   warnings: [],
 };
 
+const OVERVIEW = {
+  project: { id: PROJECT_ID, name: "Demo", status: "active", team_id: null },
+  plans: [],
+  runs: { running: 0, last_failure: null, url_path: `/admin/projects/${PROJECT_ID}/tasks` },
+  spend: { available: false, reason: "no_budget_configured" },
+  warnings: [],
+  activity: [],
+  generated_at: "2026-09-29T10:00:00+00:00",
+};
+
 function routeApi(path: string): unknown {
   if (path === "/me") {
     return {
@@ -92,6 +102,8 @@ function routeApi(path: string): unknown {
   }
   if (path === `/projects/${PROJECT_ID}`) return PROJECT;
   if (path === `/projects/${PROJECT_ID}/capabilities`) return CAPABILITIES;
+  // El Resumen (`task_ui_10`) vive en la raíz del proyecto; aquí basta con que cargue.
+  if (path === `/projects/${PROJECT_ID}/overview`) return OVERVIEW;
   if (path === "/agents/provider-options") return { providers: [] };
   if (path === "/teams") return [{ id: "team-1", name: "Plataforma" }];
   if (path === `/projects/${PROJECT_ID}/preview-session`) return null;

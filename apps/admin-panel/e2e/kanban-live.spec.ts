@@ -66,6 +66,16 @@ async function setupBoard(page: Page): Promise<{ socket: () => WebSocketRoute }>
       body: JSON.stringify([PROJECT]),
     });
   });
+  // task_ui_11: el doble Kanban vive dentro del proyecto; el layout del proyecto
+  // pide la ficha del proyecto.
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(PROJECT),
+    });
+  });
   await page.route(apiRoute("/plans?*"), (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({
@@ -106,7 +116,7 @@ function transition(newStatus: string) {
 
 test("successive transitions move the card live and counts follow", async ({ page }) => {
   const { socket } = await setupBoard(page);
-  await page.goto("/admin/board");
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`);
 
   await expect(page.getByTestId("col-backlog").getByTestId(`task-card-${TASK_ID}`)).toBeVisible();
   await expect(page.getByTestId("col-count-backlog")).toHaveText("1");
@@ -124,7 +134,7 @@ test("successive transitions move the card live and counts follow", async ({ pag
 
 test("an event for a task not on the board changes nothing", async ({ page }) => {
   const { socket } = await setupBoard(page);
-  await page.goto("/admin/board");
+  await page.goto(`/admin/projects/${PROJECT_ID}/board`);
   await expect(page.getByTestId("col-backlog").getByTestId(`task-card-${TASK_ID}`)).toBeVisible();
 
   socket().send(

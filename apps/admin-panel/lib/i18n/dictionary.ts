@@ -226,6 +226,13 @@ export const dictionary = {
     projectMemories: { es: "Memorias del proyecto", en: "Project memories" },
     projectWebhooks: { es: "Webhooks entrantes", en: "Incoming webhooks" },
     projectDepCache: { es: "Caché de dependencias", en: "Dependency cache" },
+    // --- las ocho pestañas de la barra del proyecto (`task_ui_10`) ---
+    projectBoard: { es: "Tablero", en: "Board" },
+    projectRuns: { es: "Runs", en: "Runs" },
+    projectTeam: { es: "Equipo", en: "Team" },
+    projectCosts: { es: "Costes", en: "Costs" },
+    projectSettings: { es: "Ajustes", en: "Settings" },
+    projectTabSoon: { es: "Próximamente", en: "Coming soon" },
   },
 
   /**
@@ -3039,6 +3046,43 @@ export const dictionary = {
    * sus agentes heredan justo el modelo por defecto. Afirmar la causa sería
    * cambiar un número engañoso por un diagnóstico falso.
    */
+  // task_ui_11 — portfolio de planes de `/admin/board`.
+  portfolio: {
+    title: { es: "Portfolio de planes", en: "Plans portfolio" },
+    description: {
+      es: "Los planes de todos tus proyectos. Abre el tablero de un proyecto para ver sus tareas.",
+      en: "The plans of all your projects. Open a project's board to see its tasks.",
+    },
+    colPlan: { es: "Plan", en: "Plan" },
+    colProject: { es: "Proyecto", en: "Project" },
+    colStatus: { es: "Estado", en: "Status" },
+    colOwner: { es: "Responsable", en: "Owner" },
+    colActions: { es: "Tablero", en: "Board" },
+    openBoard: { es: "Abrir tablero", en: "Open board" },
+    filterStatus: { es: "Estado", en: "Status" },
+    filterProject: { es: "Proyecto", en: "Project" },
+    filterOwner: { es: "Responsable", en: "Owner" },
+    allStatuses: { es: "Todos los estados", en: "All statuses" },
+    allProjects: { es: "Todos los proyectos", en: "All projects" },
+    allOwners: { es: "Todos los responsables", en: "All owners" },
+    ownerNone: { es: "Sin responsable", en: "No owner" },
+    countOne: { es: "{count} plan", en: "{count} plan" },
+    countMany: { es: "{count} planes", en: "{count} plans" },
+    loading: { es: "Cargando planes…", en: "Loading plans…" },
+    error: { es: "No se pudieron cargar los planes:", en: "The plans could not be loaded:" },
+    empty: {
+      es: "Este tenant aún no tiene planes. Crea un plan desde el chat de planning de un proyecto para empezar.",
+      en: "This tenant has no plans yet. Create one from a project's planning chat to get started.",
+    },
+    emptyFiltered: {
+      es: "Ningún plan coincide con los filtros.",
+      en: "No plan matches the filters.",
+    },
+    truncated: {
+      es: "El portfolio muestra un máximo de 2000 planes; hay más que no se están mostrando. Usa los filtros para acotar.",
+      en: "The portfolio shows at most 2000 plans; there are more that are not being shown. Use the filters to narrow it down.",
+    },
+  },
   planCost: {
     defaultOnlyTitle: {
       es: "Ninguna tarea tiene modelo propio: todas se estiman con el modelo por defecto «{model}».",
@@ -3284,6 +3328,69 @@ export const dictionary = {
     save: { es: "Guardar modelo", en: "Save model" },
     saving: { es: "Guardando…", en: "Saving…" },
   },
+  /**
+   * `components/projects/overview/*` — el Resumen del proyecto (`task_ui_10`), de
+   * `GET /projects/{id}/overview`. Los avisos llegan como código + cifras: los textos
+   * son de aquí. No hay aviso de «rol sin agente»: el dominio no declara qué roles
+   * necesita un proyecto (criterio de cierre 6 del plan).
+   */
+  projectOverview: {
+    title: { es: "Resumen", en: "Overview" },
+    loading: { es: "Cargando el resumen…", en: "Loading the overview…" },
+    error: {
+      es: "No se pudo cargar el resumen: {detail}",
+      en: "Could not load the overview: {detail}",
+    },
+    plansTitle: { es: "Planes activos", en: "Active plans" },
+    plansEmpty: {
+      es: "Ningún plan activo en este proyecto.",
+      en: "No active plans in this project.",
+    },
+    plansOpen: { es: "Ver planes", en: "See plans" },
+    planProgress: { es: "{done} de {total} tareas", en: "{done} of {total} tasks" },
+    runsTitle: { es: "Runs", en: "Runs" },
+    runsRunning: { es: "{count} en curso", en: "{count} running" },
+    runsIdle: { es: "Ningún run en curso.", en: "No runs in progress." },
+    runsLastFailure: { es: "Último fallo: {task}", en: "Last failure: {task}" },
+    runsOpen: { es: "Ver tareas", en: "See tasks" },
+    spendTitle: { es: "Gasto", en: "Spend" },
+    spendNoBudget: {
+      es: "Este proyecto no tiene presupuesto configurado.",
+      en: "This project has no budget configured.",
+    },
+    spendPercent: { es: "{percent}% del presupuesto", en: "{percent}% of the budget" },
+    spendUsed: { es: "{spent} USD de {budget} USD", en: "{spent} USD of {budget} USD" },
+    spendOver: { es: "Presupuesto superado", en: "Budget exceeded" },
+    spendOpen: { es: "Estadísticas y costes", en: "Stats and costs" },
+    warningsTitle: { es: "Avisos", en: "Warnings" },
+    warningsNone: { es: "Sin avisos: todo en orden.", en: "No warnings: all in order." },
+    warnMcpNotConnected: {
+      es: "MCP sin conectar (OAuth): {names}",
+      en: "MCP not connected (OAuth): {names}",
+    },
+    warnMcpNoTools: {
+      es: "MCP sin tools importadas: {names}",
+      en: "MCP with no imported tools: {names}",
+    },
+    warnMcpEgress: {
+      es: "Egress bloqueado en {count} servidor(es) MCP",
+      en: "Egress blocked on {count} MCP server(s)",
+    },
+    warnRepoNotSynced: {
+      es: "El repositorio no está sincronizado: no consta una sincronización correcta.",
+      en: "The repository is not synced: no successful sync on record.",
+    },
+    warnBudgetPaused: {
+      es: "Proyecto pausado por presupuesto",
+      en: "Project paused by budget",
+    },
+    warnUnknown: { es: "Aviso: {kind}", en: "Warning: {kind}" },
+    activityTitle: { es: "Actividad de agentes", en: "Agent activity" },
+    activityEmpty: { es: "Aún no hay runs en este proyecto.", en: "No runs in this project yet." },
+    activityUnknownAgent: { es: "Agente sin asignar", en: "Unassigned agent" },
+    moreTitle: { es: "Otras pantallas del proyecto", en: "Other project screens" },
+  },
+
   /**
    * `app/admin/projects/page.tsx` — el listado de proyectos del tenant.
    *
@@ -4708,6 +4815,70 @@ export const dictionary = {
    * Los `status` (`queued`, `dead_letter`…) no se traducen: son el enum del
    * backend y lo que el operador filtra y busca en los logs.
    */
+  inboxHub: {
+    // task_ui_03 — la bandeja humana unificada (`app/admin/inbox` + `components/inbox/*`):
+    // aprobaciones, preguntas `ask_human`, revisiones, notificaciones y asignadas a mí.
+    title: { es: "Bandeja humana", en: "Human inbox" },
+    description: {
+      es: "Todo lo que espera una decisión tuya, en un solo sitio.",
+      en: "Everything waiting for your decision, in one place.",
+    },
+    home: { es: "Inicio", en: "Home" },
+    tabsAria: { es: "Secciones de la bandeja", en: "Inbox sections" },
+    tabApprovals: { es: "Aprobaciones", en: "Approvals" },
+    tabQuestions: { es: "Preguntas", en: "Questions" },
+    tabReviews: { es: "Revisiones", en: "Reviews" },
+    tabNotifications: { es: "Notificaciones", en: "Notifications" },
+    tabAssigned: { es: "Asignadas a mí", en: "Assigned to me" },
+    allClear: { es: "Nada pendiente. 🎉", en: "Nothing pending. 🎉" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    loadError: { es: "No se pudo cargar", en: "Could not load" },
+    assignedHint: {
+      es: "Las tareas humanas que tienes asignadas. Acéptalas, recházalas con una justificación, márcalas como completadas o escálalas a un administrador.",
+      en: "The human tasks assigned to you. Accept them, reject them with a justification, mark them as completed or escalate them to an administrator.",
+    },
+    approvalsEmpty: { es: "Sin aprobaciones pendientes", en: "No pending approvals" },
+    approvalsEmptyHint: {
+      es: "No hay solicitudes de aprobación pendientes.",
+      en: "There are no pending approval requests.",
+    },
+    questionsEmpty: { es: "Sin preguntas pendientes", en: "No pending questions" },
+    questionsEmptyHint: {
+      es: "Ningún agente está esperando tu respuesta.",
+      en: "No agent is waiting for your answer.",
+    },
+    requestedAt: { es: "Solicitada {date}", en: "Requested {date}" },
+    approve: { es: "Aprobar", en: "Approve" },
+    answer: { es: "Responder", en: "Answer" },
+    reject: { es: "Rechazar", en: "Reject" },
+    reasonPlaceholder: { es: "Motivo (opcional)", en: "Reason (optional)" },
+    answerPlaceholder: { es: "Tu respuesta para el agente", en: "Your answer for the agent" },
+    queueTitle: { es: "Otras decisiones pendientes", en: "Other pending decisions" },
+    queueHint: {
+      es: "Planes por validar y runs parados. Cada fila abre la pantalla donde se resuelve.",
+      en: "Plans to validate and stalled runs. Each row opens the screen where it is resolved.",
+    },
+    kindPlanValidation: { es: "Plan por validar", en: "Plan to validate" },
+    kindRunReview: { es: "Run escalado", en: "Escalated run" },
+    kindRunApproval: { es: "Run esperando aprobación", en: "Run awaiting approval" },
+    kindOther: { es: "Pendiente", en: "Pending" },
+    ageMinutes: { es: "{value} min", en: "{value} min" },
+    ageHours: { es: "{value} h", en: "{value} h" },
+    ageDays: { es: "{value} d", en: "{value} d" },
+    reviewsEmpty: { es: "Sin revisiones pendientes", en: "No pending reviews" },
+    reviewsEmptyHint: {
+      es: "Cuando te asignen revisar el trabajo de otra persona, aparecerá aquí.",
+      en: "When you are assigned to review someone else's work, it will show up here.",
+    },
+    reviewNoOutput: { es: "Sin entrega registrada.", en: "No submission recorded." },
+    reviewRetries: { es: "Reintentos: {n}", en: "Retries: {n}" },
+    reviewApprove: { es: "Aprobar entrega", en: "Approve submission" },
+    reviewReject: { es: "Pedir cambios", en: "Request changes" },
+    reviewFeedbackPlaceholder: {
+      es: "Qué hay que corregir (obligatorio para pedir cambios)",
+      en: "What needs fixing (required to request changes)",
+    },
+  },
   notificationsInbox: {
     title: { es: "Bandeja de notificaciones", en: "Notification inbox" },
     description: {

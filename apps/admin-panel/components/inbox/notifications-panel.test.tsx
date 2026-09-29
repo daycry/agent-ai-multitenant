@@ -20,7 +20,7 @@ vi.mock("@/components/ui/role-guard", () => ({
   RoleGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import NotificationInboxPage from "@/app/admin/notifications/inbox/page";
+import { NotificationsPanel as NotificationInboxPage } from "@/components/inbox/notifications-panel";
 
 function log(overrides: Record<string, unknown>) {
   return {

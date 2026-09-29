@@ -24,15 +24,13 @@
 
 import {
   BookOpen,
-  Bot,
-  Brain,
-  Database,
+  Coins,
+  KanbanSquare,
   Library,
-  ListChecks,
-  MessagesSquare,
+  Play,
   Server,
-  Webhook,
-  Wrench,
+  Settings,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +50,13 @@ export interface NavItem {
   systemAdminOnly?: boolean;
   /** Si `systemOwnerOnly`, sólo se muestra al System Owner (córtex F1, ADR 0074). */
   systemOwnerOnly?: boolean;
+  /** Sólo la barra del proyecto: sufijo estable del `data-testid` (`nav-project-<id>`). */
+  id?: string;
+  /** Sólo la barra del proyecto: visible pero sin enlace (su pantalla aún no existe). */
+  disabled?: boolean;
+  /** Sólo la barra del proyecto: rutas hijas (sufijo tras `/admin/projects/{id}`) que
+   *  también marcan esta entrada como activa. */
+  activeSuffixes?: string[];
 }
 
 export interface NavGroup {
@@ -201,26 +206,55 @@ export function projectIdFromPath(pathname: string | null | undefined): string |
 }
 
 /**
- * La barra contextual de un proyecto, acotada a las pestañas que EXISTEN hoy.
+ * Las pestañas de la barra del proyecto cuya pantalla aún NO existe.
  *
- * Las que el plan añade —Tablero (`task_ui_11`), Equipo y Costes
- * (`task_ui_12`)— no se anuncian aquí hasta que su `page.tsx` exista: una
- * entrada de menú a una ruta que nadie sirve es un 404 con aspecto de producto,
- * y la guarda `tests/unit/test_admin_panel_routes_preserved.py` fija cuáles hay.
+ * Se pintan pero no se enlazan: una entrada de menú a una ruta que nadie sirve es
+ * un 404 con aspecto de producto. Runs, Equipo y Costes las hace `task_ui_12`; al
+ * crear cada `page.tsx`, esa tarea quita la pestaña de este conjunto (y el test de
+ * `nav-model.test.ts` que fija la lista se lo recuerda).
+ */
+const PROJECT_TABS_PENDING: ReadonlySet<string> = new Set(["runs", "team", "costs"]);
+
+/**
+ * La barra contextual de un proyecto: las OCHO pestañas del plan.
+ *
+ * Las pantallas que antes eran entradas sueltas (planes, tareas, comandos,
+ * diagnóstico, memorias, webhooks, caché) conservan su ruta y cuelgan de la
+ * pestaña a la que pertenecen (`activeSuffixes`): siguen marcando su pestaña como
+ * activa y el Resumen las enlaza. Ajustes es la ficha del proyecto (edición, git,
+ * gobierno), por eso apunta a la raíz con ancla a su sección.
  */
 export function projectNavItems(projectId: string): NavItem[] {
   const at = (suffix: string) => `/admin/projects/${projectId}${suffix}`;
+  const tab = (
+    id: string,
+    href: string,
+    labelKey: NavKey,
+    Icon: LucideIcon,
+    activeSuffixes?: string[],
+  ): NavItem => ({
+    id,
+    href,
+    labelKey,
+    Icon,
+    activeSuffixes,
+    disabled: PROJECT_TABS_PENDING.has(id) || undefined,
+  });
   return [
-    { href: at(""), labelKey: "projectOverview", Icon: Library },
-    { href: at("/plans"), labelKey: "projectPlans", Icon: ListChecks },
-    { href: at("/tasks"), labelKey: "projectTasks", Icon: ListChecks },
-    { href: at("/chat"), labelKey: "projectChat", Icon: MessagesSquare },
-    { href: at("/mcp-servers"), labelKey: "projectCapabilities", Icon: Server },
-    { href: at("/agent-tools-diagnostic"), labelKey: "projectToolsDiagnostic", Icon: Wrench },
-    { href: at("/commands"), labelKey: "projectCommands", Icon: Bot },
-    { href: at("/knowledge-bases"), labelKey: "projectKnowledge", Icon: BookOpen },
-    { href: at("/memories"), labelKey: "projectMemories", Icon: Brain },
-    { href: at("/incoming-webhooks"), labelKey: "projectWebhooks", Icon: Webhook },
-    { href: at("/dep-cache"), labelKey: "projectDepCache", Icon: Database },
+    tab("overview", at(""), "projectOverview", Library),
+    tab("board", at("/board"), "projectBoard", KanbanSquare, ["/plans", "/tasks"]),
+    tab("runs", at("/runs"), "projectRuns", Play),
+    tab("team", at("/team"), "projectTeam", Users),
+    tab("capabilities", at("/mcp-servers"), "projectCapabilities", Server, [
+      "/commands",
+      "/agent-tools-diagnostic",
+    ]),
+    tab("knowledge", at("/knowledge-bases"), "projectKnowledge", BookOpen),
+    tab("costs", at("/costs"), "projectCosts", Coins),
+    tab("settings", at("#settings"), "projectSettings", Settings, [
+      "/memories",
+      "/incoming-webhooks",
+      "/dep-cache",
+    ]),
   ];
 }

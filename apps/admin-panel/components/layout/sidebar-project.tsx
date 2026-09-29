@@ -3,19 +3,12 @@
 /**
  * La barra lateral **contextual de un proyecto**, con su vuelta al portfolio.
  *
- * `task_ui_01`. Es el cambio de fondo del plan: el trabajo ocurre en el
- * proyecto —planes, tareas, equipo, MCP, conocimiento, memorias, runs, costes— y
- * hasta ahora nada colgaba de él; las once pantallas de un proyecto se
- * alcanzaban desde su ficha, no desde el menú.
+ * `task_ui_01` la creó; `task_ui_10` la deja en las ocho entradas del plan
+ * (Resumen · Tablero · Runs · Equipo · Capacidades · Conocimiento · Costes ·
+ * Ajustes). Lista plana: son ocho entradas de un solo nivel.
  *
- * Lista plana y no grupos colapsables: son once entradas de un solo nivel. Los
- * grupos existen en Trabajo y Sistema porque allí hay treinta y cuatro.
- *
- * Las pestañas que el plan añade —Tablero (`task_ui_11`), Equipo y Costes
- * (`task_ui_12`)— **no se anuncian aquí** hasta que su `page.tsx` exista:
- * `projectNavItems` sólo devuelve rutas que el panel sirve hoy, y su test lo
- * fija. Un enlace de menú a una ruta inexistente es un 404 con aspecto de
- * producto.
+ * Las pestañas que aún no tienen pantalla (`PROJECT_TABS_PENDING` en
+ * `nav-model.ts`) se pintan deshabilitadas: enlazarlas sería un 404.
  */
 
 import Link from "next/link";
@@ -25,21 +18,8 @@ import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import { NavLink } from "./nav-group-block";
-import { projectNavItems } from "./nav-model";
+import { projectNavItems, type NavItem } from "./nav-model";
 import { SidebarFrame } from "./sidebar-frame";
-
-/**
- * El `data-testid` de una entrada del proyecto.
- *
- * No se deriva del último segmento como en las otras barras: el del resumen es
- * el UUID del proyecto, así que el testid cambiaría con cada proyecto y ningún
- * test podría apuntarlo. `/admin/projects/{id}` → `nav-project-overview`,
- * `/admin/projects/{id}/plans` → `nav-project-plans`.
- */
-export function projectNavTestId(href: string, projectId: string): string {
-  const suffix = href.replace(`/admin/projects/${projectId}`, "").replace(/^\//, "");
-  return `nav-project-${suffix === "" ? "overview" : suffix}`;
-}
 
 export function SidebarProject({
   projectId,
@@ -63,10 +43,17 @@ export function SidebarProject({
   const t = useT("nav");
   const items = projectNavItems(projectId);
   const overviewHref = `/admin/projects/${projectId}`;
-  const isActive = (href: string) =>
-    href === overviewHref
-      ? pathname === href
-      : pathname === href || pathname?.startsWith(href + "/") === true;
+  // Coincidencia por pestaña: la raíz (resumen) sólo EXACTA — con la de prefijo se
+  // pintaría activa en todas—; el resto, por su ruta y por las pantallas que agrupa.
+  const isActive = (item: NavItem) => {
+    const own = item.href.split("#")[0];
+    if (own === overviewHref && item.id === "overview") return pathname === overviewHref;
+    const routes = [
+      ...(own === overviewHref ? [] : [own]),
+      ...(item.activeSuffixes ?? []).map((suffix) => overviewHref + suffix),
+    ];
+    return routes.some((r) => pathname === r || pathname?.startsWith(r + "/") === true);
+  };
 
   return (
     <SidebarFrame area="project" onItemClick={onItemClick} showClose={showClose} onClose={onClose}>
@@ -91,9 +78,10 @@ export function SidebarProject({
               href={item.href}
               labelKey={item.labelKey}
               Icon={item.Icon}
-              active={isActive(item.href)}
+              active={isActive(item)}
+              disabled={item.disabled}
               onClick={onItemClick}
-              testId={projectNavTestId(item.href, projectId)}
+              testId={`nav-project-${item.id}`}
             />
           </li>
         ))}

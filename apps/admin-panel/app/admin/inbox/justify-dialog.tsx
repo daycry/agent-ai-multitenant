@@ -31,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useErrorText } from "@/lib/use-error-text";
 
-import type { InboxAssignment } from "./page";
+import type { InboxAssignment } from "./assignments-panel";
 
 type DialogMode = "reject" | "escalate";
 

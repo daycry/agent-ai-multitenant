@@ -136,7 +136,7 @@ async function setup(page: Page): Promise<void> {
 
 test("the Histórico tab shows per-user metrics and past tasks", async ({ page }) => {
   await setup(page);
-  await page.goto("/admin/inbox");
+  await page.goto("/admin/inbox?tab=assigned");
 
   // The active tab is shown first.
   await expect(page.getByTestId("inbox-tab-history")).toBeVisible();
@@ -189,7 +189,7 @@ test("empty history shows a friendly empty state and 'sin datos' metrics", async
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 
-  await page.goto("/admin/inbox");
+  await page.goto("/admin/inbox?tab=assigned");
   await page.getByTestId("inbox-tab-history").click();
 
   await expect(page.getByTestId("metric-acceptance")).toContainText("Sin datos aún");
