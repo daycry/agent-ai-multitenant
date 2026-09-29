@@ -841,6 +841,11 @@ DEFAULT_MODEL_CONFIG: dict[str, Any] = {
 # Rango válido de temperatura (mismo rango que valida el schema de agente).
 MODEL_TEMPERATURE_MIN = 0.0
 MODEL_TEMPERATURE_MAX = 2.0
+#: ADR 0169 D4: rango de ``model_config.max_output_tokens``. Por debajo de 256 no cabe
+#: ni un ``submit_result``; por encima de 200 000 no hay modelo que lo sirva, así que
+#: es un error de tecleo, no una configuración.
+MODEL_MAX_OUTPUT_TOKENS_MIN = 256
+MODEL_MAX_OUTPUT_TOKENS_MAX = 200_000
 
 
 class InvalidModelConfigError(ValueError):
@@ -903,6 +908,18 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
                 f"temperature {temp} must be between "
                 f"{MODEL_TEMPERATURE_MIN} and {MODEL_TEMPERATURE_MAX}"
             )
+    # ADR 0169 D4: tope de salida por modelo. Opcional; `bool` se rechaza aparte
+    # porque en Python es un `int` y `True` pasaría como 1.
+    cap = cfg.get("max_output_tokens")
+    if cap is not None and (
+        isinstance(cap, bool)
+        or not isinstance(cap, int)
+        or not MODEL_MAX_OUTPUT_TOKENS_MIN <= cap <= MODEL_MAX_OUTPUT_TOKENS_MAX
+    ):
+        raise InvalidModelConfigError(
+            f"max_output_tokens must be an integer between {MODEL_MAX_OUTPUT_TOKENS_MIN} "
+            f"and {MODEL_MAX_OUTPUT_TOKENS_MAX}"
+        )
     # reasoning_effort (ADR 0070): opcional; si está, debe ser una opción válida
     # del proveedor (incluye "off"). Cada proveedor tiene su set; no hay uno común.
     reasoning = cfg.get("reasoning_effort")

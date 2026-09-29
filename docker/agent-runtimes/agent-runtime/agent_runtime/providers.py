@@ -1248,6 +1248,17 @@ def _run_with_retry(
 # ---------------------------------------------------------------------------
 # Shared adapter — a `ModelClient` over any `LLMProvider`
 # ---------------------------------------------------------------------------
+#: ADR 0169 D4 (`task_cm_01`): tope de salida explícito en cada llamada HTTP. Sin él
+#: los proveedores de ``shared-llm`` aplican su default de 1024 tokens y un
+#: ``write_file`` mediano no cabe. ``model.max_output_tokens`` del spec lo sustituye.
+_DEFAULT_MAX_OUTPUT_TOKENS = 8192
+#: La reflexión y el review sólo emiten un veredicto, así que llevan su propio techo,
+#: más bajo. No es más estrecho de lo necesario a propósito: en un modelo de
+#: razonamiento los tokens de pensamiento cuentan contra este mismo tope.
+_REVIEW_MAX_OUTPUT_TOKENS = 4096
+_ASSESS_MAX_OUTPUT_TOKENS = 2048
+
+
 def _temperature_kwargs(temperature: Any) -> dict[str, Any]:
     """P1-8: el kwarg de temperature para los kinds HTTP (vacío si no viene)."""
     if temperature is None:
@@ -1273,6 +1284,9 @@ class _ProviderModelClient:
 
     _advertises_submit_result: bool = True
     _forces_verdict_choice: bool = True
+    # ADR 0169 D4: los HTTP pasan `max_tokens` en cada llamada; el SDK de Claude no
+    # expone el parámetro, así que su subclase lo apaga.
+    _passes_output_cap: bool = True
     # ADR 0110 (mitad HTTP): tope del hilo en memoria — más allá, los turnos
     # viejos se compactan en un resumen honesto (EARLIER TURNS). El cap acota
     # el input creciente frente a los budgets de tokens del run.
@@ -1287,9 +1301,13 @@ class _ProviderModelClient:
         tools: list[dict[str, Any]] | None = None,
         extra_call_kwargs: dict[str, Any] | None = None,
         conversation_thread: bool = False,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
+        self._max_output_tokens = (
+            int(max_output_tokens) if max_output_tokens else _DEFAULT_MAX_OUTPUT_TOKENS
+        )
         self._tools = tools
         # ADR 0070: extra params del proveedor (p.ej. reasoning_effort/think) que
         # se vuelcan al body de /chat/completions vía el **kwargs del provider.
@@ -1309,6 +1327,17 @@ class _ProviderModelClient:
         acota a lo que queda (`task_cv_40`). Antes el wall-clock sólo se miraba
         entre iteraciones y una llamada podía rebasarlo 45 min."""
         self._remaining_s = remaining_s
+
+    def _cap_kwargs(self, ceiling: int | None = None) -> dict[str, Any]:
+        """El ``max_tokens`` de esta llamada (ADR 0169 D4), o nada en claude_sdk.
+
+        ``ceiling`` es el techo propio de la reflexión y el review. Nunca SUBE el tope
+        configurado: un modelo pequeño limitado a 1500 no recibe 4096 en el review.
+        """
+        if not self._passes_output_cap:
+            return {}
+        cap = self._max_output_tokens if ceiling is None else min(ceiling, self._max_output_tokens)
+        return {"max_tokens": cap}
 
     def _call_timeout_s(self) -> float:
         if self._remaining_s is None:
@@ -1436,7 +1465,11 @@ class _ProviderModelClient:
             else:
                 sent_user = Message(role="user", content=self._thread_turn_update(state))
                 messages = [historical[0], *self._thread, sent_user]
-            call_kwargs = {**self._extra_call_kwargs, **self._thread_call_kwargs()}
+            call_kwargs = {
+                **self._cap_kwargs(),
+                **self._extra_call_kwargs,
+                **self._thread_call_kwargs(),
+            }
             resp = self._retrying(
                 lambda: self.provider.complete(
                     messages,
@@ -1452,6 +1485,7 @@ class _ProviderModelClient:
                 _decide_messages(state),
                 model=self.model,
                 tools=tools,
+                **self._cap_kwargs(),
                 **self._extra_call_kwargs,
             )
         )
@@ -1474,6 +1508,7 @@ class _ProviderModelClient:
                     model=self.model,
                     tools=[_SUBMIT_PROGRESS_TOOL],
                     tool_choice=_SUBMIT_PROGRESS_TOOL_CHOICE,
+                    **self._cap_kwargs(_ASSESS_MAX_OUTPUT_TOKENS),
                     **self._extra_call_kwargs,
                 )
             )
@@ -1505,7 +1540,10 @@ class _ProviderModelClient:
     def review(self, state: ReviewState) -> ReviewResponse:
         # F34: force `submit_verdict` (tool_choice) so HTTP backends return the
         # verdict structured; the prose net in `_review_from` is only a fallback.
-        kwargs: dict[str, Any] = dict(self._extra_call_kwargs)
+        kwargs: dict[str, Any] = {
+            **self._cap_kwargs(_REVIEW_MAX_OUTPUT_TOKENS),
+            **self._extra_call_kwargs,
+        }
         if self._forces_verdict_choice:
             kwargs["tool_choice"] = _SUBMIT_VERDICT_TOOL_CHOICE
         resp = self._retrying(
@@ -1542,6 +1580,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         super().__init__(
             provider=AzureFoundryAPIMProvider(
@@ -1558,6 +1597,7 @@ class AzureFoundryModelClient(_ProviderModelClient):
                 **reasoning_call_kwargs("azure_foundry", reasoning_effort),
                 **_temperature_kwargs(temperature),
             },
+            max_output_tokens=max_output_tokens,
         )
 
 
@@ -1574,6 +1614,7 @@ class CopilotModelClient(_ProviderModelClient):
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         super().__init__(
             provider=CopilotProvider(github_token=github_token, http_client=http_client),
@@ -1583,6 +1624,7 @@ class CopilotModelClient(_ProviderModelClient):
                 **reasoning_call_kwargs("copilot", reasoning_effort),
                 **_temperature_kwargs(temperature),
             },
+            max_output_tokens=max_output_tokens,
         )
 
 
@@ -1599,6 +1641,7 @@ class OllamaModelClient(_ProviderModelClient):
         http_client: httpx.AsyncClient | None = None,
         reasoning_effort: str | None = None,
         temperature: float | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         super().__init__(
             provider=OllamaProvider(
@@ -1613,6 +1656,7 @@ class OllamaModelClient(_ProviderModelClient):
                 **reasoning_call_kwargs("ollama", reasoning_effort),
                 **_temperature_kwargs(temperature),
             },
+            max_output_tokens=max_output_tokens,
         )
 
 
@@ -1647,6 +1691,7 @@ class ClaudeSDKModelClient(_ProviderModelClient):
 
     _advertises_submit_result = False
     _forces_verdict_choice = False
+    _passes_output_cap = False
 
     def __init__(
         self,
@@ -1806,6 +1851,8 @@ def build_provider_client(
     # en el spec pero moría aquí — palanca declarada que no operaba. Los kinds
     # HTTP la pliegan al body; claude_sdk la ignora (el SDK no la expone).
     temperature = spec.get("temperature")
+    # ADR 0169 D4: tope de salida por modelo; ausente → el default del cliente.
+    max_output_tokens = spec.get("max_output_tokens")
     if kind == "azure_foundry":
         return _with_thread_flag(
             AzureFoundryModelClient(
@@ -1818,6 +1865,7 @@ def build_provider_client(
                 tools=tools,
                 reasoning_effort=reasoning,
                 temperature=temperature,
+                max_output_tokens=max_output_tokens,
             ),
             spec,
         )
@@ -1829,6 +1877,7 @@ def build_provider_client(
                 tools=tools,
                 reasoning_effort=reasoning,
                 temperature=temperature,
+                max_output_tokens=max_output_tokens,
             ),
             spec,
         )
@@ -1853,6 +1902,7 @@ def build_provider_client(
                 tools=tools,
                 reasoning_effort=reasoning,
                 temperature=temperature,
+                max_output_tokens=max_output_tokens,
             ),
             spec,
         )

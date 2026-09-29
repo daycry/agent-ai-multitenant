@@ -52,13 +52,20 @@ silencioso del contexto en Ollama.
 
 ### `task_cm_01` — Tope de salida explícito en cada llamada del runtime
 
-- [ ] **Título**: los clientes HTTP del runtime pasan `max_tokens` en `decide`,
+- [x] **Título**: los clientes HTTP del runtime pasan `max_tokens` en `decide`,
       `review` y `assess_progress`. Sale de `model.max_output_tokens` del spec si
       viene, y si no de 8192 para decidir; la reflexión y el review usan un tope
       menor porque sólo emiten un veredicto. `claude_sdk` no cambia: su SDK no
       expone el parámetro.
       **Test**: `docker/agent-runtimes/agent-runtime/tests/test_output_cap.py`.
       **Coste**: 0,5 d.
+  - ✅ **Entregada el 2026-09-29.** Vista en rojo antes del código: 6 fallos
+    (`KeyError: 'max_tokens'` y constructor sin el parámetro). Techos: 8192 al
+    decidir, 4096 en el review y 2048 en la reflexión, y ninguno sube un tope
+    configurado más bajo. La API valida la clave en `validate_model_config`
+    (256 a 200 000; `tests/unit/test_model_config_max_output_tokens.py`, 11 casos).
+    El worker ya copiaba el `model_config` entero al spec, así que no hizo falta
+    tocar la resolución. Suite del runtime: 751 passed.
 
 ### `task_cm_02` — Una tool call de acción truncada o corrupta no se ejecuta
 
