@@ -8,6 +8,9 @@ import { type Translator } from "@/lib/i18n";
 
 export type MemoryScope = "private" | "team_shared" | "project_shared" | "global";
 export type MemoryType = "episodic" | "semantic";
+/** Tipo de observación (`task_mem_04`): vocabulario cerrado del backend. */
+export type MemoryKind =
+  "summary" | "decision" | "bugfix" | "pattern" | "gotcha" | "preference" | "fact";
 
 /** Las claves del namespace `memories`, para tipar los mapas de etiquetas. */
 export type MemoriesKey = Parameters<Translator<"memories">>[0];
@@ -26,6 +29,8 @@ export interface MemoryResponse {
   agent_id: string | null;
   /** Procedencia (task_ui_31). Opcionales: un backend anterior no los manda. */
   category?: MemoryType;
+  /** Tipo de observación (`task_mem_04`); `null` = sin clasificar (memorias anteriores). */
+  kind?: MemoryKind | null;
   execution_id?: string | null;
   human_work_session_id?: string | null;
   project_name?: string | null;
@@ -77,6 +82,22 @@ export const TYPE_VARIANT: Record<MemoryType, BadgeVariant> = {
   episodic: "default",
   semantic: "info",
 };
+
+/** Una entrada por cada valor del vocabulario: el backend añade uno y `tsc` avisa. */
+export const KIND_KEY: Record<MemoryKind, MemoriesKey> = {
+  summary: "kindSummary",
+  decision: "kindDecision",
+  bugfix: "kindBugfix",
+  pattern: "kindPattern",
+  gotcha: "kindGotcha",
+  preference: "kindPreference",
+  fact: "kindFact",
+};
+
+/** La clave del kind de una memoria; `kindUnclassified` si es `null` o desconocido. */
+export function kindKeyOf(kind: string | null | undefined): MemoriesKey {
+  return kind && Object.hasOwn(KIND_KEY, kind) ? KIND_KEY[kind as MemoryKind] : "kindUnclassified";
+}
 
 export interface MemoryCreatedBy {
   kind: "agent" | "human" | "user" | "unknown";

@@ -15,7 +15,14 @@ import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 import { MemoryProvenance } from "./memory-provenance";
 import { SimilarMemoriesDialog, type SimilarItem } from "./similar-memories-dialog";
-import { SCOPE_KEY, SCOPE_VARIANT, TYPE_KEY, TYPE_VARIANT, type MemoryResponse } from "./types";
+import {
+  SCOPE_KEY,
+  SCOPE_VARIANT,
+  TYPE_KEY,
+  TYPE_VARIANT,
+  kindKeyOf,
+  type MemoryResponse,
+} from "./types";
 
 // --------------------------------------------------------------------------
 // List
@@ -51,6 +58,7 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
       data-testid={`memory-${memory.id}`}
       data-scope={memory.scope}
       data-type={memory.type}
+      data-kind={memory.kind ?? "unclassified"}
     >
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
@@ -58,6 +66,12 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
             {t(SCOPE_KEY[memory.scope])}
           </Badge>
           <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>{t(TYPE_KEY[memory.type])}</Badge>
+          <Badge
+            variant={memory.kind ? "primary" : "muted"}
+            data-testid={`memory-kind-${memory.id}`}
+          >
+            {t(kindKeyOf(memory.kind))}
+          </Badge>
           {memory.has_embedding ? (
             <Badge variant="success">embedding</Badge>
           ) : (

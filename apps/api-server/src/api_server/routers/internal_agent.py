@@ -49,6 +49,7 @@ from api_server.db.platform_settings import (
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.index_format import estimate_tokens, index_hit
+from api_server.memorizer.kinds import parse_kind_filter
 from api_server.memorizer.provenance import resolve_agent_project_names
 from api_server.memorizer.recall import get_memories, recall
 from api_server.memorizer.timeline import agent_visibility, build_timeline
@@ -154,13 +155,17 @@ class MemoryRecallRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     scopes: list[_SCOPE_LITERAL] = Field(default_factory=list, max_length=4)
     limit: int = Field(default=5, ge=1, le=20)
+    # task_mem_04: filtro por tipo de observación. Tolerante a propósito (como los
+    # scopes del runtime): lo que no está en el vocabulario se descarta y una lista
+    # sin nada válido es «sin filtro» — un modelo pequeño no debe pagar un 422.
+    kinds: list[str] = Field(default_factory=list, max_length=12)
 
 
 class MemoryRecallHitOut(BaseModel):
     """Un hit del ÍNDICE (task_mem_01): titular y metadatos, NO el contenido.
 
     El detalle se pide con ``POST /memory-get`` por ``id``. ``kind`` es la columna
-    tipada de ``task_mem_04``; hasta que exista, ``null``. ``bm25_rank`` /
+    tipada de ``task_mem_04`` (``null`` = sin clasificar). ``bm25_rank`` /
     ``vector_rank`` se conservan para depurar el ranking."""
 
     model_config = _BASE_CONFIG
@@ -475,6 +480,7 @@ async def memory_recall(
         project_id=project_id,
         query_embedding=query_embedding,
         limit=payload.limit,
+        kinds=parse_kind_filter(payload.kinds) or None,
     )
     agent_names, project_names = await resolve_agent_project_names(
         session,
@@ -488,7 +494,7 @@ async def memory_recall(
             memory_id=h.memory_id,
             content=h.content,
             type_=h.type,
-            kind=None,  # la columna `kind` la crea task_mem_04
+            kind=h.kind,
             scope=h.scope,
             created_at=h.created_at,
             agent=agent_names.get(h.agent_id) if h.agent_id else None,
@@ -556,7 +562,7 @@ async def memory_get(
                 id=r.memory_id,
                 content=r.content,
                 type=r.type,
-                kind=None,
+                kind=r.kind,
                 scope=r.scope,
                 created_at=r.created_at,
                 agent=agent_names.get(r.agent_id) if r.agent_id else None,

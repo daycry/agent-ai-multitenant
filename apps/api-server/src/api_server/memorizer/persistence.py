@@ -128,6 +128,8 @@ def _sanitized_candidates(
     for cand in candidates:
         clean, redactions = sanitize_memory_content(cand.content)
         total += redactions
+        if not clean.strip():
+            continue  # todo el texto era `<private>`: no queda nada que memorizar
         out.append(replace(cand, content=clean) if redactions else cand)
     return out, total
 
@@ -209,6 +211,8 @@ async def persist_memory_candidates(
     candidates, redactions = _sanitized_candidates(candidates)
     if redactions:
         logger.warning("memorizer.content_redacted", tenant_id=str(tenant_id), count=redactions)
+    if not candidates:
+        return []
     embeddings = await _embed_contents(embedder, [c.content for c in candidates])
 
     rows: list[MemoryEntry] = []
@@ -217,6 +221,7 @@ async def persist_memory_candidates(
             tenant_id=tenant_id,
             scope=scope,
             type=cand.type,
+            kind=cand.kind,
             content=cand.content,
             embedding=embedding,
             agent_id=agent_id,

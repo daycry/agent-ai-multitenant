@@ -180,11 +180,14 @@ class InternalAgentAPI:
         query: str,
         scopes: list[str] | None = None,
         limit: int = 5,
+        kinds: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Hybrid recall. Returns the list of hits."""
         body: dict[str, Any] = {"query": query, "limit": limit}
         if scopes is not None:
             body["scopes"] = scopes
+        if kinds:
+            body["kinds"] = kinds
         payload = self._post("/internal/agent/memory-recall", body)
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits

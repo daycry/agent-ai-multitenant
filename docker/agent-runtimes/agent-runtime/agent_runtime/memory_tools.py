@@ -43,6 +43,49 @@ _SCOPE_ALIASES = {
 }
 
 
+# Vocabulario cerrado de `memory_entries.kind` (task_mem_04). Duplicado a propósito
+# de `api_server.memorizer.kinds`: el runtime no importa el api-server.
+_VALID_KINDS = ("summary", "decision", "bugfix", "pattern", "gotcha", "preference", "fact")
+_KIND_ALIASES = {
+    "resumen": "summary",
+    "decisiones": "decision",
+    "decisions": "decision",
+    "error": "bugfix",
+    "bug": "bugfix",
+    "fix": "bugfix",
+    "arreglo": "bugfix",
+    "patron": "pattern",
+    "patterns": "pattern",
+    "trampa": "gotcha",
+    "gotchas": "gotcha",
+    "pitfall": "gotcha",
+    "preferencia": "preference",
+    "preferences": "preference",
+    "hecho": "fact",
+    "facts": "fact",
+}
+
+
+def _coerce_kinds(kinds: list[str]) -> list[str]:
+    """Normaliza los ``kinds`` que escribió el modelo al vocabulario válido.
+
+    Minúsculas, sin acentos, alias habituales («bug» → ``bugfix``), sin
+    duplicados y sin lo desconocido. Vacío = sin filtro (nunca un 422)."""
+    import unicodedata
+
+    out: list[str] = []
+    for raw in kinds:
+        folded = "".join(
+            ch
+            for ch in unicodedata.normalize("NFKD", raw.strip().lower())
+            if not unicodedata.combining(ch)
+        )
+        mapped = folded if folded in _VALID_KINDS else _KIND_ALIASES.get(folded)
+        if mapped and mapped not in out:
+            out.append(mapped)
+    return out
+
+
 def _coerce_scopes(scopes: list[str]) -> list[str]:
     """Normalise model-supplied scopes to the valid vocabulary.
 
@@ -60,6 +103,11 @@ def _coerce_scopes(scopes: list[str]) -> list[str]:
     return out
 
 
+def _is_str_list_or_none(value: Any) -> bool:
+    """``None`` o una lista de cadenas: la forma que aceptan ``scopes`` y ``kinds``."""
+    return value is None or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+
+
 @dataclass
 class MemoryTools:
     """``memory_recall`` + ``memory_store`` bound to one HTTP client."""
@@ -70,24 +118,22 @@ class MemoryTools:
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
             return ToolResult(ok=False, error="memory_recall requires a non-empty 'query' string")
-        scopes = args.get("scopes")
-        if scopes is not None and not (
-            isinstance(scopes, list) and all(isinstance(s, str) for s in scopes)
-        ):
+        bad = next((k for k in ("scopes", "kinds") if not _is_str_list_or_none(args.get(k))), None)
+        if bad is not None:
             return ToolResult(
                 ok=False,
-                error="memory_recall 'scopes' must be a list of strings if provided",
+                error=f"memory_recall '{bad}' must be a list of strings if provided",
             )
         # Coerce model near-misses to the valid vocabulary; empty → no filter.
-        if scopes is not None:
-            scopes = _coerce_scopes(scopes) or None
+        scopes = _coerce_scopes(args["scopes"]) or None if args.get("scopes") is not None else None
+        kinds = _coerce_kinds(args["kinds"]) or None if args.get("kinds") is not None else None
         limit_raw = args.get("limit", 5)
         try:
             limit = int(limit_raw)
         except (TypeError, ValueError):
             return ToolResult(ok=False, error="memory_recall 'limit' must be an int")
         try:
-            hits = self.api.memory_recall(query=query, scopes=scopes, limit=limit)
+            hits = self.api.memory_recall(query=query, scopes=scopes, limit=limit, kinds=kinds)
         except InternalAPIHTTPError as exc:
             return ToolResult(
                 ok=False,

@@ -21,16 +21,24 @@ Ollama / Claude / Copilot / Azure Foundry provider (ADR 0021).
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import structlog
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message
 
+from api_server.memorizer.kinds import (
+    FALLBACK_KIND,
+    MEMORY_KINDS,
+    SUMMARY_KIND,
+    normalise_kind,
+    recognised_kind,
+    type_for_kind,
+)
 from api_server.memorizer.recall import query_entity_terms
+from api_server.memorizer.sanitize import strip_private_tags
 
 logger = structlog.get_logger(__name__)
 
@@ -38,6 +46,9 @@ logger = structlog.get_logger(__name__)
 # Hard caps so a runaway LLM cannot stuff the memory store with junk.
 MAX_CANDIDATES_PER_EXECUTION = 5
 MAX_CONTENT_CHARS = 2000
+# task_mem_04: el resumen de la ejecución es corto por diseño (qué se hizo,
+# decisiones, siguiente paso). Se recorta, no se descarta.
+SUMMARY_MAX_CHARS = 600
 
 # Models we trust to follow JSON instructions well. Anything else
 # still works (we try to parse), but we cap the run with a tighter
@@ -62,23 +73,46 @@ class MemoryCandidate:
     # recall signal. Lowercased significant tokens (same tokenizer the recall
     # query uses, so write + read align). Empty when the LLM returns none.
     entities: tuple[str, ...] = field(default_factory=tuple)
+    # Tipo de observación (task_mem_04, vocabulario cerrado de `memorizer.kinds`).
+    # ``None`` = sin clasificar (como las memorias anteriores a la migración 0152).
+    kind: str | None = None
+
+
+_KINDS_PROMPT = (
+    '  "kind"     — the KIND of memory, exactly one of: '
+    + ", ".join(f'"{k}"' for k in MEMORY_KINDS)
+    + ".\n"
+    '    "summary" = ONE per run (see below); "decision" = a choice made and why; '
+    '"bugfix" = a defect and its fix; "pattern" = a reusable technique; '
+    '"gotcha" = a trap to avoid; "preference" = a stated preference or convention; '
+    '"fact" = any other durable fact.\n'
+)
+
+_SUMMARY_PROMPT = (
+    'Return EXACTLY ONE item with "kind": "summary" (type "episodic", at most '
+    f"{SUMMARY_MAX_CHARS} characters): what was done, the decisions taken and the "
+    "next step. Then add the other observations, each with its own kind (never "
+    '"summary" again).\n'
+)
 
 
 _SYSTEM_PROMPT = (
     "You are the Memorizer of an agentic platform. After every "
     "execution you extract a SHORT list of useful memories to store for "
     "future agent runs. Always answer with a JSON array (no prose, no "
-    "markdown fences). Each item is an object with exactly four keys:\n"
+    "markdown fences). Each item is an object with exactly five keys:\n"
     '  "content"  — a single-paragraph fact (max 2000 chars).\n'
     '  "type"     — "episodic" (a concrete event) or "semantic" '
     "(a generalised rule extracted from one or more events).\n"
-    '  "tags"     — array of short string tags for filtering, e.g. '
+    + _KINDS_PROMPT
+    + '  "tags"     — array of short string tags for filtering, e.g. '
     '["sqlalchemy", "asyncpg"].\n'
     '  "entities" — array of the key NAMED ENTITIES the memory is about '
     "(people, projects, components, technologies, files), e.g. "
     '["PostgreSQL", "RLS", "agent-runtime"]. Used to find this memory later.\n'
-    "Return between 0 and 5 items. Return an empty array if the "
-    "execution produced nothing worth remembering.\n"
+    + _SUMMARY_PROMPT
+    + "Return the summary plus between 0 and 5 observations. Return an empty array if "
+    "the execution produced nothing worth remembering.\n"
     "If the execution FAILED or was aborted, focus on the LESSON: the root "
     "cause, the dead end to avoid, or the precondition that was missing — "
     'prefer type "semantic" for those.'
@@ -127,14 +161,14 @@ def _user_prompt(*, execution: Mapping[str, Any], agent: Mapping[str, Any]) -> s
     task_title = execution.get("task_title") or "(no title)"
     agent_role = agent.get("role") or "(unknown role)"
     status = execution.get("status") or "(unknown)"
-    output = (execution.get("output") or "")[:1500]
+    output = strip_private_tags(str(execution.get("output") or ""))[:1500]
     steps = execution.get("steps_log") or []
     # Show the most recent ~6 steps — that's where errors and useful
     # observations cluster; earlier steps are usually setup.
     tail = steps[-6:]
     tail_lines: list[str] = []
     for step in tail:
-        tail_lines.append(f"  - {_step_line(step)}")
+        tail_lines.append(f"  - {strip_private_tags(_step_line(step))}")
     tail_block = "\n".join(tail_lines) if tail_lines else "  (no recent steps)"
 
     return (
@@ -229,18 +263,20 @@ _HUMAN_SYSTEM_PROMPT = (
     "made them in, and the outcome. Phrase semantic facts as reusable "
     'knowledge (e.g. "<name> decided to <decision> in <context>, which led to '
     '<outcome>"). Always answer with a JSON array (no prose, no markdown '
-    "fences). Each item is an object with exactly four keys:\n"
+    "fences). Each item is an object with exactly five keys:\n"
     '  "content"  — a single-paragraph fact (max 2000 chars). When a human name '
     "is known, cite WHO made the decision.\n"
     '  "type"     — "episodic" (a concrete event of this session) or "semantic" '
     "(a generalised rule / decision rationale worth reusing).\n"
-    '  "tags"     — array of short string tags for filtering, e.g. '
+    + _KINDS_PROMPT
+    + '  "tags"     — array of short string tags for filtering, e.g. '
     '["legal-review", "brand"].\n'
     '  "entities" — array of the key NAMED ENTITIES the memory is about '
     "(people, projects, brands, documents), e.g. "
     '["Ana", "campaña-verano", "contrato-marco"]. Used to find this memory later.\n'
-    "Return between 0 and 5 items. Return an empty array if the work session "
-    "produced nothing worth remembering."
+    + _SUMMARY_PROMPT
+    + "Return the summary plus between 0 and 5 observations. Return an empty array if "
+    "the work session produced nothing worth remembering."
 )
 
 
@@ -257,7 +293,8 @@ def _human_user_prompt(
     task_title = session.get("task_title") or "(no title)"
     agent_role = agent.get("role") or "(human agent)"
     who = user.get("name") or "(an unnamed user)"
-    comments = (session.get("comments") or "")[:1500]
+    # task_mem_04: lo que el humano marcó `<private>` no llega ni al LLM.
+    comments = strip_private_tags(str(session.get("comments") or ""))[:1500]
     hours = session.get("hours_logged")
     attachments = session.get("output_files_attached") or []
     att_lines: list[str] = []
@@ -356,56 +393,115 @@ def _parse_response(text: str) -> list[MemoryCandidate]:
 def _parse_response_result(text: str) -> tuple[list[MemoryCandidate], str]:
     """Best-effort JSON extraction, con causa (F2.3).
 
-    Strategies, in order:
-      1. parse the whole response as JSON;
-      2. find the first ``[...]`` block and parse that;
-      3. give up → ``([], "llm_unparseable")``.
+    Con un modelo de ~9B (ADR 0169) nada de lo tipado hace fallar el destilado
+    (task_mem_04): un ``kind`` desconocido pasa a ``fact``, varios ``summary`` se
+    reducen a uno (ver :func:`_normalise_summary`) y un ``type`` ausente se deduce
+    del ``kind``. El tope ``MAX_CANDIDATES_PER_EXECUTION`` cuenta observaciones,
+    no el resumen.
 
-    Un array parseado sin candidatos válidos → ``([], "llm_empty")`` (la causa
-    legítima: el LLM decidió que no hay nada que recordar).
+    Sin JSON utilizable → ``([], "llm_unparseable")``. Una lista sin candidatos
+    válidos → ``([], "llm_empty")`` (la causa legítima: nada que recordar).
     """
-    candidates_raw = _try_parse_json(text)
-    if candidates_raw is None:
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        if match is not None:
-            candidates_raw = _try_parse_json(match.group(0))
-    if not isinstance(candidates_raw, list):
+    items = _extract_items(text)
+    if items is None:
         logger.info("memorizer.parse_failed", preview=text[:200])
         return [], "llm_unparseable"
 
+    cleaned: list[MemoryCandidate] = []
+    for raw in items:
+        if isinstance(raw, Mapping):
+            cand = _clean_candidate(raw)
+            if cand is not None:
+                cleaned.append(cand)
     out: list[MemoryCandidate] = []
-    for raw in candidates_raw:
-        if len(out) >= MAX_CANDIDATES_PER_EXECUTION:
-            break
-        if not isinstance(raw, Mapping):
-            continue
-        content = raw.get("content")
-        kind = raw.get("type")
-        tags = raw.get("tags") or []
-        if not isinstance(content, str) or not content.strip():
-            continue
-        if kind not in ("episodic", "semantic"):
-            continue
-        if not isinstance(tags, list):
-            tags = []
-        clean_tags = tuple(t.strip() for t in tags if isinstance(t, str) and t.strip())
-        entities_raw = raw.get("entities") or []
-        if not isinstance(entities_raw, list):
-            entities_raw = []
-        # Normalise with the SAME tokenizer the recall query uses, so the stored
-        # entities and the query terms match on shared tokens (ADR 0059).
-        clean_entities = tuple(
-            query_entity_terms(" ".join(e for e in entities_raw if isinstance(e, str)))
-        )
-        out.append(
-            MemoryCandidate(
-                content=content.strip()[:MAX_CONTENT_CHARS],
-                type=kind,
-                tags=clean_tags,
-                entities=clean_entities,
-            )
-        )
+    observations = 0
+    for cand in _normalise_summary(cleaned):
+        if cand.kind != SUMMARY_KIND:
+            if observations >= MAX_CANDIDATES_PER_EXECUTION:
+                continue
+            observations += 1
+        out.append(cand)
     return out, "llm_empty" if not out else "ok"
+
+
+def _extract_items(text: str) -> list[Any] | None:
+    """La lista de items del texto del LLM, o ``None`` si no hay JSON utilizable.
+
+    Estrategias, en orden: el texto entero; del primer ``[`` al último ``]`` (el
+    LLM envuelve el JSON en vallas o en prosa); del primer ``{`` al último ``}``
+    (un objeto envoltorio o un item suelto). Un objeto se desenvuelve: la primera
+    lista que contenga, o él mismo como único item."""
+    candidates: list[Any] = [_try_parse_json(text)]
+    for open_ch, close_ch in (("[", "]"), ("{", "}")):
+        lo, hi = text.find(open_ch), text.rfind(close_ch)
+        if lo != -1 and hi > lo:
+            candidates.append(_try_parse_json(text[lo : hi + 1]))
+    for parsed in candidates:
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, Mapping):
+            for value in parsed.values():
+                if isinstance(value, list):
+                    return value
+            if "content" in parsed:
+                return [parsed]
+    return None
+
+
+def _clean_candidate(raw: Mapping[str, Any]) -> MemoryCandidate | None:
+    """Un item del LLM -> candidato, o ``None`` si no hay contenido aprovechable."""
+    content = raw.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
+    kind = normalise_kind(raw.get("kind"))
+    raw_type = raw.get("type")
+    mem_type = raw_type.strip().lower() if isinstance(raw_type, str) else None
+    if mem_type not in ("episodic", "semantic"):
+        # Un modelo pequeño se salta o estropea `type`: si el `kind` es de verdad
+        # uno del vocabulario se deduce de él; si no, el item no es fiable.
+        real_kind = recognised_kind(raw.get("kind"))
+        if real_kind is None:
+            return None
+        mem_type = type_for_kind(real_kind)
+    tags = raw.get("tags") or []
+    if not isinstance(tags, list):
+        tags = []
+    clean_tags = tuple(t.strip() for t in tags if isinstance(t, str) and t.strip())
+    entities_raw = raw.get("entities") or []
+    if not isinstance(entities_raw, list):
+        entities_raw = []
+    # Normalise with the SAME tokenizer the recall query uses, so the stored
+    # entities and the query terms match on shared tokens (ADR 0059).
+    clean_entities = tuple(
+        query_entity_terms(" ".join(e for e in entities_raw if isinstance(e, str)))
+    )
+    return MemoryCandidate(
+        content=content.strip()[:MAX_CONTENT_CHARS],
+        type=mem_type,
+        tags=clean_tags,
+        entities=clean_entities,
+        kind=kind,
+    )
+
+
+def _normalise_summary(cands: list[MemoryCandidate]) -> list[MemoryCandidate]:
+    """Deja como mucho UN ``summary`` (task_mem_04) y lo pone el primero.
+
+    Varios: gana el primero, los demás pasan a ``fact`` (no se pierde nada).
+    Ninguno: la ejecución queda sin resumen — no se fabrica uno a partir de las
+    observaciones. El resumen es siempre ``episodic`` y de ≤ 600 caracteres."""
+    summary: MemoryCandidate | None = None
+    rest: list[MemoryCandidate] = []
+    for cand in cands:
+        if cand.kind != SUMMARY_KIND:
+            rest.append(cand)
+        elif summary is None:
+            summary = replace(
+                cand, type="episodic", content=cand.content[:SUMMARY_MAX_CHARS].rstrip()
+            )
+        else:
+            rest.append(replace(cand, kind=FALLBACK_KIND))
+    return ([summary] if summary is not None else []) + rest
 
 
 def _try_parse_json(text: str) -> Any:
@@ -418,6 +514,7 @@ def _try_parse_json(text: str) -> Any:
 __all__ = [
     "MAX_CANDIDATES_PER_EXECUTION",
     "MAX_CONTENT_CHARS",
+    "SUMMARY_MAX_CHARS",
     "DistillationResult",
     "MemoryCandidate",
     "distil_execution",

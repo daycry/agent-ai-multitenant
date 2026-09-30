@@ -72,6 +72,8 @@ class MemoryRecallHit:
     created_at: datetime | None = None
     agent_id: UUID | None = None
     project_id: UUID | None = None
+    # Tipo de observación (task_mem_04); None = sin clasificar.
+    kind: str | None = None
 
 
 def rrf_score(rank: int, k: int = RRF_K_DEFAULT) -> float:
@@ -144,6 +146,18 @@ def _scope_filter_sql() -> str:
     )
 
 
+def _kind_filter_sql(kinds: Sequence[str] | None) -> str:
+    """``AND kind = ANY(:kinds)`` cuando hay filtro por tipo (task_mem_04).
+
+    Sin filtro (``None`` / vacío) no añade nada: las memorias sin clasificar
+    (``kind IS NULL``) sólo salen cuando NO se pide un tipo concreto."""
+    return " AND kind = ANY(:kinds)" if kinds else ""
+
+
+def _kind_params(kinds: Sequence[str] | None) -> dict[str, Any]:
+    return {"kinds": list(kinds)} if kinds else {}
+
+
 async def _bm25_candidates(
     session: AsyncSession,
     *,
@@ -154,6 +168,7 @@ async def _bm25_candidates(
     team_id: UUID | None,
     project_id: UUID | None,
     limit: int,
+    kinds: Sequence[str] | None = None,
 ) -> list[UUID]:
     """Top-`limit` ids by `ts_rank_cd`. Empty list if `query` is blank.
 
@@ -172,6 +187,7 @@ async def _bm25_candidates(
         "   AND to_tsvector('public.es_unaccent', content)"
         "       @@ plainto_tsquery('public.es_unaccent', :q)"
         + _scope_filter_sql()
+        + _kind_filter_sql(kinds)
         + " ORDER BY ts_rank_cd(to_tsvector('public.es_unaccent', content),"
         "          plainto_tsquery('public.es_unaccent', :q)) DESC"
         "  LIMIT :limit"
@@ -186,6 +202,7 @@ async def _bm25_candidates(
             "team_id": team_id,
             "project_id": project_id,
             "limit": limit,
+            **_kind_params(kinds),
         },
     )
     return [row[0] for row in result.all()]
@@ -201,6 +218,7 @@ async def _vector_candidates(
     team_id: UUID | None,
     project_id: UUID | None,
     limit: int,
+    kinds: Sequence[str] | None = None,
 ) -> list[UUID]:
     """Top-`limit` ids by cosine similarity. Empty list if no query
     embedding (el embedder de query está cableado — Plan 06.17 task_06_17_03 —
@@ -216,6 +234,7 @@ async def _vector_candidates(
         "   AND deleted_at IS NULL"
         "   AND embedding IS NOT NULL"
         + _scope_filter_sql()
+        + _kind_filter_sql(kinds)
         + " ORDER BY embedding <=> CAST(:qvec AS vector)"
         " LIMIT :limit"
     )
@@ -231,6 +250,7 @@ async def _vector_candidates(
             "team_id": team_id,
             "project_id": project_id,
             "limit": limit,
+            **_kind_params(kinds),
         },
     )
     return [row[0] for row in result.all()]
@@ -305,6 +325,7 @@ async def _entity_candidates(
     team_id: UUID | None,
     project_id: UUID | None,
     limit: int,
+    kinds: Sequence[str] | None = None,
 ) -> list[UUID]:
     """Top-`limit` ids whose ``entities`` JSONB array overlaps the query terms,
     ranked by how many entities match (ADR 0059 Opción A). Empty if no terms.
@@ -318,7 +339,7 @@ async def _entity_candidates(
         " FROM memory_entries"
         " WHERE tenant_id = :tenant_id"
         "   AND deleted_at IS NULL"
-        "   AND entities ?| :terms" + _scope_filter_sql() + " ORDER BY ("
+        "   AND entities ?| :terms" + _scope_filter_sql() + _kind_filter_sql(kinds) + " ORDER BY ("
         "     SELECT count(*) FROM jsonb_array_elements_text(entities) e"
         "     WHERE e = ANY(:terms)"
         "   ) DESC, created_at DESC"
@@ -334,6 +355,7 @@ async def _entity_candidates(
             "team_id": team_id,
             "project_id": project_id,
             "limit": limit,
+            **_kind_params(kinds),
         },
     )
     return [row[0] for row in result.all()]
@@ -350,6 +372,7 @@ async def recall(
     project_id: UUID | None = None,
     query_embedding: Sequence[float] | None = None,
     limit: int = 5,
+    kinds: Sequence[str] | None = None,
     bm25_k: int = BM25_K_DEFAULT,
     vector_k: int = VECTOR_K_DEFAULT,
     entity_k: int = ENTITY_K_DEFAULT,
@@ -371,6 +394,7 @@ async def recall(
         team_id=team_id,
         project_id=project_id,
         limit=bm25_k,
+        kinds=kinds,
     )
     vector_ids = await _vector_candidates(
         session,
@@ -381,6 +405,7 @@ async def recall(
         team_id=team_id,
         project_id=project_id,
         limit=vector_k,
+        kinds=kinds,
     )
     entity_ids = await _entity_candidates(
         session,
@@ -391,6 +416,7 @@ async def recall(
         team_id=team_id,
         project_id=project_id,
         limit=entity_k,
+        kinds=kinds,
     )
     fused = fuse_rankings(bm25_ids, vector_ids, entity_ids, k=rrf_k)
     if not fused:
@@ -409,7 +435,7 @@ async def recall(
     # lookup would surface cross-tenant rows.
     detail_rows = await session.execute(
         text(
-            "SELECT id, content, scope, type, created_at, agent_id, project_id"
+            "SELECT id, content, scope, type, created_at, agent_id, project_id, kind"
             " FROM memory_entries"
             " WHERE id = ANY(:ids) AND tenant_id = :tenant_id AND deleted_at IS NULL"
         ),
@@ -423,6 +449,7 @@ async def recall(
             "created_at": row[4],
             "agent_id": row[5],
             "project_id": row[6],
+            "kind": row[7],
         }
         for row in detail_rows.all()
     }
@@ -452,6 +479,7 @@ async def recall(
                 created_at=by_id[mid]["created_at"],
                 agent_id=by_id[mid]["agent_id"],
                 project_id=by_id[mid]["project_id"],
+                kind=by_id[mid]["kind"],
             )
         )
         if len(hits) >= limit:
@@ -470,6 +498,7 @@ class MemoryDetail:
     created_at: datetime | None
     agent_id: UUID | None
     project_id: UUID | None
+    kind: str | None = None
 
 
 async def get_memories(
@@ -495,7 +524,7 @@ async def get_memories(
         return []
     result = await session.execute(
         text(
-            "SELECT id, content, scope, type, created_at, agent_id, project_id"
+            "SELECT id, content, scope, type, created_at, agent_id, project_id, kind"
             " FROM memory_entries"
             " WHERE tenant_id = :tenant_id AND deleted_at IS NULL AND id = ANY(:ids)"
             + _scope_filter_sql()
@@ -518,6 +547,7 @@ async def get_memories(
             created_at=row[4],
             agent_id=row[5],
             project_id=row[6],
+            kind=row[7],
         )
         for row in result.all()
     }

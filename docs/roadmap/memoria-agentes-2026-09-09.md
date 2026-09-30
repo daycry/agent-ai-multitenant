@@ -168,7 +168,7 @@ rompe un run.
 
 ### `task_mem_04` — Tipos de observación y resumen por ejecución
 
-- [ ] **Título**: `memory_entries.kind` (columna nueva, vocabulario cerrado: `summary`, `decision`,
+- [x] **Título**: `memory_entries.kind` (columna nueva, vocabulario cerrado: `summary`, `decision`,
       `bugfix`, `pattern`, `gotcha`, `preference`, `fact`; `type` episodic/semantic se conserva). El
       destilado pide al LLM **un** `summary` por ejecución (qué se hizo, decisiones, siguiente paso,
       ≤ 600 caracteres) más observaciones tipadas; el prompt y el parser se actualizan y las memorias
@@ -178,6 +178,16 @@ rompe un run.
       **Test**: unit del parser (tipos válidos, uno y sólo un summary, `<private>` retirado); integración
       de la migración y del filtro por `kinds`.
       **Coste**: 1,5 d.
+  - ✅ **Cerrada el 2026-09-30.** Migración `0152_memory_entries_kind`, aditiva, reversible y transaccional:
+    columna `kind` nullable con `CHECK` de vocabulario cerrado; las memorias anteriores quedan `NULL` y el panel
+    enseña «sin clasificar». El destilado pide un `summary` (≤ 600 caracteres) más observaciones tipadas. **Pensado
+    para modelos de ~9B** (ADR 0169): el parser acepta texto o vallas alrededor del JSON, un envoltorio o un item
+    suelto, `kind` en mayúsculas, con acentos o en español; un `kind` inventado pasa a `fact`; con varios `summary`
+    gana el primero y el resto pasa a `fact`; sin ninguno, la ejecución queda sin resumen y las observaciones se
+    conservan. `<private>…</private>` se retira antes de destilar, también sin cerrar. El filtro `kinds` está en
+    `recall()`, en `/memory-recall` y en la tool, y es tolerante: lo desconocido se descarta, nunca un 422. Rojo
+    visto en unit, esquema, runtime y vitest; la integración nació en verde y **el orquestador la verificó con una
+    mutación**: sin el filtro `kinds`, tres tests de `test_memory_kinds.py` en rojo.
 
 ## Ola 2 — Uso, utilidad y caducidad (P1 · ~3 d)
 

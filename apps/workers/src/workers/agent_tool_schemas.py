@@ -75,7 +75,7 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
         "description": (
             "Search relevant past memories (learnings from projects and from "
             "mistakes) via semantic search. Returns an INDEX per hit (id, headline, "
-            "type, scope, date, agent, project, score, tokens) - not the full text; "
+            "type, kind, scope, date, agent, project, score, tokens) - not the full text; "
             "call memory_get with the ids you need. Use it when starting a task to "
             "leverage past experience."
         ),
@@ -96,6 +96,26 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
                         "Scopes to query. EXACT valid values: 'private', "
                         "'team_shared', 'project_shared', 'global'. Optional; "
                         "defaults to the available ones."
+                    ),
+                },
+                "kinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "summary",
+                            "decision",
+                            "bugfix",
+                            "pattern",
+                            "gotcha",
+                            "preference",
+                            "fact",
+                        ],
+                    },
+                    "description": (
+                        "Optional filter by kind of memory: 'summary' (what a past run "
+                        "did), 'decision', 'bugfix', 'pattern', 'gotcha', 'preference', "
+                        "'fact'. Omit to search every kind."
                     ),
                 },
                 "limit": {

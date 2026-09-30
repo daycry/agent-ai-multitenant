@@ -118,6 +118,7 @@ async def _hits(
             "id": str(r.id),
             "headline": headline(r.content),
             "type": r.type,
+            "kind": r.kind,
             "scope": r.scope,
             "created_at": r.created_at.isoformat(),
             "agent": names.agents.get(r.agent_id) if r.agent_id else None,

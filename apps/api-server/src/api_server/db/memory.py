@@ -176,6 +176,13 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             "scope IN ('private', 'team_shared', 'project_shared', 'global')",
             name="ck_memory_entries_scope",
         ),
+        # task_mem_04 (migración 0152): vocabulario cerrado de `kind`, nullable
+        # (NULL = sin clasificar, las memorias anteriores). Es `memorizer.kinds`.
+        CheckConstraint(
+            "kind IS NULL OR kind IN ('summary', 'decision', 'bugfix', 'pattern',"
+            " 'gotcha', 'preference', 'fact')",
+            name="ck_memory_entries_kind",
+        ),
     )
 
     # `TenantScopedMixin` trae `index=True`, pero la BD desplegada NO tiene
@@ -191,6 +198,10 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'private'"))
     type: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'episodic'"))
+    # De qué va la memoria (task_mem_04): summary | decision | bugfix | pattern |
+    # gotcha | preference | fact. Ortogonal a `type` (episodic/semantic). NULL =
+    # «sin clasificar» (memorias anteriores a la migración 0152).
+    kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # The text the agent reads back. Short by convention; the KB is
     # where long documents belong (Plan 04 Fase B onward).

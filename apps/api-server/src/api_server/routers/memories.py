@@ -50,6 +50,7 @@ _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 _SCOPE_LITERAL = Literal["private", "team_shared", "project_shared", "global"]
 _TYPE_LITERAL = Literal["episodic", "semantic"]
+_KIND_LITERAL = Literal["summary", "decision", "bugfix", "pattern", "gotcha", "preference", "fact"]
 
 # Owner-pointer column that identifies "who owns" a memory within a
 # non-global scope. RLS only scopes rows by ``tenant_id``; two rows of
@@ -127,7 +128,10 @@ class MemoryResponse(BaseModel):
     scope: str
     type: str
     category: str
-    """Alias de `type` (episodic/semantic); el `kind` tipado es de task_mem_04."""
+    """Alias de `type` (episodic/semantic)."""
+    kind: str | None = None
+    """Tipo de observación (`task_mem_04`, columna `kind`): summary | decision | bugfix |
+    pattern | gotcha | preference | fact. `None` = «sin clasificar» (memorias anteriores)."""
     content: str
     tags: list[str]
     user_id: UUID | None
@@ -158,6 +162,7 @@ def _to_response(row: MemoryEntry, names: Names | None = None) -> MemoryResponse
         scope=row.scope,
         type=row.type,
         category=row.type,
+        kind=row.kind,
         content=row.content,
         tags=list(row.tags or []),
         user_id=row.user_id,
@@ -294,6 +299,7 @@ async def list_memories(
     scope: _SCOPE_LITERAL | None = Query(default=None),
     type: _TYPE_LITERAL | None = Query(default=None),
     category: _TYPE_LITERAL | None = Query(default=None),
+    kind: _KIND_LITERAL | None = Query(default=None),
     project_id: UUID | None = Query(default=None),
     team_id: UUID | None = Query(default=None),
     agent_id: UUID | None = Query(default=None),
@@ -309,7 +315,7 @@ async def list_memories(
 ) -> list[MemoryResponse]:
     """Visible memories in the tenant with their provenance (task_ui_31).
 
-    Filters: scope, type/category (same column), project, team, agent,
+    Filters: scope, type/category (same column), ``kind`` (task_mem_04), project, team, agent,
     ``created_by`` (an agent id, or a user id for private/manual/human-session
     memories), ``execution_id``, ``id_prefix`` (resolves a ``[mem:<id>]`` citation)
     and a ``created_at`` range. RLS handles the
@@ -326,9 +332,11 @@ async def list_memories(
     )
     if scope is not None:
         stmt = stmt.where(MemoryEntry.scope == scope)
-    kind = category or type
+    type_filter = category or type
+    if type_filter is not None:
+        stmt = stmt.where(MemoryEntry.type == type_filter)
     if kind is not None:
-        stmt = stmt.where(MemoryEntry.type == kind)
+        stmt = stmt.where(MemoryEntry.kind == kind)
     if project_id is not None:
         stmt = stmt.where(MemoryEntry.project_id == project_id)
     if team_id is not None:
