@@ -130,9 +130,17 @@ async def _hits(
 
 
 def _memory_filters(
-    tenant_id: UUID, visible: ColumnElement[bool], owner: ColumnElement[bool] | None
+    tenant_id: UUID,
+    visible: ColumnElement[bool],
+    owner: ColumnElement[bool] | None,
+    *,
+    include_archived: bool = False,
 ) -> list[ColumnElement[bool]]:
     filters = [MemoryEntry.tenant_id == tenant_id, MemoryEntry.deleted_at.is_(None), visible]
+    if not include_archived:
+        # task_mem_11: lo archivado no es contexto para un agente; el visor humano sí
+        # puede abrir su línea de tiempo (`include_archived=True`).
+        filters.append(MemoryEntry.archived_at.is_(None))
     if owner is not None:
         filters.append(owner)
     return filters
@@ -146,6 +154,7 @@ async def build_timeline(
     memory_id: UUID | None = None,
     execution_id: UUID | None = None,
     window: int = 5,
+    include_archived: bool = False,
 ) -> Timeline | None:
     """La linea de tiempo, o ``None`` si el ancla no existe o no es visible
     para quien pregunta (el llamador responde 404: no se distingue «no existe»
@@ -160,7 +169,8 @@ async def build_timeline(
         anchor_memory = (
             await session.execute(
                 select(MemoryEntry).where(
-                    MemoryEntry.id == memory_id, *_memory_filters(tenant_id, visible, None)
+                    MemoryEntry.id == memory_id,
+                    *_memory_filters(tenant_id, visible, None, include_archived=include_archived),
                 )
             )
         ).scalar_one_or_none()
@@ -199,7 +209,7 @@ async def build_timeline(
     anchor_at: datetime = anchor_exec.created_at
     lo, hi = anchor_at - timedelta(days=HORIZON_DAYS), anchor_at + timedelta(days=HORIZON_DAYS)
 
-    mem_filters = _memory_filters(tenant_id, visible, owner)
+    mem_filters = _memory_filters(tenant_id, visible, owner, include_archived=include_archived)
 
     def _executions(*conds: ColumnElement[bool]) -> Select[Any]:
         return (

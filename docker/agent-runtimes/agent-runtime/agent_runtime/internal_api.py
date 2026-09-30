@@ -207,6 +207,15 @@ class InternalAgentAPI:
             body["execution_id"] = execution_id
         return self._post("/internal/agent/memory-timeline", body)
 
+    def memory_feedback(
+        self, *, memory_id: str, verdict: str, note: str | None = None
+    ) -> dict[str, Any]:
+        """Vote ``useful`` / ``wrong`` / ``outdated`` on a memory (task_mem_10)."""
+        body: dict[str, Any] = {"memory_id": memory_id, "verdict": verdict}
+        if note:
+            body["note"] = note
+        return self._post("/internal/agent/memory-feedback", body)
+
     def memory_get(self, *, ids: list[str]) -> list[dict[str, Any]]:
         """Full content of up to 20 memories by id (task_mem_01)."""
         payload = self._post("/internal/agent/memory-get", {"ids": ids})

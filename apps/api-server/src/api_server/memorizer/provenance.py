@@ -155,10 +155,13 @@ def created_by_for(row: MemoryEntry, names: Names) -> dict[str, Any]:
 
 
 def visibility_sql(prefix: str = "") -> str:
-    """Cláusula SQL (binds `:tenant_id`, `:viewer_id`) de lo que la persona puede ver."""
+    """Cláusula SQL (binds `:tenant_id`, `:viewer_id`) de lo que la persona puede ver.
+
+    Lo archivado (task_mem_11) queda fuera de contadores y buscador, igual que del
+    listado por defecto; sólo `GET /memories?archived=true` lo enseña."""
     p = prefix
     return (
-        f"{p}tenant_id = :tenant_id AND {p}deleted_at IS NULL"
+        f"{p}tenant_id = :tenant_id AND {p}deleted_at IS NULL AND {p}archived_at IS NULL"
         f" AND ({p}scope <> 'private' OR {p}user_id = :viewer_id)"
     )
 

@@ -24,6 +24,9 @@ from agent_runtime.internal_api import (
 from agent_runtime.tools import ToolRegistry, ToolResult
 
 _VALID_SCOPES = ("private", "team_shared", "project_shared", "global")
+# Veredictos válidos de `memory_feedback` (task_mem_10).
+_FEEDBACK_VERDICTS = frozenset({"useful", "wrong", "outdated"})
+
 # Tope de ids por llamada a `memory_get` (el servidor lo impone igual).
 _MEMORY_GET_MAX_IDS = 20
 # LLMs ignore the schema enum and send near-misses ("project", "team", "error"…),
@@ -205,6 +208,40 @@ class MemoryTools:
             return ToolResult(ok=False, error=f"memory_get failed: {exc}")
         return ToolResult(ok=True, output={"memories": memories, "count": len(memories)})
 
+    def memory_feedback(self, args: dict[str, Any]) -> ToolResult:
+        """Voto ``useful`` / ``wrong`` / ``outdated`` sobre una memoria (task_mem_10).
+
+        ESCRITURA (pasa por el gate de aprobación como ``memory_store``). El servidor sólo
+        deja votar memorias que el agente puede leer, y un voto por ejecución y memoria:
+        repetirlo no suma. ``wrong`` / ``outdated`` marcan la memoria como ``disputed`` (no
+        se borra); el ranking la baja."""
+        memory_id = args.get("memory_id")
+        if not isinstance(memory_id, str) or not memory_id.strip():
+            return ToolResult(ok=False, error="memory_feedback requires a non-empty 'memory_id'")
+        verdict_raw = args.get("verdict")
+        verdict = verdict_raw.strip().lower() if isinstance(verdict_raw, str) else None
+        if verdict not in _FEEDBACK_VERDICTS:
+            return ToolResult(
+                ok=False,
+                error="memory_feedback 'verdict' must be one of: useful, wrong, outdated",
+            )
+        note = args.get("note")
+        if note is not None and not isinstance(note, str):
+            return ToolResult(ok=False, error="memory_feedback 'note' must be a string")
+        try:
+            result = self.api.memory_feedback(
+                memory_id=memory_id.strip(), verdict=verdict, note=(note or "").strip() or None
+            )
+        except InternalAPIHTTPError as exc:
+            return ToolResult(
+                ok=False,
+                error=f"memory_feedback HTTP {exc.status_code}: {exc.body[:200]}",
+                output={"status_code": exc.status_code},
+            )
+        except InternalAPIError as exc:
+            return ToolResult(ok=False, error=f"memory_feedback failed: {exc}")
+        return ToolResult(ok=True, output=result)
+
     def memory_store(self, args: dict[str, Any]) -> ToolResult:
         validated = _validate_store_args(args)
         if isinstance(validated, ToolResult):
@@ -254,6 +291,7 @@ def register_memory_tools(registry: ToolRegistry, api: InternalAgentAPI) -> None
     registry.register("memory_store", tools.memory_store)
     registry.register("memory_get", tools.memory_get)
     registry.register("memory_timeline", tools.memory_timeline)
+    registry.register("memory_feedback", tools.memory_feedback)
 
 
 __all__ = ["MemoryTools", "register_memory_tools"]

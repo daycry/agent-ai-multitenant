@@ -97,6 +97,13 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     # DESPUÉS de task_prod03_06, no antes.
     "promote_to_kb": "data_migration",
     "memory_store": "code_changes",
+    # `memory_feedback` (task_mem_10) ESCRIBE `useful_count`/`harmful_count` y puede marcar
+    # una memoria `disputed`: efecto persistente que otro run lee después, así que no es
+    # una lectura exenta. MISMA categoría y mismo motivo que `memory_store` (arriba): es
+    # tool de sistema de uso rutinario, y gatearla en `development` provocaría el bucle
+    # aprobar→re-aparcar (ADR 0020 / task_prod03_06). `code_changes` la deja `auto` en
+    # sandbox/development y la gatea en production y customer-external.
+    "memory_feedback": "code_changes",
     # `kanban_update` tiene el MISMO agujero latente (mueve tareas del tablero) y
     # se queda sin categoría a propósito: hoy no está en
     # `RUNTIME_WIRED_TOOL_NAMES` (su drain worker-side nunca aterrizó, devuelve

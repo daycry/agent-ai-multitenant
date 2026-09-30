@@ -38,6 +38,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     literal_column,
     text,
 )
@@ -290,6 +291,21 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
         TIMESTAMP(timezone=True), nullable=True
     )
 
+    # Utilidad y estado (task_mem_10 / task_mem_11, migración 0153). Los votos los
+    # escribe `memorizer.feedback.apply_feedback` (un voto por votante, recalculado
+    # desde `memory_feedback`); `disputed_at` marca una memoria dada por errónea o
+    # desfasada SIN borrarla; `archived_at`/`archive_reason` son el archivado soft:
+    # el recall no la ve, el visor sí con `archived=true`.
+    useful_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    harmful_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    disputed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    archive_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
 
 class MemoryRecallLog(Base, UUIDPrimaryKeyMixin):
     """Una recuperación de una memoria por un agente (task_mem_02).
@@ -329,4 +345,85 @@ class MemoryRecallLog(Base, UUIDPrimaryKeyMixin):
     )
 
 
-__all__ = ["EMBEDDING_DIM", "MemoryEntry", "MemoryRecallLog"]
+class MemoryFeedback(Base, UUIDPrimaryKeyMixin):
+    """Un voto sobre una memoria (task_mem_10): `useful` | `wrong` | `outdated`.
+
+    Uno por (memoria, votante): el votante es la ejecución en marcha o, sin ella, el
+    agente. Repetir el veredicto no suma; cambiarlo reescribe la fila. Es la traza de
+    auditoría de cada voto y de ella se recalculan `useful_count` / `harmful_count`."""
+
+    __tablename__ = "memory_feedback"
+    __table_args__ = (
+        Index("ix_memory_feedback_tenant_memory", "tenant_id", "memory_id"),
+        CheckConstraint(
+            "verdict IN ('useful', 'wrong', 'outdated')", name="ck_memory_feedback_verdict"
+        ),
+        UniqueConstraint("tenant_id", "memory_id", "voter_key", name="uq_memory_feedback_voter"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    memory_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("memory_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    voter_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    execution_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    verdict: Mapped[str] = mapped_column(String(10), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class MemoryCompactionProposal(Base, UUIDPrimaryKeyMixin):
+    """La revisión que el job propone para las `disputed` de un proyecto (task_mem_11).
+
+    `pending` hasta que un `tenant_admin` la confirma (archiva las memorias con motivo) o
+    la rechaza. A lo sumo una pendiente por proyecto."""
+
+    __tablename__ = "memory_compaction_proposals"
+    __table_args__ = (
+        Index(
+            "uq_memory_compaction_pending_project",
+            "tenant_id",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_memory_compaction_tenant_status", "tenant_id", "status", "created_at"),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'rejected')", name="ck_memory_compaction_status"
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(12), nullable=False, server_default=text("'pending'")
+    )
+    memory_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    decided_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+__all__ = [
+    "EMBEDDING_DIM",
+    "MemoryCompactionProposal",
+    "MemoryEntry",
+    "MemoryFeedback",
+    "MemoryRecallLog",
+]

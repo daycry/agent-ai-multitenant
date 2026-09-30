@@ -203,10 +203,23 @@ rompe un run.
       `semantic`); integración de `memory_feedback` bajo RLS; eval de recall antes/después sobre el
       dataset dorado de evals (Plan 14) con el resultado en el changelog.
       **Coste**: 2 d.
+  - ⏳ **Implementada el 2026-09-30; la casilla sigue abierta por el eval del dataset dorado.** Tool
+    `memory_feedback` (`useful|wrong|outdated`): un voto por memoria y votante, que se reescribe si cambia, y
+    contadores recalculados desde `memory_feedback`. `wrong`/`outdated` marcan `disputed_at` sin borrar. El recall
+    del agente suma utilidad (suavizada) y frescura (vida media de 60 días, sólo para `episodic`; `semantic` y
+    `summary` no decaen) y penaliza lo disputado. Los pesos `memory.rank_*` están en `platform_settings` con cotas;
+    con los pesos a 0 el orden es el de antes, y si falla la lectura de los pesos el recall sigue con RRF puro.
+    `memory_feedback` es escritura y se gatea como `memory_store` (`code_changes`). **Eval:** el dataset dorado del
+    Plan 14 califica prompts con un juez LLM y no mide el recall, así que se midió sobre un conjunto sintético
+    reproducible (`tests/unit/test_memory_rank_eval.py`, semilla fija, 400 consultas). Con feedback informativo el
+    MRR pasa de 0,518 a 0,551; con feedback de puro ruido baja de 0,543 a 0,515. Los defaults (utilidad 0,15,
+    frescura 0,05) salen de una rejilla que limita esa pérdida a 0,03. **Decide el operador** si ese eval sustituye
+    al del dataset dorado o si hace falta un dataset de recall. Rojo visto en unit y runtime; la integración nació
+    en verde y se verificó con mutaciones: sin pesos en `/memory-recall`, los dos tests de ranking se ponen rojos.
 
 ### `task_mem_11` — Caducidad y compactación
 
-- [ ] **Título**: job de mantenimiento (beat, `workers.maintenance`) que **archiva** (soft) las
+- [x] **Título**: job de mantenimiento (beat, `workers.maintenance`) que **archiva** (soft) las
       `episodic` sin `kind = summary`, con `recall_count = 0` y más de N días (default 90, ajuste de
       plataforma), y que **compacta** las memorias `disputed` de un mismo proyecto en una revisión que
       el operador confirma desde la UI (`task_ui_31` pinta la cola). Nunca borra: archiva con motivo y
@@ -214,6 +227,16 @@ rompe un run.
       **Test**: unit de la selección (qué archiva y qué no); integración del job; el archivado no aparece
       en el recall pero sí en el visor con filtro.
       **Coste**: 1 d.
+  - ✅ **Cerrada el 2026-09-30.** Job diario `workers.maintain_memory_lifecycle` (04:10, importado en la fachada de
+    `workers.maintenance`, así que no cae en la trampa del beat sin importar). Archiva con motivo y fila de
+    `audit_log` las `episodic` que no son `summary`, tienen `recall_count = 0` y superan `memory.archive_after_days`
+    (90 por defecto). Sólo toca `team_shared`, `project_shared` y `global`: nunca `private`, ni las memorias del
+    córtex, cuyas lecturas no suman `recall_count`. Compacta las `disputed` de cada proyecto en una propuesta
+    pendiente que no aplica nada; la confirma o la rechaza un `tenant_admin` con `GET /memories/compactions` y
+    `POST …/{id}/confirm|reject`, que dejan auditoría. El recall, `memory_get`, los contadores y la línea de tiempo
+    del agente excluyen lo archivado; `GET /memories?archived=true` lo enseña. Migración `0153`, aditiva y
+    reversible, con dos tablas nuevas bajo RLS. Rojo visto en el unit de la selección; la integración se verificó
+    con una mutación: sin `archived_at IS NULL`, el test del recall se pone rojo.
 
 ## Ola 3 — Que se vea y se pueda operar (P1 · ~2 d)
 

@@ -32,12 +32,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_server.memorizer.ranking import MemorySignals, RankWeights, rank_fused
 
 # Reciprocal Rank Fusion smoothing constant. 60 is the value
 # Cormack et al. (2009) recommend.
@@ -74,6 +76,10 @@ class MemoryRecallHit:
     project_id: UUID | None = None
     # Tipo de observación (task_mem_04); None = sin clasificar.
     kind: str | None = None
+    # Score de la fusión RRF ANTES de utilidad/frescura/disputed (task_mem_10); ``rrf_score``
+    # es el final. Iguales cuando no hay pesos.
+    fused_score: float | None = None
+    disputed: bool = False
 
 
 def rrf_score(rank: int, k: int = RRF_K_DEFAULT) -> float:
@@ -184,6 +190,7 @@ async def _bm25_candidates(
         " FROM memory_entries"
         " WHERE tenant_id = :tenant_id"
         "   AND deleted_at IS NULL"
+        "   AND archived_at IS NULL"
         "   AND to_tsvector('public.es_unaccent', content)"
         "       @@ plainto_tsquery('public.es_unaccent', :q)"
         + _scope_filter_sql()
@@ -232,6 +239,7 @@ async def _vector_candidates(
         " FROM memory_entries"
         " WHERE tenant_id = :tenant_id"
         "   AND deleted_at IS NULL"
+        "   AND archived_at IS NULL"
         "   AND embedding IS NOT NULL"
         + _scope_filter_sql()
         + _kind_filter_sql(kinds)
@@ -339,6 +347,7 @@ async def _entity_candidates(
         " FROM memory_entries"
         " WHERE tenant_id = :tenant_id"
         "   AND deleted_at IS NULL"
+        "   AND archived_at IS NULL"
         "   AND entities ?| :terms" + _scope_filter_sql() + _kind_filter_sql(kinds) + " ORDER BY ("
         "     SELECT count(*) FROM jsonb_array_elements_text(entities) e"
         "     WHERE e = ANY(:terms)"
@@ -373,6 +382,7 @@ async def recall(
     query_embedding: Sequence[float] | None = None,
     limit: int = 5,
     kinds: Sequence[str] | None = None,
+    weights: RankWeights | None = None,
     bm25_k: int = BM25_K_DEFAULT,
     vector_k: int = VECTOR_K_DEFAULT,
     entity_k: int = ENTITY_K_DEFAULT,
@@ -384,6 +394,11 @@ async def recall(
     by RRF score descending. The session is expected to already have
     `app.tenant_id` set (the tenant filter in SQL is a defence-in-depth
     on top of RLS).
+
+    ``weights`` (task_mem_10) activa el cuarto término del ranking —utilidad, frescura
+    y ``disputed``, ver :mod:`api_server.memorizer.ranking`—; ``None`` deja la fusión
+    RRF pura (lo que esperan el córtex y el asistente, que no leen los ajustes). Lo
+    archivado (``archived_at``) no sale nunca.
     """
     bm25_ids = await _bm25_candidates(
         session,
@@ -422,27 +437,26 @@ async def recall(
     if not fused:
         return []
 
-    # AUD16-18: sobre-muestrear antes del corte — el dedup por contenido de
-    # abajo puede descartar filas idénticas y el slot liberado debe poder
-    # llenarlo la siguiente lección DISTINTA (no quedarse corto).
-    top_ids = [mid for mid, _ in sorted(fused.items(), key=lambda kv: -kv[1][0])][: limit * 4]
-    if not top_ids:
-        return []
-    # Defence-in-depth: filter tenant_id + deleted_at explicitly here too, consistent with
-    # the three candidate queries. `top_ids` already come from tenant-scoped candidates under
-    # RLS, but this final detail fetch must not rely on RLS alone — if a session ever lacked a
-    # correct app.tenant_id (worker BYPASSRLS reuse, middleware bug), an unfiltered id-only
-    # lookup would surface cross-tenant rows.
+    # Defence-in-depth: filter tenant_id + deleted_at + archived_at explicitly here too,
+    # consistent with the three candidate queries. `fused` ids already come from tenant-scoped
+    # candidates under RLS, but this detail fetch must not rely on RLS alone — if a session ever
+    # lacked a correct app.tenant_id (worker BYPASSRLS reuse, middleware bug), an unfiltered
+    # id-only lookup would surface cross-tenant rows.
     detail_rows = await session.execute(
         text(
-            "SELECT id, content, scope, type, created_at, agent_id, project_id, kind"
+            "SELECT id, content, scope, type, created_at, agent_id, project_id, kind,"
+            "       useful_count, harmful_count, disputed_at, last_recalled_at"
             " FROM memory_entries"
-            " WHERE id = ANY(:ids) AND tenant_id = :tenant_id AND deleted_at IS NULL"
+            " WHERE id = ANY(:ids) AND tenant_id = :tenant_id"
+            "   AND deleted_at IS NULL AND archived_at IS NULL"
         ),
-        {"ids": top_ids, "tenant_id": tenant_id},
+        {"ids": list(fused), "tenant_id": tenant_id},
     )
-    by_id: dict[UUID, dict[str, Any]] = {
-        row[0]: {
+    now = datetime.now(tz=UTC)
+    by_id: dict[UUID, dict[str, Any]] = {}
+    signals: dict[UUID, MemorySignals] = {}
+    for row in detail_rows.all():
+        by_id[row[0]] = {
             "content": row[1],
             "scope": row[2],
             "type": row[3],
@@ -451,8 +465,27 @@ async def recall(
             "project_id": row[6],
             "kind": row[7],
         }
-        for row in detail_rows.all()
-    }
+        signals[row[0]] = MemorySignals(
+            type=row[3],
+            kind=row[7],
+            useful_count=int(row[8] or 0),
+            harmful_count=int(row[9] or 0),
+            disputed=row[10] is not None,
+            age_days=_age_days(now, row[11] or row[4]),
+        )
+    # AUD16-18: sobre-muestrear antes del corte — el dedup por contenido de
+    # abajo puede descartar filas idénticas y el slot liberado debe poder
+    # llenarlo la siguiente lección DISTINTA (no quedarse corto).
+    ranked = rank_fused(
+        {mid: entry for mid, entry in fused.items() if mid in by_id},
+        signals,
+        weights or RankWeights.off(),
+        k=rrf_k,
+    )
+    final_scores = dict(ranked)
+    top_ids = [mid for mid, _ in ranked][: limit * 4]
+    if not top_ids:
+        return []
     hits: list[MemoryRecallHit] = []
     # AUD16-18: dedup por contenido normalizado (cinturón sobre el dedup del
     # persist, que no limpia duplicados preexistentes) — la fila mejor
@@ -474,17 +507,28 @@ async def recall(
                 type=by_id[mid]["type"],
                 bm25_rank=bm25_r,
                 vector_rank=vec_r,
-                rrf_score=s,
+                rrf_score=final_scores[mid],
                 entity_rank=ent_r,
                 created_at=by_id[mid]["created_at"],
                 agent_id=by_id[mid]["agent_id"],
                 project_id=by_id[mid]["project_id"],
                 kind=by_id[mid]["kind"],
+                fused_score=s,
+                disputed=signals[mid].disputed,
             )
         )
         if len(hits) >= limit:
             break
     return hits
+
+
+def _age_days(now: datetime, since: datetime | None) -> float:
+    """Días desde ``since`` (naive se toma como UTC); una fecha ausente es edad 0."""
+    if since is None:
+        return 0.0
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    return (now - since).total_seconds() / 86400.0
 
 
 @dataclass(frozen=True)
@@ -526,8 +570,8 @@ async def get_memories(
         text(
             "SELECT id, content, scope, type, created_at, agent_id, project_id, kind"
             " FROM memory_entries"
-            " WHERE tenant_id = :tenant_id AND deleted_at IS NULL AND id = ANY(:ids)"
-            + _scope_filter_sql()
+            " WHERE tenant_id = :tenant_id AND deleted_at IS NULL AND archived_at IS NULL"
+            " AND id = ANY(:ids)" + _scope_filter_sql()
         ),
         {
             "tenant_id": tenant_id,

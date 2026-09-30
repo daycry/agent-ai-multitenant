@@ -97,6 +97,7 @@ _SYSTEM_TOOL_NAMES: frozenset[str] = frozenset(
         "memory_store",
         "memory_get",
         "memory_timeline",
+        "memory_feedback",
         # knowledge family — `rag_search` es el nombre ejecutable al que
         # aliasea el `semantic_search` del catálogo
         "rag_search",
@@ -186,6 +187,7 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "memory_store",
         "memory_get",
         "memory_timeline",
+        "memory_feedback",
         # NOTA — los cuatro `run_*` SALIERON de esta lista (F5 de
         # registry-egress-followups, 2026-07-28). Son `docker_command`, y
         # `DockerCommandTool` dentro del sandbox falla SIEMPRE por diseño: la

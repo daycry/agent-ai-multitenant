@@ -264,3 +264,18 @@ def test_memory_store_stays_auto_in_development_to_avoid_the_repark_livelock() -
     # código también pasa sin humano, y un POST a internet NO.
     assert development.review("write_file") is None
     assert development.review("http_post") == "external_http_post"
+
+
+def test_memory_feedback_is_a_gated_write_with_the_same_category_as_memory_store() -> None:
+    """task_mem_10: `memory_feedback` ESCRIBE (`useful_count`/`harmful_count`, marca `disputed`).
+
+    No es una lectura exenta: su efecto sobrevive al run y otro run lee el ranking resultante.
+    Decisión: MISMA categoría que `memory_store` (`code_changes`) y por la MISMA razón — es tool
+    de sistema, de uso rutinario, y gatearla en `development` convertiría cada run que vota en el
+    bucle aprobar→re-aparcar (ADR 0020 / task_prod03_06). Queda `auto` en sandbox/development y
+    gateada en production y customer-external. Si alguien la exime, `test_the_exemption_list_stays
+    _honest` ya obliga a escribir el motivo; este test fija que la decisión fue gatearla."""
+    assert DEFAULT_TOOL_CATEGORIES["memory_feedback"] == "code_changes"
+    assert "memory_feedback" not in _WIRED_UNGATED_BY_DESIGN
+    assert ApprovalGate(_preset("human_required")).review("memory_feedback") == "code_changes"
+    assert ApprovalGate(_development_preset()).review("memory_feedback") is None

@@ -29,10 +29,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
-from api_server.db.memory import MemoryEntry
+from api_server.auth.deps import (
+    AuthPrincipal,
+    get_tenant_session,
+    require_tenant_admin,
+    require_tenant_member,
+)
+from api_server.db.memory import MemoryCompactionProposal, MemoryEntry
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
+from api_server.memorizer.lifecycle import (
+    CompactionNotFoundError,
+    confirm_compaction,
+    reject_compaction,
+)
 from api_server.memorizer.provenance import (
     Names,
     created_by_for,
@@ -149,6 +159,14 @@ class MemoryResponse(BaseModel):
     recall_count: int | None = None
     """Cuántos runs recuperaron la memoria (`task_mem_02`, columna `recall_count`).
     `None` sólo si una fila llegara sin dato: el panel dice «desconocido»."""
+    useful_count: int = 0
+    harmful_count: int = 0
+    """Votos `useful` / `wrong`+`outdated` de `memory_feedback` (`task_mem_10`)."""
+    disputed: bool = False
+    """Marcada como errónea o desfasada (`task_mem_10`); el ranking la baja, no se borra."""
+    archived_at: datetime | None = None
+    archive_reason: str | None = None
+    """Archivado soft (`task_mem_11`): el recall no la ve; sólo sale con `archived=true`."""
     has_embedding: bool
     created_at: datetime
     updated_at: datetime
@@ -177,6 +195,11 @@ def _to_response(row: MemoryEntry, names: Names | None = None) -> MemoryResponse
         agent_name=n.agents.get(row.agent_id) if row.agent_id else None,
         created_by=CreatedBy(**created_by_for(row, n)),
         recall_count=row.recall_count,
+        useful_count=row.useful_count or 0,
+        harmful_count=row.harmful_count or 0,
+        disputed=row.disputed_at is not None,
+        archived_at=row.archived_at,
+        archive_reason=row.archive_reason,
         has_embedding=row.embedding is not None,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -306,6 +329,7 @@ async def list_memories(
     created_by: UUID | None = Query(default=None),
     execution_id: UUID | None = Query(default=None),
     id_prefix: str | None = Query(default=None, pattern=r"^[0-9a-fA-F-]{6,36}$"),
+    archived: bool = Query(default=False),
     created_from: datetime | None = Query(default=None),
     created_to: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -318,7 +342,8 @@ async def list_memories(
     Filters: scope, type/category (same column), ``kind`` (task_mem_04), project, team, agent,
     ``created_by`` (an agent id, or a user id for private/manual/human-session
     memories), ``execution_id``, ``id_prefix`` (resolves a ``[mem:<id>]`` citation)
-    and a ``created_at`` range. RLS handles the
+    ``archived`` (task_mem_11: por defecto se OCULTAN las archivadas; ``archived=true`` enseña
+    SÓLO las archivadas, con su motivo) and a ``created_at`` range. RLS handles the
     tenant boundary (``tenant_id`` is also explicit); on top of it a ``private``
     row is visible ONLY to its owning user (H1) — no filter can lift that.
     Names (project/team/agent/creator) are resolved in a batch, not per row."""
@@ -330,6 +355,12 @@ async def list_memories(
         # (team_shared / project_shared / global) for any tenant member.
         or_(MemoryEntry.scope != "private", MemoryEntry.user_id == principal.user_id),
     )
+    if id_prefix is None:
+        # Una cita `[mem:<id>]` de un informe antiguo debe resolver aunque la memoria ya esté
+        # archivada: sólo el listado sin cita aplica el filtro de archivo.
+        stmt = stmt.where(
+            MemoryEntry.archived_at.is_not(None) if archived else MemoryEntry.archived_at.is_(None)
+        )
     if scope is not None:
         stmt = stmt.where(MemoryEntry.scope == scope)
     type_filter = category or type
@@ -679,6 +710,7 @@ async def memory_timeline(
         visible=human_visibility(principal.user_id),
         memory_id=memory_id,
         window=window,
+        include_archived=True,  # el visor humano puede abrir la ficha de una archivada
     )
     if timeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
@@ -775,6 +807,124 @@ async def merge_memory_into(
     await session.flush()
     await session.refresh(tgt)
     return _to_response(tgt)
+
+
+# ---------------------------------------------------------------------------
+# Compactación de memorias disputadas (task_mem_11)
+# ---------------------------------------------------------------------------
+# El job `workers.maintain_memory_lifecycle` propone una revisión `pending` por proyecto con
+# sus memorias `disputed`; NO aplica nada. Un `tenant_admin` la confirma (se archivan con
+# motivo, nunca se borran) o la rechaza. La cola la pinta la UI de `task_ui_31` / `task_mem_20`.
+class CompactionOut(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    project_id: UUID
+    project_name: str | None = None
+    status: str
+    memory_ids: list[str]
+    summary: str
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
+class CompactionDecision(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    status: str
+    archived: int = 0
+
+
+@router.get("/compactions", response_model=list[CompactionOut])
+async def list_compactions(
+    status_filter: Literal["pending", "confirmed", "rejected"] = Query(
+        default="pending", alias="status"
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[CompactionOut]:
+    """La cola de revisiones de compactación del tenant (sólo `tenant_admin`)."""
+    from api_server.db.domain import Project
+
+    tenant_id = require_tenant_id(principal)
+    rows = (
+        (
+            await session.execute(
+                select(MemoryCompactionProposal)
+                .where(
+                    MemoryCompactionProposal.tenant_id == tenant_id,
+                    MemoryCompactionProposal.status == status_filter,
+                )
+                .order_by(MemoryCompactionProposal.created_at.desc(), MemoryCompactionProposal.id)
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    names: dict[UUID, str] = {}
+    if rows:
+        res = await session.execute(
+            select(Project.id, Project.name).where(
+                Project.tenant_id == tenant_id, Project.id.in_({r.project_id for r in rows})
+            )
+        )
+        names = {pid: name for pid, name in res.tuples().all()}  # noqa: C416
+    return [
+        CompactionOut(
+            id=r.id,
+            project_id=r.project_id,
+            project_name=names.get(r.project_id),
+            status=r.status,
+            memory_ids=[str(i) for i in r.memory_ids],
+            summary=r.summary,
+            created_at=r.created_at,
+            decided_at=r.decided_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/compactions/{proposal_id}/confirm", response_model=CompactionDecision)
+async def confirm_memory_compaction(
+    proposal_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CompactionDecision:
+    """Aplica la revisión: archiva sus memorias (motivo `disputed_compacted`), con auditoría."""
+    tenant_id = require_tenant_id(principal)
+    try:
+        archived = await confirm_compaction(
+            session, tenant_id=tenant_id, proposal_id=proposal_id, actor_user_id=principal.user_id
+        )
+    except CompactionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="pending compaction not found"
+        ) from None
+    return CompactionDecision(id=proposal_id, status="confirmed", archived=archived)
+
+
+@router.post("/compactions/{proposal_id}/reject", response_model=CompactionDecision)
+async def reject_memory_compaction(
+    proposal_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> CompactionDecision:
+    """Descarta la revisión: las memorias se quedan como están y no se vuelven a proponer."""
+    tenant_id = require_tenant_id(principal)
+    try:
+        await reject_compaction(
+            session, tenant_id=tenant_id, proposal_id=proposal_id, actor_user_id=principal.user_id
+        )
+    except CompactionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="pending compaction not found"
+        ) from None
+    return CompactionDecision(id=proposal_id, status="rejected")
 
 
 async def _reembed_content(embedder: Embedder | None, content: str) -> list[float] | None:

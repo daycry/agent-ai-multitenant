@@ -259,6 +259,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(minute="17"),
         "options": {"queue": "default"},
     },
+    # task_mem_11: caducidad y compactación de memorias. Archiva (soft, nunca borra) las
+    # `episodic` sin recuperar de más de N días y propone al operador la revisión de las
+    # `disputed`. Diario 04:10 (entre el GC de las 04:00 y la purga de las 04:30). Cola
+    # `default`: sólo UPDATE/INSERT en Postgres, sin efectos de infra.
+    "maintain-memory-lifecycle-daily": {
+        "task": "workers.maintain_memory_lifecycle",
+        "schedule": crontab(hour="4", minute="10"),
+        "options": {"queue": "default"},
+    },
     # part-01 task_part01_02 (ADR 0151): crea la partición del mes siguiente de
     # cada tabla append-only convertida, con 3 meses de colchón, y alerta si M+1
     # sigue faltando al terminar. Sin esto, la PRIMERA inserción del mes que viene

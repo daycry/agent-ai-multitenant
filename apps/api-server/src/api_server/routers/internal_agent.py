@@ -12,6 +12,7 @@ Endpoints:
   - ``POST /memory-recall``   hybrid BM25 + vector recall (task_04_5_03).
   - ``POST /memory-store``    persist one MemoryEntry (task_04_5_03).
   - ``POST /memory-timeline`` chronological neighbours of a memory (task_mem_03).
+  - ``POST /memory-feedback`` useful / wrong / outdated vote on a memory (task_mem_10).
   - ``POST /rag-search``      project-scoped RAG over KB chunks
                               (task_04_5_04).
   - ``POST /document-convert`` structured chunks of an existing
@@ -44,13 +45,16 @@ from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBas
 from api_server.db.platform_settings import (
     get_default_memory_scope,
     get_global_agent_uses_task_project,
+    get_memory_rank_weights,
     get_rag_reranker_enabled,
 )
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
+from api_server.memorizer.feedback import apply_feedback, normalize_note
 from api_server.memorizer.index_format import estimate_tokens, index_hit
 from api_server.memorizer.kinds import parse_kind_filter
 from api_server.memorizer.provenance import resolve_agent_project_names
+from api_server.memorizer.ranking import RankWeights
 from api_server.memorizer.recall import get_memories, recall
 from api_server.memorizer.timeline import agent_visibility, build_timeline
 from api_server.memorizer.usage import record_recall_usage
@@ -469,6 +473,7 @@ async def memory_recall(
     project_id = project.id if project is not None else None
 
     query_embedding = await _embed_query(embedder, payload.query)
+    weights = await _rank_weights(session)
 
     hits = await recall(
         session,
@@ -481,6 +486,7 @@ async def memory_recall(
         query_embedding=query_embedding,
         limit=payload.limit,
         kinds=parse_kind_filter(payload.kinds) or None,
+        weights=weights,
     )
     agent_names, project_names = await resolve_agent_project_names(
         session,
@@ -599,6 +605,77 @@ async def _current_execution_id(session: AsyncSession, principal: AgentPrincipal
             ).scalar_one_or_none()
     except Exception:
         return None
+
+
+async def _rank_weights(session: AsyncSession) -> RankWeights | None:
+    """Los pesos del ranking (``memory.rank_*``), o ``None`` si no se pueden leer.
+
+    El recall es best-effort (CLAUDE.md): un fallo leyendo un AJUSTE de ranking jamás debe
+    romperlo. Va en un SAVEPOINT para que un error de BD no aborte la transacción del
+    recall; ``None`` deja la fusión RRF pura."""
+    try:
+        async with session.begin_nested():
+            return await get_memory_rank_weights(session)
+    except Exception:
+        _log.warning("memory_recall.rank_weights_unavailable", exc_info=True)
+        return None
+
+
+class MemoryFeedbackRequest(BaseModel):
+    """Body of POST /internal/agent/memory-feedback (task_mem_10)."""
+
+    model_config = _BASE_CONFIG
+
+    memory_id: UUID
+    verdict: Literal["useful", "wrong", "outdated"]
+    note: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/memory-feedback")
+async def memory_feedback(
+    payload: MemoryFeedbackRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> dict[str, Any]:
+    """Voto ``useful`` / ``wrong`` / ``outdated`` sobre una memoria (task_mem_10).
+
+    Escribe ``useful_count`` / ``harmful_count`` y, para ``wrong`` / ``outdated``, marca la
+    memoria como ``disputed`` SIN borrarla. Sólo se puede votar una memoria que el agente
+    PUEDE LEER (mismo ámbito que ``memory-get``: nunca ``private``, ni otro proyecto/equipo,
+    ni otro tenant): lo demás es 404, sin distinguir «no existe» de «no es tuya». Un voto por
+    ejecución y memoria: repetirlo no suma (feedback envenenado, riesgo del plan)."""
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
+    scopes = [s for s in _default_readable_scopes(agent.memory_scope) if s != "private"]
+    readable = await get_memories(
+        session,
+        ids=[payload.memory_id],
+        tenant_id=principal.tenant_id,
+        scopes=scopes,
+        user_id=None,
+        team_id=project.team_id if project is not None else None,
+        project_id=project.id if project is not None else None,
+    )
+    if not readable:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    result = await apply_feedback(
+        session,
+        tenant_id=principal.tenant_id,
+        memory_id=payload.memory_id,
+        verdict=payload.verdict,
+        note=normalize_note(payload.note),
+        agent_id=principal.agent_id,
+        execution_id=await _current_execution_id(session, principal),
+    )
+    if result is None:  # borrada/archivada entre las dos consultas
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    return {
+        "memory_id": str(result.memory_id),
+        "verdict": result.verdict,
+        "useful_count": result.useful_count,
+        "harmful_count": result.harmful_count,
+        "disputed": result.disputed,
+    }
 
 
 class MemoryTimelineRequest(BaseModel):

@@ -28,6 +28,7 @@ def test_register_system_families_wires_orchestration_and_memory() -> None:
         "memory_store",
         "memory_get",
         "memory_timeline",
+        "memory_feedback",
         "kanban_update",
         "task_comment",
         "agent_invoke",
@@ -58,6 +59,7 @@ def test_register_system_families_honours_family_flags() -> None:
         "memory_store",
         "memory_get",
         "memory_timeline",
+        "memory_feedback",
         "rag_search",
     }
     assert "kanban_update" not in registry.names()

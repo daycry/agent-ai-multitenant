@@ -8,6 +8,7 @@ imports every submodule so all ``@app.task`` registrations fire. The submodules:
     ``workers.purge_dep_cache`` (daily 03:00), ``workers.prune_worktrees`` (daily 03:30)
   * :mod:`~workers.maintenance.review_runtimes`   — ``workers.expire_review_runtimes`` (5 min)
   * :mod:`~workers.maintenance.memory_backfill`   — ``workers.backfill_memory_embeddings``
+  * :mod:`~workers.maintenance.memory_lifecycle`  — ``workers.maintain_memory_lifecycle`` (04:10)
   * :mod:`~workers.maintenance.dag_promotion_beat`— ``workers.promote_ready_plans`` (30s)
   * :mod:`~workers.maintenance.shadow_evals` — ``workers.run_shadow_evals`` (horario)
   * :mod:`~workers.maintenance.stale_sweeper`     — ``workers.sweep_stale_executions`` (5 min)
@@ -43,6 +44,10 @@ from workers.maintenance.memory_backfill import (
     _backfill_memory_embeddings_async,
     _default_embedder_factory,
     backfill_memory_embeddings,
+)
+from workers.maintenance.memory_lifecycle import (
+    _maintain_memory_lifecycle_async,
+    maintain_memory_lifecycle,
 )
 from workers.maintenance.orphan_reaper import _reap_orphans_async, reap_orphans
 from workers.maintenance.partitions import (
@@ -110,6 +115,7 @@ __all__ = [
     "_default_embedder_factory",
     "_execution_belongs_to_claim",
     "_expire_review_runtimes",
+    "_maintain_memory_lifecycle_async",
     "_orphan_claim_needs_revert",
     "_orphan_review_needs_reannounce",
     "_orphan_review_should_escalate",
@@ -132,6 +138,7 @@ __all__ = [
     "ensure_partitions_task",
     "expire_review_runtimes",
     "idle_sweep_pools",
+    "maintain_memory_lifecycle",
     "plan_status_after_expiry",
     "promote_ready_plans",
     "prune_worktrees",

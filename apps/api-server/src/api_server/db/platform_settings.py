@@ -12,13 +12,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import weakref
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.after_commit import schedule_after_commit
 from api_server.db.models import PlatformSetting, User
+
+if TYPE_CHECKING:
+    from api_server.memorizer.ranking import RankWeights
 
 # Setting keys.
 MAX_REVIEW_RETRIES_KEY = "max_review_retries"
@@ -724,6 +728,92 @@ async def get_memory_backfill_throttle_ms(session: AsyncSession) -> int:
     except (TypeError, ValueError):
         return DEFAULT_MEMORY_BACKFILL_THROTTLE_MS
     return max(MEMORY_BACKFILL_THROTTLE_MS_MIN, min(MEMORY_BACKFILL_THROTTLE_MS_MAX, ms))
+
+
+# ---------------------------------------------------------------------------
+# Ranking de memoria que aprende + caducidad (task_mem_10 / task_mem_11)
+# ---------------------------------------------------------------------------
+# Los pesos del cuarto término del recall (utilidad, frescura, `disputed`) son
+# decimales (`memory.rank_*`) y los edita un System Admin sin redeploy. Se expresan
+# en unidades de RRF (ver `memorizer.ranking`); `0` en los tres = el ranking de antes.
+# Un valor ilegible cae al default medido, uno fuera de cota se recorta: un typo en un
+# ajuste de ranking jamás debe romper el recall (es best-effort, CLAUDE.md).
+MEMORY_RANK_UTILITY_WEIGHT_KEY = "memory.rank_utility_weight"
+MEMORY_RANK_FRESHNESS_WEIGHT_KEY = "memory.rank_freshness_weight"
+MEMORY_RANK_HALF_LIFE_DAYS_KEY = "memory.rank_freshness_half_life_days"
+MEMORY_RANK_DISPUTED_PENALTY_KEY = "memory.rank_disputed_penalty"
+MEMORY_RANK_UTILITY_SMOOTHING_KEY = "memory.rank_utility_smoothing"
+MEMORY_RANK_WEIGHT_MAX = 10.0
+MEMORY_RANK_HALF_LIFE_DAYS_MIN = 1.0
+MEMORY_RANK_HALF_LIFE_DAYS_MAX = 730.0
+MEMORY_RANK_SMOOTHING_MIN = 0.1
+MEMORY_RANK_SMOOTHING_MAX = 50.0
+
+# Días sin recuperarse tras los que el job archiva una `episodic` (default 90).
+MEMORY_ARCHIVE_AFTER_DAYS_KEY = "memory.archive_after_days"
+DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS = 90
+MEMORY_ARCHIVE_AFTER_DAYS_MIN = 7
+MEMORY_ARCHIVE_AFTER_DAYS_MAX = 3650
+
+
+def _clamped_decimal(value: Any, *, default: float, low: float, high: float) -> float:
+    """``float(value)`` acotado a ``[low, high]``; ilegible / NaN / bool → ``default``."""
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(number):
+        return default
+    return max(low, min(high, number))
+
+
+async def get_memory_rank_weights(session: AsyncSession) -> RankWeights:
+    """Los pesos del ranking de memoria, acotados; los que faltan usan el default medido."""
+    from api_server.memorizer.ranking import DEFAULT_RANK_WEIGHTS, RankWeights
+
+    d = DEFAULT_RANK_WEIGHTS
+
+    async def read(key: str, default: float, low: float, high: float) -> float:
+        raw = await get_platform_setting(session, key, default=default)
+        return _clamped_decimal(raw, default=default, low=low, high=high)
+
+    return RankWeights(
+        utility=await read(MEMORY_RANK_UTILITY_WEIGHT_KEY, d.utility, 0.0, MEMORY_RANK_WEIGHT_MAX),
+        freshness=await read(
+            MEMORY_RANK_FRESHNESS_WEIGHT_KEY, d.freshness, 0.0, MEMORY_RANK_WEIGHT_MAX
+        ),
+        half_life_days=await read(
+            MEMORY_RANK_HALF_LIFE_DAYS_KEY,
+            d.half_life_days,
+            MEMORY_RANK_HALF_LIFE_DAYS_MIN,
+            MEMORY_RANK_HALF_LIFE_DAYS_MAX,
+        ),
+        disputed=await read(
+            MEMORY_RANK_DISPUTED_PENALTY_KEY, d.disputed, 0.0, MEMORY_RANK_WEIGHT_MAX
+        ),
+        smoothing=await read(
+            MEMORY_RANK_UTILITY_SMOOTHING_KEY,
+            d.smoothing,
+            MEMORY_RANK_SMOOTHING_MIN,
+            MEMORY_RANK_SMOOTHING_MAX,
+        ),
+    )
+
+
+async def get_memory_archive_after_days(session: AsyncSession) -> int:
+    """Días de antigüedad (sin recuperarse) tras los que se archiva una `episodic`."""
+    value = await get_platform_setting(
+        session, MEMORY_ARCHIVE_AFTER_DAYS_KEY, default=DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS
+    )
+    if isinstance(value, bool):
+        return DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS
+    return max(MEMORY_ARCHIVE_AFTER_DAYS_MIN, min(MEMORY_ARCHIVE_AFTER_DAYS_MAX, days))
 
 
 # ---------------------------------------------------------------------------

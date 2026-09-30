@@ -193,6 +193,25 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "memory_feedback": {
+        "name": "memory_feedback",
+        "description": (
+            "Tell the platform whether a memory you read helped: verdict 'useful' when it "
+            "shaped a correct decision, 'wrong' when it is false, 'outdated' when it no "
+            "longer applies. wrong/outdated mark it as disputed (it is NOT deleted; it "
+            "ranks lower and an operator reviews it). One vote per memory per run."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "Id of the memory."},
+                "verdict": {"type": "string", "enum": ["useful", "wrong", "outdated"]},
+                "note": {"type": "string", "description": "Why (optional, short)."},
+            },
+            "required": ["memory_id", "verdict"],
+            "additionalProperties": False,
+        },
+    },
     # Orchestration family — also runtime-only (no catalog row; wired by
     # builtin_families). Schemas mirror agent_runtime.orchestration_tools.
     # AUD16-02 (auditoría 2026-07-16): kanban_update/agent_invoke YA NO se
@@ -235,6 +254,7 @@ SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "memory_store",
     "memory_get",
     "memory_timeline",
+    "memory_feedback",
     # AUD16-02: kanban_update/agent_invoke retiradas del anuncio (sin drain
     # worker-side, su ok=true era éxito falso); el runtime las mantiene
     # registradas con error honesto. Se re-añadirán cuando exista su consumidor.
