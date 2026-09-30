@@ -16,6 +16,7 @@ import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
 
+import { CitedText } from "@/components/executions/memory-citations";
 import { ReplayBar } from "@/components/executions/replay-bar";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -239,7 +240,7 @@ export default function ExecutionTimelinePage() {
                   Resultado de la ejecución
                 </h2>
                 <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-sm">
-                  {execution.output}
+                  <CitedText text={execution.output} />
                 </pre>
               </CardContent>
             </Card>

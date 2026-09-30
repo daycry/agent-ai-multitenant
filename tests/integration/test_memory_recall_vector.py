@@ -237,7 +237,7 @@ async def test_memory_recall_vector_path_active(configured_app, migrations_pg_ds
     hits = resp.json()["hits"]
     assert len(hits) >= 1
     assert any(h["vector_rank"] is not None for h in hits), hits
-    assert any(exact in h["content"] for h in hits), hits
+    assert any(exact in h["headline"] for h in hits), hits
 
 
 # ---------------------------------------------------------------------------

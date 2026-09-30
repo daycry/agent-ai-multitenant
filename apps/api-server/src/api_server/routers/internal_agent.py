@@ -11,6 +11,7 @@ Endpoints:
   - ``GET  /_health``         smoke probe (task_04_5_01).
   - ``POST /memory-recall``   hybrid BM25 + vector recall (task_04_5_03).
   - ``POST /memory-store``    persist one MemoryEntry (task_04_5_03).
+  - ``POST /memory-timeline`` chronological neighbours of a memory (task_mem_03).
   - ``POST /rag-search``      project-scoped RAG over KB chunks
                               (task_04_5_04).
   - ``POST /document-convert`` structured chunks of an existing
@@ -22,13 +23,14 @@ Endpoints:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from prometheus_client import REGISTRY, Counter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,7 +39,7 @@ from api_server.auth.internal_agent import (
     get_agent_principal,
     get_agent_tenant_session,
 )
-from api_server.db.domain import Agent, MemoryScope, Project, Task, Team
+from api_server.db.domain import Agent, Execution, MemoryScope, Project, Task, Team
 from api_server.db.knowledge import Chunk, Document, KnowledgeBase, KnowledgeBaseProject
 from api_server.db.platform_settings import (
     get_default_memory_scope,
@@ -46,7 +48,11 @@ from api_server.db.platform_settings import (
 )
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
-from api_server.memorizer.recall import recall
+from api_server.memorizer.index_format import estimate_tokens, index_hit
+from api_server.memorizer.provenance import resolve_agent_project_names
+from api_server.memorizer.recall import get_memories, recall
+from api_server.memorizer.timeline import agent_visibility, build_timeline
+from api_server.memorizer.usage import record_recall_usage
 from api_server.rag.reranker import BGEReranker, Reranker
 from api_server.rag.tool import rag_search
 from api_server.routers.docs_viewer import get_query_embedder
@@ -151,21 +157,63 @@ class MemoryRecallRequest(BaseModel):
 
 
 class MemoryRecallHitOut(BaseModel):
+    """Un hit del ÍNDICE (task_mem_01): titular y metadatos, NO el contenido.
+
+    El detalle se pide con ``POST /memory-get`` por ``id``. ``kind`` es la columna
+    tipada de ``task_mem_04``; hasta que exista, ``null``. ``bm25_rank`` /
+    ``vector_rank`` se conservan para depurar el ranking."""
+
     model_config = _BASE_CONFIG
 
-    memory_id: UUID
-    content: str
-    scope: str
+    id: UUID
+    headline: str
     type: str
-    bm25_rank: int | None
-    vector_rank: int | None
-    rrf_score: float
+    kind: str | None = None
+    scope: str
+    created_at: datetime | None = None
+    agent: str | None = None
+    project: str | None = None
+    score: float
+    tokens: int
+    bm25_rank: int | None = None
+    vector_rank: int | None = None
 
 
 class MemoryRecallResponse(BaseModel):
     model_config = _BASE_CONFIG
 
     hits: list[MemoryRecallHitOut]
+
+
+_MEMORY_GET_MAX_IDS = 20
+
+
+class MemoryGetRequest(BaseModel):
+    """Body of POST /internal/agent/memory-get (task_mem_01): hasta 20 ids."""
+
+    model_config = _BASE_CONFIG
+
+    ids: list[UUID] = Field(min_length=1, max_length=_MEMORY_GET_MAX_IDS)
+
+
+class MemoryDetailOut(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    content: str
+    type: str
+    kind: str | None = None
+    scope: str
+    created_at: datetime | None = None
+    agent: str | None = None
+    project: str | None = None
+    tokens: int
+
+
+class MemoryGetResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    memories: list[MemoryDetailOut]
 
 
 class McpOAuthTokenRequest(BaseModel):
@@ -428,20 +476,171 @@ async def memory_recall(
         query_embedding=query_embedding,
         limit=payload.limit,
     )
-    return MemoryRecallResponse(
-        hits=[
-            MemoryRecallHitOut(
-                memory_id=h.memory_id,
-                content=h.content,
-                scope=h.scope,
-                type=h.type,
-                bm25_rank=h.bm25_rank,
-                vector_rank=h.vector_rank,
-                rrf_score=h.rrf_score,
+    agent_names, project_names = await resolve_agent_project_names(
+        session,
+        principal.tenant_id,
+        agent_ids={h.agent_id for h in hits if h.agent_id},
+        project_ids={h.project_id for h in hits if h.project_id},
+    )
+    out: list[MemoryRecallHitOut] = []
+    for h in hits:
+        fields = index_hit(
+            memory_id=h.memory_id,
+            content=h.content,
+            type_=h.type,
+            kind=None,  # la columna `kind` la crea task_mem_04
+            scope=h.scope,
+            created_at=h.created_at,
+            agent=agent_names.get(h.agent_id) if h.agent_id else None,
+            project=project_names.get(h.project_id) if h.project_id else None,
+            score=h.rrf_score,
+        )
+        out.append(MemoryRecallHitOut(**fields, bm25_rank=h.bm25_rank, vector_rank=h.vector_rank))
+    # task_mem_02: cada hit del índice deja huella de uso (best-effort).
+    await record_recall_usage(
+        session,
+        tenant_id=principal.tenant_id,
+        memory_ids=[h.memory_id for h in hits],
+        kind="index",
+        agent_id=principal.agent_id,
+        execution_id=await _current_execution_id(session, principal),
+    )
+    return MemoryRecallResponse(hits=out)
+
+
+@router.post("/memory-get", response_model=MemoryGetResponse)
+async def memory_get(
+    payload: MemoryGetRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> MemoryGetResponse:
+    """Contenido completo de hasta 20 memorias por id (task_mem_01).
+
+    Segunda capa de la revelación progresiva: ``memory_recall`` devuelve el índice
+    y el agente pide aquí el detalle de las que le sirven. Respeta EXACTAMENTE el
+    ámbito del recall (escalera del agente + punteros de equipo/proyecto
+    resueltos en el servidor) y RLS: un id de otro tenant, de otro proyecto o
+    ``private`` de una persona no se devuelve. Cada memoria devuelta cuenta como
+    uso (``recall_count`` y log, task_mem_02).
+    """
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
+    # `private` es del usuario humano: un agente ni la lee ni la escribe.
+    scopes = [s for s in _default_readable_scopes(agent.memory_scope) if s != "private"]
+    rows = await get_memories(
+        session,
+        ids=payload.ids,
+        tenant_id=principal.tenant_id,
+        scopes=scopes,
+        user_id=None,
+        team_id=project.team_id if project is not None else None,
+        project_id=project.id if project is not None else None,
+    )
+    agent_names, project_names = await resolve_agent_project_names(
+        session,
+        principal.tenant_id,
+        agent_ids={r.agent_id for r in rows if r.agent_id},
+        project_ids={r.project_id for r in rows if r.project_id},
+    )
+    await record_recall_usage(
+        session,
+        tenant_id=principal.tenant_id,
+        memory_ids=[r.memory_id for r in rows],
+        kind="detail",
+        agent_id=principal.agent_id,
+        execution_id=await _current_execution_id(session, principal),
+    )
+    return MemoryGetResponse(
+        memories=[
+            MemoryDetailOut(
+                id=r.memory_id,
+                content=r.content,
+                type=r.type,
+                kind=None,
+                scope=r.scope,
+                created_at=r.created_at,
+                agent=agent_names.get(r.agent_id) if r.agent_id else None,
+                project=project_names.get(r.project_id) if r.project_id else None,
+                tokens=estimate_tokens(r.content),
             )
-            for h in hits
+            for r in rows
         ]
     )
+
+
+async def _current_execution_id(session: AsyncSession, principal: AgentPrincipal) -> UUID | None:
+    """La ejecución EN MARCHA de la tarea del token, o ``None`` (task_mem_02).
+
+    El token lleva el ``task_id`` pero no el ``execution_id``; para deduplicar el
+    uso por run se resuelve en el servidor (tenant-safe: ``tenant_id`` explícito
+    además de RLS). Best-effort: cualquier fallo devuelve ``None`` y el uso se
+    registra sin run, jamás rompe el recall."""
+    if principal.task_id is None:
+        return None
+    try:
+        async with session.begin_nested():
+            return (
+                await session.execute(
+                    select(Execution.id)
+                    .where(
+                        Execution.tenant_id == principal.tenant_id,
+                        Execution.task_id == principal.task_id,
+                        Execution.status == "running",
+                    )
+                    .order_by(Execution.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+    except Exception:
+        return None
+
+
+class MemoryTimelineRequest(BaseModel):
+    """Body of POST /internal/agent/memory-timeline (task_mem_03): exactly one anchor."""
+
+    model_config = _BASE_CONFIG
+
+    memory_id: UUID | None = None
+    execution_id: UUID | None = None
+    window: int = Field(default=5, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def _exactly_one_anchor(self) -> MemoryTimelineRequest:
+        if (self.memory_id is None) == (self.execution_id is None):
+            raise ValueError("exactly one of memory_id / execution_id is required")
+        return self
+
+
+@router.post("/memory-timeline")
+async def memory_timeline(
+    payload: MemoryTimelineRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> dict[str, Any]:
+    """Vecinos cronologicos de una memoria o ejecucion, como indice (task_mem_03).
+
+    Mismo ambito que ``memory-recall``: un agente nunca ve ``private``, ni otro
+    proyecto/equipo, ni otro tenant. Un ancla inexistente o no visible es 404
+    (no se distingue «no existe» de «no es tuya»)."""
+    agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    project = await _resolve_effective_project(session, agent=agent, principal=principal)
+    scopes = [s for s in _default_readable_scopes(agent.memory_scope) if s != "private"]
+    visible = agent_visibility(
+        scopes,
+        team_id=project.team_id if project is not None else None,
+        project_id=project.id if project is not None else None,
+    )
+    timeline = await build_timeline(
+        session,
+        tenant_id=principal.tenant_id,
+        visible=visible,
+        memory_id=payload.memory_id,
+        execution_id=payload.execution_id,
+        window=payload.window,
+    )
+    if timeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="anchor not found")
+    return timeline.as_dict()
 
 
 # ---------------------------------------------------------------------------

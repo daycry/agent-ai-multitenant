@@ -32,7 +32,7 @@ export interface MemoryResponse {
   team_name?: string | null;
   agent_name?: string | null;
   created_by?: MemoryCreatedBy;
-  /** `null` hasta que `task_mem_02` cuente las recuperaciones: se enseña «desconocido». */
+  /** Runs que la recuperaron (`task_mem_02`); `null` sólo si falta el dato: «desconocido». */
   recall_count?: number | null;
   has_embedding: boolean;
   created_at: string;

@@ -26,6 +26,8 @@ def test_register_system_families_wires_orchestration_and_memory() -> None:
     assert set(registered) == {
         "memory_recall",
         "memory_store",
+        "memory_get",
+        "memory_timeline",
         "kanban_update",
         "task_comment",
         "agent_invoke",
@@ -51,7 +53,13 @@ def test_register_system_families_honours_family_flags() -> None:
         sink=OrchestrationSink(),
         flags={"orquestacion": False},
     )
-    assert set(registered) == {"memory_recall", "memory_store", "rag_search"}
+    assert set(registered) == {
+        "memory_recall",
+        "memory_store",
+        "memory_get",
+        "memory_timeline",
+        "rag_search",
+    }
     assert "kanban_update" not in registry.names()
 
 

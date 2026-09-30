@@ -26,6 +26,7 @@ manually-stored entries via `memory_store`).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -34,12 +35,13 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     literal_column,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -266,5 +268,54 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # Uso (task_mem_02, migración 0151): cuántos RUNS recuperaron la memoria y
+    # cuándo fue la última vez. Los escribe `memorizer.usage.record_recall_usage`
+    # (best-effort, idempotente por run). Distinto del `metadata.recall_count` del
+    # córtex, que es un contador propio de sus memorias privadas.
+    recall_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    last_recalled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
-__all__ = ["EMBEDDING_DIM", "MemoryEntry"]
+
+class MemoryRecallLog(Base, UUIDPrimaryKeyMixin):
+    """Una recuperación de una memoria por un agente (task_mem_02).
+
+    Append-only y PARTICIONADA por mes sobre ``created_at`` desde su nacimiento
+    (migración 0151, ADR 0151): no se borra nada, así que no hay plazo que
+    acertar. ``kind`` distingue el índice (``memory_recall``) del detalle
+    (``memory_get``). ``memory_id`` / ``execution_id`` / ``agent_id`` son
+    referencias SUELTAS (sin FK): la tabla es un log y no debe impedir ni
+    arrastrar el borrado de lo que cita (misma decisión que ``guardrail_events``).
+    """
+
+    __tablename__ = "memory_recall_log"
+    __table_args__ = (
+        Index("ix_memory_recall_log_tenant_memory", "tenant_id", "memory_id", "created_at"),
+        Index(
+            "ix_memory_recall_log_tenant_execution",
+            "tenant_id",
+            "execution_id",
+            postgresql_where=text("execution_id IS NOT NULL"),
+        ),
+        CheckConstraint("kind IN ('index', 'detail')", name="ck_memory_recall_log_kind"),
+        {"postgresql_partition_by": "RANGE (created_at)"},
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    memory_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    execution_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    agent_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    # Parte de la PK (PostgreSQL exige la clave de partición en la PK).
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        primary_key=True,
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+
+__all__ = ["EMBEDDING_DIM", "MemoryEntry", "MemoryRecallLog"]

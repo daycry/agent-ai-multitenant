@@ -288,6 +288,9 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
 - [playwright-click-before-hydration.md](./playwright-click-before-hydration.md)
   — un clic antes de que React hidrate se pierde sin error; esperar a
   `data-hydrated` con `waitForHydration(page)`.
+- [playwright-next-dev-flaky-long-runs.md](./playwright-next-dev-flaky-long-runs.md)
+  — el subset entero contra `next dev` da rojos distintos en cada tanda;
+  para un veredicto, build de producción y `next start` como en CI.
 - [playwright-fake-websocket-catches-hmr.md](./playwright-fake-websocket-catches-hmr.md)
   — un `WebSocket` falso también registra el de HMR de `next dev`; elegir
   la instancia por URL, no la última.

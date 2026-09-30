@@ -21,12 +21,12 @@ calls the same persistence module the endpoint uses
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_member
@@ -40,6 +40,7 @@ from api_server.memorizer.provenance import (
     scope_counts,
     search_memories,
 )
+from api_server.memorizer.timeline import build_timeline, human_visibility
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.docs_viewer import get_query_embedder
 
@@ -142,7 +143,8 @@ class MemoryResponse(BaseModel):
     agent_name: str | None = None
     created_by: CreatedBy = Field(default_factory=lambda: CreatedBy(kind="unknown"))
     recall_count: int | None = None
-    """Sin dato hasta `task_mem_02` (columna `recall_count`); el panel dice «desconocido»."""
+    """Cuántos runs recuperaron la memoria (`task_mem_02`, columna `recall_count`).
+    `None` sólo si una fila llegara sin dato: el panel dice «desconocido»."""
     has_embedding: bool
     created_at: datetime
     updated_at: datetime
@@ -169,7 +171,7 @@ def _to_response(row: MemoryEntry, names: Names | None = None) -> MemoryResponse
         team_name=n.teams.get(row.team_id) if row.team_id else None,
         agent_name=n.agents.get(row.agent_id) if row.agent_id else None,
         created_by=CreatedBy(**created_by_for(row, n)),
-        recall_count=None,
+        recall_count=row.recall_count,
         has_embedding=row.embedding is not None,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -297,6 +299,7 @@ async def list_memories(
     agent_id: UUID | None = Query(default=None),
     created_by: UUID | None = Query(default=None),
     execution_id: UUID | None = Query(default=None),
+    id_prefix: str | None = Query(default=None, pattern=r"^[0-9a-fA-F-]{6,36}$"),
     created_from: datetime | None = Query(default=None),
     created_to: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -308,7 +311,8 @@ async def list_memories(
 
     Filters: scope, type/category (same column), project, team, agent,
     ``created_by`` (an agent id, or a user id for private/manual/human-session
-    memories), ``execution_id`` and a ``created_at`` range. RLS handles the
+    memories), ``execution_id``, ``id_prefix`` (resolves a ``[mem:<id>]`` citation)
+    and a ``created_at`` range. RLS handles the
     tenant boundary (``tenant_id`` is also explicit); on top of it a ``private``
     row is visible ONLY to its owning user (H1) — no filter can lift that.
     Names (project/team/agent/creator) are resolved in a batch, not per row."""
@@ -333,6 +337,10 @@ async def list_memories(
         stmt = stmt.where(MemoryEntry.agent_id == agent_id)
     if execution_id is not None:
         stmt = stmt.where(MemoryEntry.source_execution_id == execution_id)
+    if id_prefix is not None:
+        # Resuelve la cita `[mem:<id corto>]` del informe de un run (task_mem_02).
+        # El patrón de la query sólo admite hex y guiones: sin comodines de LIKE.
+        stmt = stmt.where(cast(MemoryEntry.id, String).like(f"{id_prefix.lower()}%"))
     if created_by is not None:
         from api_server.db.domain import HumanWorkSession
 
@@ -642,6 +650,31 @@ async def list_similar_memories(
         for cid in candidate_ids
         if cid in by_id
     ]
+
+
+@router.get("/{memory_id}/timeline")
+async def memory_timeline(
+    memory_id: UUID,
+    window: int = Query(default=5, ge=1, le=20),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Vecinos cronologicos de una memoria (task_mem_03), como indice.
+
+    Las memorias de su ejecucion y las de las ``window`` ejecuciones anteriores
+    y posteriores, del mismo ambito y dueno. Una ``private`` ajena es invisible
+    (404), tambien como vecina; otro tenant, 404."""
+    tenant_id = require_tenant_id(principal)
+    timeline = await build_timeline(
+        session,
+        tenant_id=tenant_id,
+        visible=human_visibility(principal.user_id),
+        memory_id=memory_id,
+        window=window,
+    )
+    if timeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    return timeline.as_dict()
 
 
 @router.post("/{source_id}/merge-into", response_model=MemoryResponse)

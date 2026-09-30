@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -67,6 +68,10 @@ class MemoryRecallHit:
     vector_rank: int | None  # 1-indexed; None if the vector path didn't return it
     rrf_score: float
     entity_rank: int | None = None  # 1-indexed; None if the entity path didn't return it
+    # Procedencia para el ÍNDICE (task_mem_01): la rellena el fetch de detalle.
+    created_at: datetime | None = None
+    agent_id: UUID | None = None
+    project_id: UUID | None = None
 
 
 def rrf_score(rank: int, k: int = RRF_K_DEFAULT) -> float:
@@ -404,13 +409,22 @@ async def recall(
     # lookup would surface cross-tenant rows.
     detail_rows = await session.execute(
         text(
-            "SELECT id, content, scope, type FROM memory_entries"
+            "SELECT id, content, scope, type, created_at, agent_id, project_id"
+            " FROM memory_entries"
             " WHERE id = ANY(:ids) AND tenant_id = :tenant_id AND deleted_at IS NULL"
         ),
         {"ids": top_ids, "tenant_id": tenant_id},
     )
     by_id: dict[UUID, dict[str, Any]] = {
-        row[0]: {"content": row[1], "scope": row[2], "type": row[3]} for row in detail_rows.all()
+        row[0]: {
+            "content": row[1],
+            "scope": row[2],
+            "type": row[3],
+            "created_at": row[4],
+            "agent_id": row[5],
+            "project_id": row[6],
+        }
+        for row in detail_rows.all()
     }
     hits: list[MemoryRecallHit] = []
     # AUD16-18: dedup por contenido normalizado (cinturón sobre el dedup del
@@ -435,6 +449,9 @@ async def recall(
                 vector_rank=vec_r,
                 rrf_score=s,
                 entity_rank=ent_r,
+                created_at=by_id[mid]["created_at"],
+                agent_id=by_id[mid]["agent_id"],
+                project_id=by_id[mid]["project_id"],
             )
         )
         if len(hits) >= limit:
@@ -442,13 +459,80 @@ async def recall(
     return hits
 
 
+@dataclass(frozen=True)
+class MemoryDetail:
+    """Una memoria completa, tal como la devuelve ``memory_get`` (task_mem_01)."""
+
+    memory_id: UUID
+    content: str
+    scope: str
+    type: str
+    created_at: datetime | None
+    agent_id: UUID | None
+    project_id: UUID | None
+
+
+async def get_memories(
+    session: AsyncSession,
+    *,
+    ids: Sequence[UUID],
+    tenant_id: UUID,
+    scopes: Sequence[str],
+    user_id: UUID | None = None,
+    team_id: UUID | None = None,
+    project_id: UUID | None = None,
+) -> list[MemoryDetail]:
+    """El contenido completo de ``ids`` que el llamante PUEDE leer.
+
+    Usa el MISMO filtro de ámbito y propietario que el recall
+    (:func:`_scope_filter_sql`): un id de otro tenant, de otro proyecto/equipo o
+    ``private`` de una persona (un agente IA no tiene ``user_id``) simplemente no
+    aparece — sin distinguir «no existe» de «no es tuyo», para no filtrar
+    existencia. Devuelve en el orden pedido, sin duplicados.
+    """
+    wanted = list(dict.fromkeys(ids))
+    if not wanted:
+        return []
+    result = await session.execute(
+        text(
+            "SELECT id, content, scope, type, created_at, agent_id, project_id"
+            " FROM memory_entries"
+            " WHERE tenant_id = :tenant_id AND deleted_at IS NULL AND id = ANY(:ids)"
+            + _scope_filter_sql()
+        ),
+        {
+            "tenant_id": tenant_id,
+            "ids": wanted,
+            "scopes": list(scopes),
+            "user_id": user_id,
+            "team_id": team_id,
+            "project_id": project_id,
+        },
+    )
+    by_id = {
+        row[0]: MemoryDetail(
+            memory_id=row[0],
+            content=row[1],
+            scope=row[2],
+            type=row[3],
+            created_at=row[4],
+            agent_id=row[5],
+            project_id=row[6],
+        )
+        for row in result.all()
+    }
+    return [by_id[i] for i in wanted if i in by_id]
+
+
 __all__ = [
     "BM25_K_DEFAULT",
     "ENTITY_K_DEFAULT",
     "RRF_K_DEFAULT",
     "VECTOR_K_DEFAULT",
+    "MemoryDetail",
     "MemoryRecallHit",
     "fuse_rankings",
+    "get_memories",
     "query_entity_terms",
     "recall",
     "rrf_score",

@@ -211,6 +211,8 @@ def register_builtin_families(
         memory = MemoryTools(api)
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
+        _add("memory_get", memory.memory_get)
+        _add("memory_timeline", memory.memory_timeline)
 
     # --- stack family: stack_exec (ADR 0093) --------------------------------
     # Runs a command in the project's runtime-template via the worker (the
@@ -241,6 +243,8 @@ SYSTEM_FAMILY_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "memory_recall",
         "memory_store",
+        "memory_get",
+        "memory_timeline",
         "kanban_update",
         "task_comment",
         "agent_invoke",
@@ -286,6 +290,8 @@ def register_system_families(
         memory = MemoryTools(api)
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
+        _add("memory_get", memory.memory_get)
+        _add("memory_timeline", memory.memory_timeline)
 
     # P0-3: la búsqueda en la KB (read-only) es capacidad de sistema — sin ella
     # un modo con whitelist dejaba al agente sin acceso al conocimiento en

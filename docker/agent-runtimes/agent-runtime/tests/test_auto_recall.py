@@ -114,18 +114,19 @@ def test_recall_without_internal_api_stays_empty_and_honest(
 def test_recall_caps_hits_and_content_size(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """El contexto no se infla: máx 5 hits y contenido truncado."""
+    """El contexto no se infla: tope de hits (15 desde task_mem_01: cada uno del
+    índice cuesta ~10x menos) y contenido truncado en el formato antiguo."""
     api = _FakeAPI(
         [
             {"memory_id": f"m-{i}", "content": "x" * 5000, "scope": "project_shared"}
-            for i in range(9)
+            for i in range(20)
         ]
     )
     monkeypatch.setattr("agent_runtime.__main__._build_internal_api", lambda: api)
 
     step = _recall_step(_run(_spec(), capsys))
 
-    assert step["hits"] == 5
+    assert step["hits"] == 15
 
 
 def test_recall_query_includes_role_and_acceptance_criteria(

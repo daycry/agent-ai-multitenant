@@ -1,9 +1,9 @@
 ---
 plan_id: memoria-agentes-2026-09-09
 title: Memoria de los agentes — de «recall que devuelve texto» a memoria por capas con citas, uso y aprendizaje
-status: approved
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-09-30
 completed_at: null
 estimated_duration_calendar: 3 semanas
 estimated_effort_person_days: 12
@@ -105,7 +105,7 @@ rompe un run.
 
 ### `task_mem_01` — El recall devuelve un índice; el detalle se pide por id
 
-- [ ] **Título**: `memory_recall` (tool del runtime + `POST /internal/agent/memory-recall`) pasa a
+- [x] **Título**: `memory_recall` (tool del runtime + `POST /internal/agent/memory-recall`) pasa a
       devolver por hit `{id, headline, type, kind, scope, created_at, agent, project, score, tokens}`
       donde `headline` son los primeros ~120 caracteres del contenido y `tokens` una estimación del
       detalle. Nueva tool `memory_get(ids: list[str])` (+ `POST /internal/agent/memory-get`) que trae el
@@ -117,10 +117,18 @@ rompe un run.
       (ids de otro tenant o de ámbito privado ajeno no se devuelven); runtime: el preámbulo lleva ids y
       un `ScriptedModelClient` llama `memory_get` y recibe el contenido.
       **Coste**: 1,5 d.
+  - ✅ **Cerrada el 2026-09-30**, con el agente `implementer` del plugin. `POST /internal/agent/memory-recall`
+    devuelve el índice `{id, headline, type, kind, scope, created_at, agent, project, score, tokens}` sin
+    contenido (`memorizer/index_format.py`); `kind` sale `null` hasta `task_mem_04`. `POST /internal/agent/memory-get`
+    trae el detalle de hasta 20 ids con el mismo filtro de ámbito que el recall, nunca `private`. La tool
+    `memory_get` es de sistema y no pasa por el gate de aprobación, porque es lectura. El auto-recall sube de 5 a
+    15 hits y pone el índice en el preámbulo, con la instrucción de pedir el detalle y de citar `[mem:<id corto>]`.
+    Rojo visto: 7 tests del runtime (`test_memory_get.py`), el unit del formato y la integración (`KeyError: 'id'`).
+    Tests existentes ajustados a la forma nueva (`content`→`headline`, `memory_id`→`id`).
 
 ### `task_mem_02` — Citas: la memoria que se usó queda registrada
 
-- [ ] **Título**: cada `memory_get` y cada hit de `memory_recall` incrementan `recall_count` y fijan
+- [x] **Título**: cada `memory_get` y cada hit de `memory_recall` incrementan `recall_count` y fijan
       `last_recalled_at` (columnas nuevas, migración aditiva); además se escribe una fila en una tabla
       `memory_recall_log(memory_id, execution_id, agent_id, kind: index|detail, created_at)` con
       retención (misma familia append-only del ADR 0151). El runtime recomienda al agente citar
@@ -129,16 +137,34 @@ rompe un run.
       **Test**: unit del incremento idempotente por run; integración del log bajo RLS; test del render
       de citas en el visor de runs (vitest).
       **Coste**: 1 d.
+  - ✅ **Cerrada el 2026-09-30.** Migración `0151_memory_recall_usage`, aditiva y reversible: `recall_count` y
+    `last_recalled_at` en `memory_entries`, y la tabla `memory_recall_log`, particionada por mes (ADR 0151), con RLS
+    en el padre y en cada partición, sin FK (ADR 0154) y registrada en `PARTITIONED_TABLES`. El uso cuenta una vez
+    por run, aunque se repita el recall o se pidan índice y detalle, y se escribe en un SAVEPOINT: un fallo nunca
+    rompe el recall. La ejecución se resuelve en el servidor a partir del `task_id` del token. `GET /memories`
+    devuelve ya el `recall_count` real, que era lo que esperaba `task_ui_31`. El visor de la ejecución pinta las
+    citas `[mem:…]` como chips resueltos con el filtro nuevo `id_prefix`. **Rojo verificado por el orquestador con
+    mutaciones**, porque la tabla de log, la resolución por prefijo y el render de citas nacieron en verde:
+    neutralizar la escritura de uso pone rojos tres tests de integración, y cambiar el marcador de cita, tres de
+    vitest.
 
 ### `task_mem_03` — Línea de tiempo
 
-- [ ] **Título**: nueva tool `memory_timeline(memory_id | execution_id, window=5)` (+ endpoint interno
+- [x] **Título**: nueva tool `memory_timeline(memory_id | execution_id, window=5)` (+ endpoint interno
       y `GET /memories/{id}/timeline`) que devuelve los vecinos cronológicos de una memoria dentro del
       mismo proyecto o equipo (según ámbito): las memorias de la misma ejecución y las de las
       ejecuciones inmediatamente anterior y posterior, como índice. Responde «qué estaba pasando cuando
       se aprendió esto».
       **Test**: integración con tres ejecuciones sembradas (orden, ventana, ámbito, cross-tenant).
       **Coste**: 1 d.
+  - ✅ **Cerrada el 2026-09-30.** Tool `memory_timeline`, `POST /internal/agent/memory-timeline` y
+    `GET /memories/{id}/timeline` (`memorizer/timeline.py`). `window` cuenta ejecuciones vecinas con alguna memoria
+    visible, de 1 a 20, 5 por defecto. Los vecinos comparten ámbito y dueño con el ancla. La búsqueda de ejecuciones
+    se acota a ±30 días del ancla para podar particiones, así que una vecina más lejana no aparece. El endpoint
+    interno usa la derivación de ámbito del recall y nunca ve `private`. El público enseña las privadas sólo a su
+    dueño. Un ancla ajena o inexistente da 404. Rojo visto: 4 de integración y 5 del runtime. El bloque del endpoint
+    interno se reconstruyó tras borrarlo por error el script de `task_mem_01`. El orquestador revisó que reutiliza
+    la derivación de ámbito del recall, y `test_memory_timeline.py` pasa.
 
 ### `task_mem_04` — Tipos de observación y resumen por ejecución
 

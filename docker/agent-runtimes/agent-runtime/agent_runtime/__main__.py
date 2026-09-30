@@ -187,12 +187,45 @@ def _build_internal_api() -> Any | None:
 
 # Recall automático (revisión memorias 2026-07-03, D1): caps para no inflar el
 # prompt — máx 5 memorias, contenido truncado.
-_AUTO_RECALL_LIMIT = 5
+# task_mem_01: el auto-recall lleva el ÍNDICE (id + titular, ~10x más barato que el
+# contenido), así que el tope sube de 5 a 15; el detalle se pide con `memory_get`.
+_AUTO_RECALL_LIMIT = 15
 # P1-3 (investigación 2026-07-11): cap por memoria subido 700→900 — la query
 # enriquecida (rol + criterios) recupera memorias más largas y útiles.
 _AUTO_RECALL_CONTENT_CAP = 900
 # Criterios de aceptación que entran a la query del recall (señal, no ruido).
 _AUTO_RECALL_CRITERIA = 3
+
+
+# Campos del hit del índice que entran al preámbulo (task_mem_01). Sin `content`: el
+# detalle lo pide el agente con `memory_get`.
+_INDEX_FIELDS = (
+    "id",
+    "headline",
+    "type",
+    "kind",
+    "scope",
+    "created_at",
+    "agent",
+    "project",
+    "tokens",
+)
+
+
+def _index_entry(hit: dict[str, Any]) -> dict[str, Any] | None:
+    """Una entrada del preámbulo a partir de un hit del recall.
+
+    Formato nuevo (índice): ``{id, headline, ...}`` — se conserva sin contenido.
+    Un servidor anterior al índice devuelve ``content`` y sin ``id``: se degrada al
+    formato de siempre (contenido acotado) para que el run no pierda su recall."""
+    headline = str(hit.get("headline") or "").strip()
+    mem_id = hit.get("id")
+    if mem_id and headline:
+        return {k: hit[k] for k in _INDEX_FIELDS if hit.get(k) is not None}
+    content = str(hit.get("content") or "")[:_AUTO_RECALL_CONTENT_CAP]
+    if not content:
+        return None
+    return {"content": content, "scope": hit.get("scope"), "type": hit.get("type")}
 
 
 def _build_auto_recall(api: Any | None, *, role: str | None = None) -> Any | None:
@@ -241,16 +274,9 @@ def _build_auto_recall(api: Any | None, *, role: str | None = None) -> Any | Non
         for hit in hits[:_AUTO_RECALL_LIMIT]:
             if not isinstance(hit, dict):
                 continue
-            content = str(hit.get("content") or "")[:_AUTO_RECALL_CONTENT_CAP]
-            if not content:
-                continue
-            out.append(
-                {
-                    "content": content,
-                    "scope": hit.get("scope"),
-                    "type": hit.get("type"),
-                }
-            )
+            entry = _index_entry(hit)
+            if entry is not None:
+                out.append(entry)
         return out
 
     return _recall

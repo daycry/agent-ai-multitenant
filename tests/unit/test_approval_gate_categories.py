@@ -137,6 +137,8 @@ _WIRED_UNGATED_BY_DESIGN: dict[str, str] = {
     "list_files": "lectura del worktree",
     "rag_search": "lectura de la KB (recall, no escritura)",
     "memory_recall": "lectura de memoria (recall, no escritura)",
+    "memory_get": "lectura de memoria (detalle por id, no escritura)",
+    "memory_timeline": "lectura de memoria (indice cronologico, no escritura)",
     "document_convert": (
         "devuelve los chunks de un documento YA ingerido por un humano "
         "(`/internal/agent/document-convert` es un SELECT); no escribe nada"

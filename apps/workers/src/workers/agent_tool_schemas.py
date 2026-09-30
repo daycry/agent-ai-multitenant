@@ -73,8 +73,10 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
     "memory_recall": {
         "name": "memory_recall",
         "description": (
-            "Retrieve relevant past memories (learnings from projects and from "
-            "mistakes) via semantic search. Use it when starting a task to "
+            "Search relevant past memories (learnings from projects and from "
+            "mistakes) via semantic search. Returns an INDEX per hit (id, headline, "
+            "type, scope, date, agent, project, score, tokens) - not the full text; "
+            "call memory_get with the ids you need. Use it when starting a task to "
             "leverage past experience."
         ),
         "parameters": {
@@ -106,6 +108,28 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
             "additionalProperties": False,
         },
     },
+    "memory_get": {
+        "name": "memory_get",
+        "description": (
+            "Read the FULL content of memories you saw in an index (memory_recall or "
+            "the run preamble), by id. Up to 20 ids per call; ids you cannot read are "
+            "simply not returned. Cite a memory that shaped a decision in your final "
+            "report as [mem:<first 8 characters of its id>]."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 20,
+                    "description": "Memory ids taken from an index.",
+                },
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+    },
     "memory_store": {
         "name": "memory_store",
         "description": (
@@ -125,6 +149,27 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
                 "tags": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+    "memory_timeline": {
+        "name": "memory_timeline",
+        "description": (
+            "Show what was happening when a memory was learned: the memories of the "
+            "same run and of the runs right before and after it (same project/team), "
+            "as an index (id + headline, no full content). Pass memory_id OR execution_id."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "Id of the anchor memory."},
+                "execution_id": {"type": "string", "description": "Id of the anchor run."},
+                "window": {
+                    "type": "integer",
+                    "default": 5,
+                    "description": "Neighbouring runs to include on each side (1-20).",
+                },
+            },
             "additionalProperties": False,
         },
     },
@@ -168,6 +213,8 @@ _RUNTIME_ONLY_SCHEMAS: dict[str, dict[str, Any]] = {
 SYSTEM_TOOL_NAMES: tuple[str, ...] = (
     "memory_recall",
     "memory_store",
+    "memory_get",
+    "memory_timeline",
     # AUD16-02: kanban_update/agent_invoke retiradas del anuncio (sin drain
     # worker-side, su ok=true era éxito falso); el runtime las mantiene
     # registradas con error honesto. Se re-añadirán cuando exista su consumidor.

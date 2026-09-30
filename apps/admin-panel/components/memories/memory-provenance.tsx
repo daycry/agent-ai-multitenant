@@ -5,9 +5,9 @@
  * dónde vive y cuántas veces se recuperó.
  *
  * Honestidad: lo que el dominio no guardó se enseña como «desconocido», nunca
- * se rellena a ojo. `recall_count` llega `null` hasta que `task_mem_02` cuente
- * las recuperaciones, y las memorias antiguas no tienen agente, ejecución ni
- * sesión: ahí «quién» es desconocido.
+ * se rellena a ojo. `recall_count` es el contador real de `task_mem_02` (0 si
+ * nadie la recuperó; `null` sólo si el dato falta) y las memorias antiguas no
+ * tienen agente, ejecución ni sesión: ahí «quién» es desconocido.
  */
 
 import { useT } from "@/lib/i18n";

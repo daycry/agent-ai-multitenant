@@ -18,7 +18,15 @@ from typing import Any
 # G4a (ADR 0103): search_code is a READ-ONLY inspection tool — it earns novelty like
 # any research call and is NOT a mutator (so repeating it can't hard-abort the run).
 _RESEARCH_TOOLS = frozenset(
-    {"list_files", "read_file", "memory_recall", "rag_search", "search_code"}
+    {
+        "list_files",
+        "read_file",
+        "memory_recall",
+        "memory_get",
+        "memory_timeline",
+        "rag_search",
+        "search_code",
+    }
 )
 # Tools that produce/modify the deliverable — calling one means real progress
 # (and that the agent HAS produced, which changes the nudge from "write" to "finish").
@@ -54,6 +62,11 @@ def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
     base = _base_tool_name(tool)
     if base in {"read_file", "list_files"}:
         return f"{base}:{args.get('path') or '.'}"
+    if base == "memory_get":  # task_mem_01: el mismo lote de ids no es exploración nueva
+        ids = args.get("ids")
+        if isinstance(ids, list) and ids:
+            return f"{base}:" + ",".join(sorted(str(i) for i in ids))
+        return None
     if base in {"rag_search", "memory_recall"}:
         query = str(args.get("query") or "").strip()
         return f"{base}:{query}" if query else None

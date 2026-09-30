@@ -106,6 +106,37 @@ async def resolve_names(
     return names
 
 
+async def resolve_agent_project_names(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    agent_ids: set[UUID],
+    project_ids: set[UUID],
+) -> tuple[dict[UUID, str], dict[UUID, str]]:
+    """``(agentes, proyectos)`` → nombre, en dos consultas (índice del recall, task_mem_01).
+
+    Mismo criterio de visibilidad que :func:`resolve_names`: los agentes del tenant
+    y los built-in de plataforma; los proyectos, sólo del tenant."""
+    agents: dict[UUID, str] = {}
+    projects: dict[UUID, str] = {}
+    if agent_ids:
+        res = await session.execute(
+            select(Agent.id, Agent.name).where(
+                or_(Agent.tenant_id == tenant_id, Agent.scope == AgentScope.GLOBAL_BUILTIN.value),
+                Agent.id.in_(agent_ids),
+            )
+        )
+        agents = {row[0]: row[1] for row in res.all()}
+    if project_ids:
+        res = await session.execute(
+            select(Project.id, Project.name).where(
+                Project.tenant_id == tenant_id, Project.id.in_(project_ids)
+            )
+        )
+        projects = {row[0]: row[1] for row in res.all()}
+    return agents, projects
+
+
 def created_by_for(row: MemoryEntry, names: Names) -> dict[str, Any]:
     """`{kind, id, name}` de quien dejó la memoria; `unknown` si no hay huella."""
     if row.agent_id:

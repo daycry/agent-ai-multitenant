@@ -189,6 +189,27 @@ class InternalAgentAPI:
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
 
+    def memory_timeline(
+        self,
+        *,
+        memory_id: str | None = None,
+        execution_id: str | None = None,
+        window: int = 5,
+    ) -> dict[str, Any]:
+        """Chronological neighbours of a memory / execution, as an index."""
+        body: dict[str, Any] = {"window": window}
+        if memory_id is not None:
+            body["memory_id"] = memory_id
+        if execution_id is not None:
+            body["execution_id"] = execution_id
+        return self._post("/internal/agent/memory-timeline", body)
+
+    def memory_get(self, *, ids: list[str]) -> list[dict[str, Any]]:
+        """Full content of up to 20 memories by id (task_mem_01)."""
+        payload = self._post("/internal/agent/memory-get", {"ids": ids})
+        memories: list[dict[str, Any]] = payload.get("memories") or []
+        return memories
+
     def pending_guidance(self, *, task_id: str) -> str | None:
         """La guía que un humano acaba de escribir para este run, o ``None``.
 

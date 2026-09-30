@@ -2,7 +2,7 @@
 
 Contra Postgres real:
   - cada memoria trae quién (`created_by`), dónde (proyecto/equipo/agente con
-    NOMBRE), cuándo, `execution_id` y `recall_count` (null: lo pobla task_mem_02),
+    NOMBRE), cuándo, `execution_id` y `recall_count` (real desde task_mem_02),
   - filtros por agente / ejecución / `created_by` / fechas,
   - las privadas sólo para su dueño (listado, contadores y buscador),
   - cross-tenant: nada de otro tenant aparece en ninguna de las tres rutas,
@@ -234,6 +234,47 @@ def _client(app) -> AsyncClient:
 
 
 @pytest.mark.asyncio
+async def test_list_returns_the_real_recall_count(configured_app, migrations_pg_dsn: str) -> None:
+    """task_mem_02: el contador que escribe el recall es el que sale en el listado."""
+    ids = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "UPDATE memory_entries SET recall_count = 4 WHERE id = $1", ids["m_agent"]
+        )
+    finally:
+        await conn.close()
+    h = await _headers(ids["alice"], ids["ta"])
+    async with _client(configured_app) as c:
+        rows = {r["id"]: r for r in (await c.get("/memories", headers=h)).json()}
+    assert rows[str(ids["m_agent"])]["recall_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_id_prefix_resolves_a_citation_within_visibility(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """task_mem_02: `[mem:<id corto>]` del informe de un run se resuelve por prefijo,
+    y sólo dentro de lo visible (otro tenant / privada ajena no resuelven)."""
+    ids = await _seed(migrations_pg_dsn)
+    h = await _headers(ids["alice"], ids["ta"])
+    async with _client(configured_app) as c:
+        mine = (
+            await c.get("/memories", params={"id_prefix": str(ids["m_agent"])[:8]}, headers=h)
+        ).json()
+        other_tenant = (
+            await c.get("/memories", params={"id_prefix": str(ids["m_b"])[:8]}, headers=h)
+        ).json()
+        amys = (
+            await c.get("/memories", params={"id_prefix": str(ids["m_priv_amy"])[:8]}, headers=h)
+        ).json()
+        bad = await c.get("/memories", params={"id_prefix": "%"}, headers=h)
+    assert [r["id"] for r in mine] == [str(ids["m_agent"])]
+    assert other_tenant == [] and amys == []
+    assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_list_carries_provenance_with_names(configured_app, migrations_pg_dsn: str) -> None:
     ids = await _seed(migrations_pg_dsn)
     h = await _headers(ids["alice"], ids["ta"])
@@ -245,7 +286,7 @@ async def test_list_carries_provenance_with_names(configured_app, migrations_pg_
     assert m["project_name"] == "Proyecto Uno"
     assert m["agent_name"] == "Backend Bot"
     assert m["created_by"] == {"kind": "agent", "id": str(ids["agent"]), "name": "Backend Bot"}
-    assert "recall_count" in m and m["recall_count"] is None  # lo puebla task_mem_02
+    assert m["recall_count"] == 0  # task_mem_02: la columna real; nadie la ha recuperado aún
     h_row = rows[str(ids["m_human"])]
     assert h_row["team_name"] == "Equipo Uno"
     assert h_row["created_by"]["kind"] == "human" and h_row["created_by"]["name"] == "Amy Sol"

@@ -170,12 +170,13 @@ async def test_memory_store_persists_and_recall_finds_it(
     assert recall_resp.status_code == 200, recall_resp.text
     hits = recall_resp.json()["hits"]
     assert len(hits) >= 1
-    assert any(UUID(h["memory_id"]) == memory_id for h in hits)
-    top = next(h for h in hits if UUID(h["memory_id"]) == memory_id)
+    assert any(UUID(h["id"]) == memory_id for h in hits)
+    top = next(h for h in hits if UUID(h["id"]) == memory_id)
     assert top["scope"] == "team_shared"
     assert top["type"] == "semantic"
-    assert "asyncpg" in top["content"].lower()
-    assert top["rrf_score"] > 0
+    assert "asyncpg" in top["headline"].lower()
+    assert top["score"] > 0
+    assert "content" not in top  # el índice no lleva el contenido (task_mem_01)
 
 
 @pytest.mark.asyncio
@@ -259,7 +260,7 @@ async def test_memory_recall_filters_by_default_scope_ladder(
     assert resp.status_code == 200
     hits = resp.json()["hits"]
     # The 'THIS team' row must be present, the 'OTHER team' row must not.
-    contents = [h["content"] for h in hits]
+    contents = [h["headline"] for h in hits]
     assert any("THIS team" in c for c in contents), hits
     assert not any("OTHER team" in c for c in contents), hits
 
@@ -332,7 +333,7 @@ async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
         )
 
     assert resp.status_code == 200, resp.text
-    contents = [h["content"] for h in resp.json()["hits"]]
+    contents = [h["headline"] for h in resp.json()["hits"]]
     # `private` no está en lo que un agente de IA puede leer, y el `team_shared`
     # de OTRO equipo tampoco: los punteros los pone el endpoint, no la petición…
     assert not any("OTRO" in c for c in contents), contents

@@ -3763,6 +3763,8 @@ export const dictionary = {
     recalled: { es: "Recuperada", en: "Recalled" },
     execution: { es: "Ejecución", en: "Execution" },
     recallTimes: { es: "{count} veces", en: "{count} times" },
+    // task_mem_02: cita `[mem:<id>]` del informe de un run que no se resuelve.
+    citationUnknown: { es: "desconocida", en: "unknown" },
     unknown: { es: "desconocido", en: "unknown" },
     byAgent: { es: "agente", en: "agent" },
     byHuman: { es: "persona (sesión de trabajo)", en: "person (work session)" },

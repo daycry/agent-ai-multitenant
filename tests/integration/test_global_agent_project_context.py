@@ -352,7 +352,7 @@ async def test_global_agent_sees_task_project_memory(
     assert resp.status_code == 200, resp.text
     hits = resp.json()["hits"]
     assert len(hits) >= 1, hits
-    assert any(_A_PROJECT_MEMORY in h["content"] for h in hits), hits
+    assert any(_A_PROJECT_MEMORY in h["headline"] for h in hits), hits
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ async def test_global_agent_stores_project_shared_into_task_project(
     )
     assert recalled.status_code == 200, recalled.text
     hits = recalled.json()["hits"]
-    assert any("despliega los martes" in h["content"] for h in hits), hits
+    assert any("despliega los martes" in h["headline"] for h in hits), hits
 
 
 @pytest.mark.asyncio
@@ -461,7 +461,7 @@ async def test_cross_tenant_memory_leaks_nothing(configured_app, migrations_pg_d
     )
     assert resp.status_code == 200, resp.text
     hits = resp.json()["hits"]
-    assert all(_A_PROJECT_MEMORY not in h["content"] for h in hits), hits
+    assert all(_A_PROJECT_MEMORY not in h["headline"] for h in hits), hits
 
 
 # ---------------------------------------------------------------------------

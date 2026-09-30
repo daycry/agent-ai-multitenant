@@ -24,6 +24,8 @@ from agent_runtime.internal_api import (
 from agent_runtime.tools import ToolRegistry, ToolResult
 
 _VALID_SCOPES = ("private", "team_shared", "project_shared", "global")
+# Tope de ids por llamada a `memory_get` (el servidor lo impone igual).
+_MEMORY_GET_MAX_IDS = 20
 # LLMs ignore the schema enum and send near-misses ("project", "team", "error"…),
 # which the internal API rejects with HTTP 422 — burning a whole turn. We coerce
 # the common intents and drop the rest instead of failing the call.
@@ -96,6 +98,67 @@ class MemoryTools:
             return ToolResult(ok=False, error=f"memory_recall failed: {exc}")
         return ToolResult(ok=True, output={"hits": hits, "count": len(hits)})
 
+    def memory_timeline(self, args: dict[str, Any]) -> ToolResult:
+        """Vecinos cronologicos de una memoria o ejecucion (task_mem_03)."""
+        memory_id = args.get("memory_id") or None
+        execution_id = args.get("execution_id") or None
+        if (memory_id is None) == (execution_id is None):
+            return ToolResult(
+                ok=False,
+                error="memory_timeline requires exactly one of 'memory_id' / 'execution_id'",
+            )
+        if not all(isinstance(v, str) for v in (memory_id, execution_id) if v is not None):
+            return ToolResult(ok=False, error="memory_timeline ids must be strings")
+        try:
+            window = int(args.get("window", 5))
+        except (TypeError, ValueError):
+            return ToolResult(ok=False, error="memory_timeline 'window' must be an int")
+        try:
+            timeline = self.api.memory_timeline(
+                memory_id=memory_id, execution_id=execution_id, window=window
+            )
+        except InternalAPIHTTPError as exc:
+            return ToolResult(
+                ok=False,
+                error=f"memory_timeline HTTP {exc.status_code}: {exc.body[:200]}",
+                output={"status_code": exc.status_code},
+            )
+        except InternalAPIError as exc:
+            return ToolResult(ok=False, error=f"memory_timeline failed: {exc}")
+        return ToolResult(ok=True, output=timeline)
+
+    def memory_get(self, args: dict[str, Any]) -> ToolResult:
+        """Contenido completo de hasta 20 memorias por id (task_mem_01).
+
+        Segunda capa de la revelación progresiva: ``memory_recall`` y el preámbulo
+        del run traen el índice (id + titular); aquí se pide el detalle de las que
+        sirven. El servidor devuelve sólo las que el agente puede leer."""
+        ids = args.get("ids")
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or not all(isinstance(i, str) and i.strip() for i in ids)
+        ):
+            return ToolResult(
+                ok=False, error="memory_get requires a non-empty list 'ids' of strings"
+            )
+        ids = [i.strip() for i in ids]
+        if len(ids) > _MEMORY_GET_MAX_IDS:
+            return ToolResult(
+                ok=False, error=f"memory_get accepts at most {_MEMORY_GET_MAX_IDS} ids per call"
+            )
+        try:
+            memories = self.api.memory_get(ids=ids)
+        except InternalAPIHTTPError as exc:
+            return ToolResult(
+                ok=False,
+                error=f"memory_get HTTP {exc.status_code}: {exc.body[:200]}",
+                output={"status_code": exc.status_code},
+            )
+        except InternalAPIError as exc:
+            return ToolResult(ok=False, error=f"memory_get failed: {exc}")
+        return ToolResult(ok=True, output={"memories": memories, "count": len(memories)})
+
     def memory_store(self, args: dict[str, Any]) -> ToolResult:
         validated = _validate_store_args(args)
         if isinstance(validated, ToolResult):
@@ -143,6 +206,8 @@ def register_memory_tools(registry: ToolRegistry, api: InternalAgentAPI) -> None
     tools = MemoryTools(api)
     registry.register("memory_recall", tools.memory_recall)
     registry.register("memory_store", tools.memory_store)
+    registry.register("memory_get", tools.memory_get)
+    registry.register("memory_timeline", tools.memory_timeline)
 
 
 __all__ = ["MemoryTools", "register_memory_tools"]

@@ -112,6 +112,7 @@ PARTITIONED_TABLES: tuple[str, ...] = (
     "llm_usage_events",  # migración 0135 (ola 3)
     "audit_log",  # migración 0136 (ola 4)
     "executions",  # migración 0137 (ola 5) — las CINCO del ADR 0151
+    "memory_recall_log",  # migración 0151 (task_mem_02) — nace particionada
 )
 
 #: `event_type` REUTILIZADO: `infra_alert` ya está registrado en el dispatcher

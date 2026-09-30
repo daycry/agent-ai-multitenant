@@ -448,10 +448,13 @@ def test_all_five_tables_of_the_adr_are_registered() -> None:
     """
     from workers.maintenance.partitions import PARTITIONED_TABLES
 
+    # `memory_recall_log` (task_mem_02, migración 0151) NACE particionada y ya no
+    # pasa por una conversión: es la sexta de la familia, no una de las cinco.
     assert set(PARTITIONED_TABLES) == {
         "guardrail_events",
         "notification_logs",
         "llm_usage_events",
         "audit_log",
         "executions",
+        "memory_recall_log",
     }
