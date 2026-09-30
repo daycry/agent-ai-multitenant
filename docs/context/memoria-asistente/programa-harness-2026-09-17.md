@@ -9,13 +9,16 @@ metadata:
 ---
 
 Rama `plan/harness-programa-2026-09-17` (sobre la cadena marketplace → ui → instalador,
-nada mergeado a master, **sin push desde el 2026-09-29**). Estado al 2026-09-30:
+nada mergeado a master, push hecho el 2026-09-30 a petición del operador). Estado al 2026-09-30:
 
 - **ui-reestructuracion-2026-09-09** `blocked` (1df542e5): 11/13 casillas, revisión
   adversarial cerrada en 3 intentos. Abiertas: mitad URL de `task_ui_21` (ADR 0170
   `proposed`) y `task_ui_40` (piel, sólo si el operador la aprueba). Changelog escrito.
-- **memoria-agentes-2026-09-09** `in_progress` desde el 2026-09-30; ola 1 en curso
-  (mem_01+02 con migración 0151, mem_03 en paralelo; mem_04 después por la migración).
+- **memoria-agentes-2026-09-09** `in_progress`: 6/7 casillas (`task_mem_10` abierta: su eval pide el
+  dataset dorado del Plan 14, que no mide recall; decide el operador). Revisión adversarial intento 1 hecha;
+  sus correcciones están comiteadas (a9803128) pero **la integración de memoria está SIN verificar**: los
+  implementadores se cortaron por límite de uso y Docker Desktop no arrancaba el 2026-09-30. Al volver:
+  integración de memoria (incluida la migración 0154 up/down/up) e intento 2 de la revisión.
 - **harness-00** `approved`: h00_01, h00_02, h00_04 cerradas; faltan h00_03 (baseline) y
   h00_05 (aceptación, depende de todos los hijos). harness-01..06 `pending_approval`.
 - **compat-modelos** `pending_human_validation`. Codex y Ollama cloud sin prueba viva:
