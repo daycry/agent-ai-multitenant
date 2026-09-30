@@ -21,20 +21,32 @@ _HOST_PATH_MARKER = "<project-root>"
 _scanner = SecretScanner()
 
 #: ``<private>…</private>`` (task_mem_04): texto que el humano marca para que no
-#: se memorice. Sin distinguir mayúsculas y a través de saltos de línea. Una
-#: etiqueta SIN cierre se lleva todo lo que sigue: ante la duda, se calla.
-_PRIVATE_BLOCK = re.compile(r"<private>.*?</private\s*>", re.IGNORECASE | re.DOTALL)
-_PRIVATE_OPEN_TAIL = re.compile(r"<private>.*\Z", re.IGNORECASE | re.DOTALL)
-_PRIVATE_STRAY_CLOSE = re.compile(r"</private\s*>", re.IGNORECASE)
+#: se memorice. La apertura admite atributos y espacios (``<private >``,
+#: ``<private class="x">``, un salto de línea antes del ``>``), el cierre admite
+#: espacios (``</private >``), sin distinguir mayúsculas y a través de saltos de
+#: línea. Los bloques se anidan (una pila): el primer cierre NO termina el externo.
+#: Una apertura SIN cierre se lleva todo lo que sigue: ante la duda, se calla (CWE-184).
+_PRIVATE_TAG = re.compile(r"<private\b[^>]*>|</private\s*>", re.IGNORECASE)
 
 
 def strip_private_tags(text: str) -> str:
-    """Quita los bloques ``<private>…</private>`` (y los sin cerrar) del texto."""
+    """Quita los bloques ``<private>…</private>`` (anidados y sin cerrar) del texto."""
     if not text or "private" not in text.lower():
         return text
-    text = _PRIVATE_BLOCK.sub("", text)
-    text = _PRIVATE_OPEN_TAIL.sub("", text)
-    return _PRIVATE_STRAY_CLOSE.sub("", text)
+    out: list[str] = []
+    depth = 0
+    pos = 0
+    for tag in _PRIVATE_TAG.finditer(text):
+        if depth == 0:
+            out.append(text[pos : tag.start()])
+        pos = tag.end()
+        if tag.group().startswith("</"):
+            depth = max(0, depth - 1)  # un cierre huérfano sólo se retira a sí mismo
+        else:
+            depth += 1
+    if depth == 0:
+        out.append(text[pos:])
+    return "".join(out)
 
 
 def sanitize_memory_content(text: str) -> tuple[str, int]:

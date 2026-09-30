@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -32,6 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = structlog.get_logger(__name__)
 
 RecallKind = Literal["index", "detail"]
+
+#: Ventana con la que se lee ``memory_recall_log`` para saber qué memorias ya contó un run:
+#: poda las particiones mensuales (una ejecución no dura más). Sin ella la lectura
+#: recorrería el histórico entero del tenant.
+RUN_LOG_WINDOW = timedelta(days=3)
 
 
 @dataclass(frozen=True)
@@ -71,15 +77,22 @@ async def record_recall_usage(
             already_used: set[UUID] | None = None
             already_same_kind: set[UUID] = set()
             if execution_id is not None:
+                # Dos llamadas concurrentes del MISMO run (recall + get en paralelo) se
+                # serializan aquí: sin el cerrojo las dos leen «nada contado» y cuentan ambas.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"memory-usage:{tenant_id}:{execution_id}"},
+                )
                 rows = await session.execute(
                     text(
                         "SELECT memory_id, kind FROM memory_recall_log"
                         " WHERE tenant_id = :tenant_id AND execution_id = :execution_id"
-                        "   AND memory_id = ANY(:ids)"
+                        "   AND created_at >= :since AND memory_id = ANY(:ids)"
                     ),
                     {
                         "tenant_id": tenant_id,
                         "execution_id": execution_id,
+                        "since": datetime.now(UTC) - RUN_LOG_WINDOW,
                         "ids": list(memory_ids),
                     },
                 )
@@ -88,20 +101,18 @@ async def record_recall_usage(
                 already_same_kind = {r[0] for r in seen if r[1] == kind}
             plan = plan_usage(memory_ids, already_used_in_run=already_used)
 
-            await session.execute(
-                text(
-                    "UPDATE memory_entries SET"
-                    " recall_count = recall_count"
-                    "   + CASE WHEN id = ANY(:count_ids) THEN 1 ELSE 0 END,"
-                    " last_recalled_at = now()"
-                    " WHERE tenant_id = :tenant_id AND id = ANY(:ids)"
-                ),
-                {
-                    "tenant_id": tenant_id,
-                    "ids": plan.to_log,
-                    "count_ids": plan.to_count,
-                },
-            )
+            # Sólo las filas aún NO contadas en este run y vivas: una archivada no cuenta
+            # (el recall no la ve) y una ya contada no se vuelve a tocar.
+            if plan.to_count:
+                await session.execute(
+                    text(
+                        "UPDATE memory_entries SET recall_count = recall_count + 1,"
+                        " last_recalled_at = now()"
+                        " WHERE tenant_id = :tenant_id AND id = ANY(:count_ids)"
+                        "   AND archived_at IS NULL"
+                    ),
+                    {"tenant_id": tenant_id, "count_ids": plan.to_count},
+                )
             to_log = [m for m in plan.to_log if m not in already_same_kind]
             if to_log:
                 await session.execute(
@@ -124,4 +135,4 @@ async def record_recall_usage(
         logger.warning("memory.recall_usage_failed", error=str(exc), kind=kind)
 
 
-__all__ = ["RecallKind", "UsagePlan", "plan_usage", "record_recall_usage"]
+__all__ = ["RUN_LOG_WINDOW", "RecallKind", "UsagePlan", "plan_usage", "record_recall_usage"]

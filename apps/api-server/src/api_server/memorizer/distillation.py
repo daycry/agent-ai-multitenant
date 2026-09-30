@@ -403,6 +403,8 @@ def _parse_response_result(text: str) -> tuple[list[MemoryCandidate], str]:
     válidos → ``([], "llm_empty")`` (la causa legítima: nada que recordar).
     """
     items = _extract_items(text)
+    if items is not None and items and not any(isinstance(i, Mapping) for i in items):
+        items = None  # una lista de cadenas no es nada aprovechable
     if items is None:
         logger.info("memorizer.parse_failed", preview=text[:200])
         return [], "llm_unparseable"
@@ -424,28 +426,78 @@ def _parse_response_result(text: str) -> tuple[list[MemoryCandidate], str]:
     return out, "llm_empty" if not out else "ok"
 
 
+#: Claves con las que un modelo pequeño envuelve la lista de memorias.
+_WRAPPER_LIST_KEYS = ("memories", "items", "observations")
+_WRAPPER_SUMMARY_KEY = "summary"
+
+
+def _unwrap(parsed: Any) -> list[Any] | None:
+    """Los items de un JSON ya parseado, o ``None`` si no hay forma reconocible.
+
+    Una lista es la lista. Un objeto CON ``content`` es UN item (aunque lleve ``tags``, que
+    es una lista). Un envoltorio con claves conocidas (``memories`` / ``items`` /
+    ``observations`` / ``summary``) se aplana conservando el resumen, que va el primero."""
+    if isinstance(parsed, list):
+        return parsed
+    if not isinstance(parsed, Mapping):
+        return None
+    if "content" in parsed:
+        return [parsed]
+    known = [k for k in (*_WRAPPER_LIST_KEYS, _WRAPPER_SUMMARY_KEY) if k in parsed]
+    if known:
+        items: list[Any] = []
+        summary = parsed.get(_WRAPPER_SUMMARY_KEY)
+        if isinstance(summary, str) and summary.strip():
+            items.append({"content": summary, "kind": SUMMARY_KIND})
+        elif isinstance(summary, Mapping):
+            items.append({**summary, "kind": summary.get("kind") or SUMMARY_KIND})
+        for key in _WRAPPER_LIST_KEYS:
+            value = parsed.get(key)
+            if isinstance(value, list):
+                items.extend(value)
+        return items
+    for value in parsed.values():  # un envoltorio con otra clave: la primera lista
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def _recover_complete_objects(text: str) -> list[Any] | None:
+    """Los objetos COMPLETOS con ``content`` de un JSON truncado (``None`` si no hay)."""
+    decoder = json.JSONDecoder()
+    found: list[Any] = []
+    pos = text.find("{")
+    while pos != -1:
+        try:
+            obj, end = decoder.raw_decode(text, pos)
+        except (json.JSONDecodeError, ValueError):
+            pos = text.find("{", pos + 1)
+            continue
+        if isinstance(obj, Mapping) and "content" in obj:
+            found.append(obj)
+            pos = text.find("{", end)
+        else:
+            pos = text.find("{", pos + 1)
+    return found or None
+
+
 def _extract_items(text: str) -> list[Any] | None:
     """La lista de items del texto del LLM, o ``None`` si no hay JSON utilizable.
 
     Estrategias, en orden: el texto entero; del primer ``[`` al último ``]`` (el
     LLM envuelve el JSON en vallas o en prosa); del primer ``{`` al último ``}``
-    (un objeto envoltorio o un item suelto). Un objeto se desenvuelve: la primera
-    lista que contenga, o él mismo como único item."""
+    (un objeto envoltorio o un item suelto); y, si nada parsea (JSON truncado), los
+    objetos completos que sí se cerraron. Ver :func:`_unwrap` para las formas."""
     candidates: list[Any] = [_try_parse_json(text)]
     for open_ch, close_ch in (("[", "]"), ("{", "}")):
         lo, hi = text.find(open_ch), text.rfind(close_ch)
         if lo != -1 and hi > lo:
             candidates.append(_try_parse_json(text[lo : hi + 1]))
     for parsed in candidates:
-        if isinstance(parsed, list):
-            return parsed
-        if isinstance(parsed, Mapping):
-            for value in parsed.values():
-                if isinstance(value, list):
-                    return value
-            if "content" in parsed:
-                return [parsed]
-    return None
+        items = _unwrap(parsed)
+        if items is not None:
+            return items
+    return _recover_complete_objects(text)
 
 
 def _clean_candidate(raw: Mapping[str, Any]) -> MemoryCandidate | None:

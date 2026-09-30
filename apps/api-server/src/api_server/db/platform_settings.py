@@ -14,6 +14,7 @@ import asyncio
 import json
 import math
 import weakref
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -755,6 +756,22 @@ DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS = 90
 MEMORY_ARCHIVE_AFTER_DAYS_MIN = 7
 MEMORY_ARCHIVE_AFTER_DAYS_MAX = 3650
 
+# Desde cuándo se MIDE el uso de las memorias (task_mem_02). La migración 0151 dejó
+# `recall_count = 0` en todo lo anterior, así que sin un suelo la primera pasada de la
+# caducidad archivaría el histórico `episodic` entero aunque se usara antes de medirse. La
+# antigüedad que cuenta la caducidad es `greatest(created_at, <este instante>)`: nada previo
+# caduca hasta que pasen N días de medición real. Default = la fecha de la migración 0151.
+MEMORY_USAGE_TRACKING_SINCE_KEY = "memory.usage_tracking_since"
+DEFAULT_MEMORY_USAGE_TRACKING_SINCE = datetime(2026, 9, 30, tzinfo=UTC)
+
+# Cuántas ejecuciones DISTINTAS de agentes tienen que dar `wrong`/`outdated` a una memoria
+# para marcarla `disputed` (CWE-863: un solo run no puede hundir el ranking de `global`).
+# Un voto negativo HUMANO marca por sí solo.
+MEMORY_DISPUTE_MIN_AGENT_VOTERS_KEY = "memory.dispute_min_agent_voters"
+DEFAULT_MEMORY_DISPUTE_MIN_AGENT_VOTERS = 2
+MEMORY_DISPUTE_MIN_AGENT_VOTERS_MIN = 1
+MEMORY_DISPUTE_MIN_AGENT_VOTERS_MAX = 10
+
 
 def _clamped_decimal(value: Any, *, default: float, low: float, high: float) -> float:
     """``float(value)`` acotado a ``[low, high]``; ilegible / NaN / bool → ``default``."""
@@ -814,6 +831,38 @@ async def get_memory_archive_after_days(session: AsyncSession) -> int:
     except (TypeError, ValueError):
         return DEFAULT_MEMORY_ARCHIVE_AFTER_DAYS
     return max(MEMORY_ARCHIVE_AFTER_DAYS_MIN, min(MEMORY_ARCHIVE_AFTER_DAYS_MAX, days))
+
+
+async def get_memory_usage_tracking_since(session: AsyncSession) -> datetime:
+    """Instante desde el que se mide el uso de las memorias (ISO 8601; ilegible → default)."""
+    value = await get_platform_setting(
+        session,
+        MEMORY_USAGE_TRACKING_SINCE_KEY,
+        default=DEFAULT_MEMORY_USAGE_TRACKING_SINCE.isoformat(),
+    )
+    if not isinstance(value, str):
+        return DEFAULT_MEMORY_USAGE_TRACKING_SINCE
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return DEFAULT_MEMORY_USAGE_TRACKING_SINCE
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+async def get_memory_dispute_min_agent_voters(session: AsyncSession) -> int:
+    """Ejecuciones distintas de agentes que hacen falta para disputar una memoria."""
+    value = await get_platform_setting(
+        session,
+        MEMORY_DISPUTE_MIN_AGENT_VOTERS_KEY,
+        default=DEFAULT_MEMORY_DISPUTE_MIN_AGENT_VOTERS,
+    )
+    if isinstance(value, bool):
+        return DEFAULT_MEMORY_DISPUTE_MIN_AGENT_VOTERS
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_DISPUTE_MIN_AGENT_VOTERS
+    return max(MEMORY_DISPUTE_MIN_AGENT_VOTERS_MIN, min(MEMORY_DISPUTE_MIN_AGENT_VOTERS_MAX, n))
 
 
 # ---------------------------------------------------------------------------

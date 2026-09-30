@@ -35,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { invalidateMemoryViews } from "@/lib/memory/invalidate";
 import { memoryListPath, type MemoryView } from "@/lib/memory/list-query";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
@@ -116,7 +117,7 @@ export default function MemoriesPage() {
   // conoce, así que ahí no se inventa un total.
   const filtered = scopeFilter === "disputed" || neverRecalled;
   const total = scopeFilter === "disputed" || neverRecalled ? undefined : counts?.[scopeFilter];
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
+  const invalidate = () => invalidateMemoryViews(queryClient);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="memories-page">

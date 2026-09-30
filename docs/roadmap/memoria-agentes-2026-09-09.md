@@ -160,7 +160,7 @@ rompe un run.
   - ✅ **Cerrada el 2026-09-30.** Tool `memory_timeline`, `POST /internal/agent/memory-timeline` y
     `GET /memories/{id}/timeline` (`memorizer/timeline.py`). `window` cuenta ejecuciones vecinas con alguna memoria
     visible, de 1 a 20, 5 por defecto. Los vecinos comparten ámbito y dueño con el ancla. La búsqueda de ejecuciones
-    se acota a ±30 días del ancla para podar particiones, así que una vecina más lejana no aparece. El endpoint
+    se acota a ±30 días del ancla para podar particiones, así que una vecina más lejana no aparece (recorta el «inmediatamente anterior y posterior» del enunciado: en un proyecto con runs cada más de un mes, la línea de tiempo sale sin vecinas). El endpoint
     interno usa la derivación de ámbito del recall y nunca ve `private`. El público enseña las privadas sólo a su
     dueño. Un ancla ajena o inexistente da 404. Rojo visto: 4 de integración y 5 del runtime. El bloque del endpoint
     interno se reconstruyó tras borrarlo por error el script de `task_mem_01`. El orquestador revisó que reutiliza
@@ -212,9 +212,14 @@ rompe un run.
     `memory_feedback` es escritura y se gatea como `memory_store` (`code_changes`). **Eval:** el dataset dorado del
     Plan 14 califica prompts con un juez LLM y no mide el recall, así que se midió sobre un conjunto sintético
     reproducible (`tests/unit/test_memory_rank_eval.py`, semilla fija, 400 consultas). Con feedback informativo el
-    MRR pasa de 0,518 a 0,551; con feedback de puro ruido baja de 0,543 a 0,515. Los defaults (utilidad 0,15,
-    frescura 0,05) salen de una rejilla que limita esa pérdida a 0,03. **Decide el operador** si ese eval sustituye
-    al del dataset dorado o si hace falta un dataset de recall. Rojo visto en unit y runtime; la integración nació
+    MRR pasa de 0,518 a 0,551; con feedback de puro ruido baja de 0,542 a 0,515. Los defaults (utilidad 0,15,
+    frescura 0,05) salen de una rejilla que limita esa pérdida a 0,03. **La penalización de lo disputado
+    (`disputed = 1,0`) no sale de la rejilla**, cuyo óptimo la deja en 0: se fija alta porque el plan exige que una
+    memoria marcada errónea caiga, y para que un solo voto de un agente no baste se exige el acuerdo de varias
+    ejecuciones o un voto humano (revisión adversarial, intento 1). **Este eval tampoco mide el riesgo de
+    `task_mem_01`** (que un agente que no pide el detalle rinda peor con sólo el índice): compara pesos de
+    ranking, no índice frente a contenido. **Decide el operador** si el eval sintético sustituye al del dataset
+    dorado o si hace falta un dataset de recall, que mediría también ese riesgo. Rojo visto en unit y runtime; la integración nació
     en verde y se verificó con mutaciones: sin pesos en `/memory-recall`, los dos tests de ranking se ponen rojos.
 
 ### `task_mem_11` — Caducidad y compactación
@@ -233,7 +238,7 @@ rompe un run.
     (90 por defecto). Sólo toca `team_shared`, `project_shared` y `global`: nunca `private`, ni las memorias del
     córtex, cuyas lecturas no suman `recall_count`. Compacta las `disputed` de cada proyecto en una propuesta
     pendiente que no aplica nada; la confirma o la rechaza un `tenant_admin` con `GET /memories/compactions` y
-    `POST …/{id}/confirm|reject`, que dejan auditoría. El recall, `memory_get`, los contadores y la línea de tiempo
+    `POST …/{id}/confirm|reject`, que dejan auditoría. «Compactar» es archivar el grupo confirmado, sin fundir su contenido en una memoria corregida: el plan no dice cómo consolidar y no se inventa. El recall, `memory_get`, los contadores y la línea de tiempo
     del agente excluyen lo archivado; `GET /memories?archived=true` lo enseña. Migración `0153`, aditiva y
     reversible, con dos tablas nuevas bajo RLS. Rojo visto en el unit de la selección; la integración se verificó
     con una mutación: sin `archived_at IS NULL`, el test del recall se pone rojo.
@@ -264,6 +269,47 @@ rompe un run.
     usan otros tests del repo.
 
 ---
+
+## Revisión adversarial del plan
+
+**Intento 1 (2026-09-30)**, skill `adversarial-review` del plugin sobre `1df542e5..3b90fb63`, con las lentes
+A, B, C y D y el agente `reviewer`. **Ninguna fuga de `private` ni entre tenants.** La lente A confirma las seis
+casillas marcadas contra su enunciado y su test, y confirma que `task_mem_10` debe seguir abierta: el dataset del
+Plan 14 no mide el recall, y cerrarla con el eval sintético contradiría la regla de no marcar `[x]` sin su test.
+
+| #   | Grado     | Lente | Gap                                                                                                    | Tarea          | Estado                                           |
+| --- | --------- | ----- | ------------------------------------------------------------------------------------------------------ | -------------- | ------------------------------------------------ |
+| 1   | Critical  | C, D  | La primera pasada del archivado se llevaría todo el histórico, que nació con `recall_count = 0`        | mem_11         | corregido en código, integración sin verificar   |
+| 2   | Important | C, A  | Un solo voto `wrong` de un run hunde una memoria `global` para siempre y no se puede retirar           | mem_10         | corregido en código, integración sin verificar   |
+| 3   | Important | B     | El parser pierde un item suelto con `tags`, el summary de un envoltorio y el JSON truncado             | mem_04         | corregido en código, integración sin verificar   |
+| 4   | Important | B, C  | `<private>` anidado, con espacio o con atributos llega a la memoria compartida (CWE-184)               | mem_04         | corregido en código, integración sin verificar   |
+| 5   | Important | D     | La cola de compactación pide la ficha completa de cada memoria, y cada voto la recarga                 | mem_20         | corregido en código, integración sin verificar   |
+| 6   | Important | A     | La penalización `disputed = 1,0` no estaba medida y la nota lo callaba                                 | mem_10         | corregido: nota y regla de acuerdo               |
+| 7   | Important | A     | El eval no mide el riesgo de `task_mem_01` (índice frente a contenido)                                 | mem_10         | corregido: anotado para la decisión del operador |
+| 8   | Minor     | B     | Un id mal formado tumba el lote de `memory_get`                                                        | mem_01         | corregido en código, integración sin verificar   |
+| 9   | Minor     | B, D  | Citas del visor: una petición por chip y un prefijo ambiguo resuelve a una memoria cualquiera          | mem_02         | corregido en código, integración sin verificar   |
+| 10  | Minor     | B     | Uso contado sobre memorias archivadas y doble conteo con llamadas concurrentes del mismo run           | mem_02         | corregido en código, integración sin verificar   |
+| 11  | Minor     | B     | Carrera entre el job de compactación y confirmar o rechazar                                            | mem_11         | corregido en código, integración sin verificar   |
+| 12  | Minor     | D     | Faltan índices en `source_execution_id` y para el predicado del archivado; auditoría fila a fila       | mem_03, 11     | corregido en código, integración sin verificar   |
+| 13  | Minor     | D     | El uso reescribe `last_recalled_at` en cada llamada y lee el log sin acotar particiones                | mem_02         | corregido en código, integración sin verificar   |
+| 14  | Minor     | B     | La demo del test humano 04.5 lee la forma vieja del hit                                                | mem_01         | corregido en código, integración sin verificar   |
+| 15  | Minor     | B     | `memory_timeline` cuenta como investigación estéril; «bug fix» con espacio no se normaliza             | mem_03, 04     | corregido en código, integración sin verificar   |
+| 16  | Minor     | C     | Un texto todo `<private>` daba 500 al crear la memoria                                                 | mem_04         | corregido en código, integración sin verificar   |
+| 17  | Minor     | A     | `propose_compactions` no excluía `private` explícitamente                                              | mem_11         | corregido en código, integración sin verificar   |
+| 18  | Minor     | A     | Cifra de la nota (0,543 en vez de 0,542), el recorte de ±30 días y «compactar = archivar» sin escribir | mem_03, 10, 11 | corregido: notas                                 |
+
+**Estado al 2026-09-30 por la tarde.** Las correcciones de los gaps 1 a 5 y 8 a 17 están en el código:
+arranque del archivado desde `memory.usage_tracking_since`, disputa sólo con varias ejecuciones o un voto
+humano, parser que conserva el item suelto, el envoltorio y el JSON truncado, `<private>` con anidamiento y
+atributos, cola de compactación sin N+1, `GET /memories/resolve` para las citas, `memory_get` tolerante,
+índices de la migración `0154_memory_indexes`, y el resto. **Los dos implementadores se cortaron por el límite
+de uso antes de su informe final**, y la integración no se ha podido verificar porque Docker Desktop no arranca
+en la máquina, y la BD de tests vive en él. Lo verificado por el orquestador sin Docker: runtime 815 passed;
+unit, docs y seguridad 6855 passed (tres rojos de entorno que pasan al repetirlos solos); vitest 1826 de 1827
+(el rojo es el test de `team-picker` que falla por carga y pasa solo); `tsc`, eslint, `check-i18n`,
+`check-component-size`, `ruff` y `mypy_gate` limpios. **Pendiente al volver:** correr la integración de memoria
+(`tests/integration/test_memor*.py` y `test_memory_*.py`, incluida la migración 0154 con up→down→up y
+`test_memory_review_fixes.py`) y lanzar el intento 2 de la revisión.
 
 ## Tests humanos
 

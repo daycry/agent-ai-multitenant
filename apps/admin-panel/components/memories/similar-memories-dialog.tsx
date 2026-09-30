@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { invalidateMemoryViews } from "@/lib/memory/invalidate";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { useErrorText } from "@/lib/use-error-text";
 
@@ -49,7 +50,7 @@ export function SimilarMemoriesDialog({
 
   const refetchAll = () => {
     void queryClient.invalidateQueries({ queryKey: ["memory-similar", memory.id] });
-    void queryClient.invalidateQueries({ queryKey: ["memories"] });
+    invalidateMemoryViews(queryClient);
     onChanged();
   };
 

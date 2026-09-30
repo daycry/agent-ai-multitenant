@@ -291,17 +291,33 @@ def _store(token: str, *, content: str, type_: str, tags: list[str]) -> dict[str
     return response.json()  # type: ignore[no-any-return]
 
 
-def _print_hits(hits: list[dict[str, Any]]) -> None:
+def _memory_get(token: str, ids: list[str]) -> dict[str, str]:
+    """El contenido completo de las memorias (el recall sólo devuelve el índice)."""
+    if not ids:
+        return {}
+    response = httpx.post(
+        f"{_API_URL}/internal/agent/memory-get",
+        json={"ids": ids},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    return {str(m["id"]): str(m["content"]) for m in response.json().get("memories") or []}
+
+
+def _print_hits(hits: list[dict[str, Any]], token: str) -> None:
     if not hits:
         print("    (sin resultados)")
         return
+    contents = _memory_get(token, [str(h["id"]) for h in hits])
     for h in hits:
-        score = h["rrf_score"]
-        bm25 = h["bm25_rank"]
-        vec = h["vector_rank"]
-        preview = h["content"][:90].replace("\n", " ")
-        print(f"    · score={score:.4f}  bm25={bm25}  vec={vec}  scope={h['scope']}")
-        print(f"      “{preview}{'…' if len(h['content']) > 90 else ''}”")
+        print(
+            f"    · score={h['score']:.4f}  bm25={h.get('bm25_rank')}  "
+            f"vec={h.get('vector_rank')}  scope={h['scope']}"
+        )
+        print(f"      titular: {h['headline']}")
+        content = contents.get(str(h["id"]), "").replace("\n", " ")
+        print(f"      “{content[:90]}{'…' if len(content) > 90 else ''}”")
 
 
 async def main() -> int:
@@ -384,7 +400,7 @@ async def main() -> int:
         print(f"  Token minteado (kind=agent), llamando {_API_URL}/internal/agent/memory-recall")
         hits = _recall(token, query="asyncpg driver", limit=5)
         check(f"hits devueltos: {len(hits)}", len(hits) > 0)
-        _print_hits(hits)
+        _print_hits(hits, token)
         await apause(2)
 
         # ----- Paso 4: store + recall again -----
@@ -400,9 +416,9 @@ async def main() -> int:
         check("memory_store 201", True, f"memory_id={stored['memory_id']}")
         await apause(2, note="ahora buscamos lo recién guardado")
         hits2 = _recall(token, query="pgvector HNSW Postgres", limit=5)
-        found = any(h["memory_id"] == stored["memory_id"] for h in hits2)
+        found = any(h["id"] == stored["memory_id"] for h in hits2)
         check("recall encuentra la nueva memoria", found)
-        _print_hits(hits2)
+        _print_hits(hits2, token)
 
         print()
         print("  En el admin-panel (haz Ctrl+click si tu terminal lo soporta):")

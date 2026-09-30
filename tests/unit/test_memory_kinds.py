@@ -227,3 +227,10 @@ async def test_distil_execution_result_carries_the_kinds() -> None:
         execution={"status": "done", "output": "o", "steps_log": []}, agent={"role": "r"}, llm=llm
     )
     assert res.cause == "ok" and res.candidates[0].kind == "summary"
+
+
+def test_bug_fix_with_a_space_is_a_bugfix() -> None:
+    from api_server.memorizer.kinds import normalise_kind
+
+    assert normalise_kind("bug fix") == "bugfix"
+    assert normalise_kind("Bug Fix") == "bugfix"

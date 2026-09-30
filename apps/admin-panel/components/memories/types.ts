@@ -167,6 +167,8 @@ export interface Compaction {
   project_name: string | null;
   status: "pending" | "confirmed" | "rejected";
   memory_ids: string[];
+  /** Titulares vivos, en la misma respuesta: la cola no pide la ficha de cada memoria. */
+  memories: { id: string; headline: string }[];
   summary: string;
   created_at: string;
   decided_at: string | null;

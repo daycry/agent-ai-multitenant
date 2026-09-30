@@ -113,6 +113,23 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
                 " AND (metadata ->> 'cortex') = 'true'"
             ),
         ),
+        # Lectura por ejecución (resumen, línea de tiempo, listado por `execution_id`) y
+        # predicado del archivado diario (migración 0154).
+        Index(
+            "ix_memory_entries_tenant_source_exec",
+            "tenant_id",
+            "source_execution_id",
+            postgresql_where=text("source_execution_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_memory_entries_archive_candidates",
+            "created_at",
+            postgresql_where=text(
+                "deleted_at IS NULL AND archived_at IS NULL AND type = 'episodic'"
+                " AND kind IS DISTINCT FROM 'summary' AND recall_count = 0"
+                " AND scope IN ('team_shared', 'project_shared', 'global')"
+            ),
+        ),
         # Read path: "the memories distilled from this human work session"
         # (Plan 16 task_16_15). Partial — only set on human-distilled rows.
         Index(
@@ -370,6 +387,9 @@ class MemoryFeedback(Base, UUIDPrimaryKeyMixin):
     execution_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     verdict: Mapped[str] = mapped_column(String(10), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Voto negativo ya REVISADO (compactación rechazada / `useful` humano): no vuelve a
+    #: disputar la memoria; sólo los votos posteriores lo hacen.
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -393,15 +413,36 @@ class MemoryCompactionProposal(Base, UUIDPrimaryKeyMixin):
             unique=True,
             postgresql_where=text("status = 'pending'"),
         ),
+        Index(
+            "uq_memory_compaction_pending_owner",
+            "tenant_id",
+            "scope",
+            text("COALESCE(project_id, team_id, '00000000-0000-0000-0000-000000000000'::uuid)"),
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
         Index("ix_memory_compaction_tenant_status", "tenant_id", "status", "created_at"),
+        CheckConstraint(
+            "(scope = 'project_shared' AND project_id IS NOT NULL)"
+            " OR (scope = 'team_shared' AND team_id IS NOT NULL) OR scope = 'global'",
+            name="ck_memory_compaction_owner",
+        ),
         CheckConstraint(
             "status IN ('pending', 'confirmed', 'rejected')", name="ck_memory_compaction_status"
         ),
     )
 
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
-    project_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    #: Ámbito de las memorias agrupadas (`private` nunca se propone). `project_id` para
+    #: `project_shared`, `team_id` para `team_shared`, ninguno para `global`.
+    scope: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'project_shared'")
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    team_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(12), nullable=False, server_default=text("'pending'")

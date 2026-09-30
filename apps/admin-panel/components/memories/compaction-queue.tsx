@@ -14,22 +14,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
+import { invalidateMemoryViews } from "@/lib/memory/invalidate";
 import { useErrorText } from "@/lib/use-error-text";
 
-import { type Compaction, type MemoryResponse } from "./types";
+import { type Compaction } from "./types";
 
-function CompactionMemory({ id }: { id: string }) {
-  const query = useQuery({
-    queryKey: ["memories", "card-brief", id],
-    queryFn: () => apiFetch<MemoryResponse>(`/memories/${id}`),
-    staleTime: 60_000,
-    retry: false,
-  });
+function CompactionMemory({ id, headline }: { id: string; headline: string }) {
   return (
     <li className="truncate" data-testid={`compaction-memory-${id}`}>
       <Link href={`/admin/memories/${id}`} className="hover:underline">
         <span className="text-muted-foreground mr-1 font-mono">{id.slice(0, 8)}</span>
-        {query.data?.content.slice(0, 120) ?? ""}
+        {headline}
       </Link>
     </li>
   );
@@ -43,7 +38,12 @@ function CompactionItem({ proposal }: { proposal: Compaction }) {
   const decide = useMutation({
     mutationFn: (action: "confirm" | "reject") =>
       apiFetch(`/memories/compactions/${proposal.id}/${action}`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["memories"] }),
+    onSuccess: () => {
+      // La cola cambia (la propuesta se decide) y el listado también (se archivan memorias);
+      // las fichas sueltas no.
+      void queryClient.invalidateQueries({ queryKey: ["memories", "compactions"] });
+      invalidateMemoryViews(queryClient);
+    },
   });
 
   return (
@@ -57,8 +57,8 @@ function CompactionItem({ proposal }: { proposal: Compaction }) {
         {proposal.summary ? ` · ${proposal.summary}` : ""}
       </p>
       <ul className="mt-2 space-y-0.5 text-xs">
-        {proposal.memory_ids.map((mid) => (
-          <CompactionMemory key={mid} id={mid} />
+        {proposal.memories.map((m) => (
+          <CompactionMemory key={m.id} id={m.id} headline={m.headline} />
         ))}
       </ul>
       <div className="mt-2 flex gap-2">

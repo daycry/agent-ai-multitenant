@@ -232,3 +232,16 @@ def test_the_latch_never_comes_back_off() -> None:
     loop._track_research("read_file", {"tool_args": {"path": "a.py"}}, {"ok": True})  # type: ignore[attr-defined]
     loop._track_research("shell_exec", {}, {"ok": False, "error": "boom"})  # type: ignore[attr-defined]
     assert loop.has_produced is True  # type: ignore[attr-defined]
+
+
+def test_memory_timeline_has_a_target_per_anchor() -> None:
+    # Explorar anclas distintas es exploración (ADR 0089), no read-churn; repetir la
+    # misma ancla sí lo es.
+    a = _read_target("memory_timeline", {"memory_id": "m-1"})
+    b = _read_target("memory_timeline", {"memory_id": "m-2"})
+    e = _read_target("memory_timeline", {"execution_id": "x-1"})
+    assert a is not None and b is not None and e is not None
+    assert len({a, b, e}) == 3
+    # `window` es cosmético.
+    assert a == _read_target("memory_timeline", {"memory_id": "m-1", "window": 9})
+    assert _read_target("memory_timeline", {}) is None

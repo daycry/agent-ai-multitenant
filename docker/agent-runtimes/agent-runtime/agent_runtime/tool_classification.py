@@ -52,6 +52,20 @@ def _is_research_tool(tool: str | None) -> bool:
     return _base_tool_name(tool) in _RESEARCH_TOOLS
 
 
+def _memory_read_target(base: str, args: dict[str, Any]) -> str | None:
+    """Target de las lecturas de memoria por ancla (task_mem_01 / B9): el mismo lote de ids o la
+    misma ancla de la línea de tiempo no es exploración nueva; anclas distintas sí."""
+    if base == "memory_get":
+        ids = args.get("ids")
+        if isinstance(ids, list) and ids:
+            return f"{base}:" + ",".join(sorted(str(i) for i in ids))
+        return None
+    for key in ("memory_id", "execution_id"):
+        if args.get(key):
+            return f"{base}:{key}:{args[key]}"
+    return None
+
+
 def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
     """The normalized target a research call reads, or ``None``.
 
@@ -62,11 +76,8 @@ def _read_target(tool: str | None, args: dict[str, Any]) -> str | None:
     base = _base_tool_name(tool)
     if base in {"read_file", "list_files"}:
         return f"{base}:{args.get('path') or '.'}"
-    if base == "memory_get":  # task_mem_01: el mismo lote de ids no es exploración nueva
-        ids = args.get("ids")
-        if isinstance(ids, list) and ids:
-            return f"{base}:" + ",".join(sorted(str(i) for i in ids))
-        return None
+    if base in {"memory_get", "memory_timeline"}:
+        return _memory_read_target(base, args)
     if base in {"rag_search", "memory_recall"}:
         query = str(args.get("query") or "").strip()
         return f"{base}:{query}" if query else None

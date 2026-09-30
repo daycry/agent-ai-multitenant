@@ -65,3 +65,7 @@ def test_the_http_body_carries_kinds(monkeypatch: Any) -> None:
     monkeypatch.setattr(api, "_post", _post, raising=False)
     api.memory_recall(query="q", kinds=["decision"])
     assert sent["body"]["kinds"] == ["decision"]
+
+
+def test_coerce_kinds_accepts_bug_fix_with_a_space() -> None:
+    assert _coerce_kinds(["bug fix", "Bug Fix", "bug_fix"]) == ["bugfix"]

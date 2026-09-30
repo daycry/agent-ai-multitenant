@@ -4,7 +4,9 @@ Beat diario (04:10, tras la purga de las 03:xx y antes del GC de las 04:30). Dos
 las dos idempotentes y best-effort (una falla no tumba a la otra ni al beat):
 
   1. **Archiva** (soft) las ``episodic`` sin ``kind = summary``, con ``recall_count = 0`` y de
-     más de N días (``memory.archive_after_days``, default 90).
+     más de N días (``memory.archive_after_days``, default 90) contados desde
+     ``greatest(created_at, memory.usage_tracking_since)``: lo anterior a la medición del
+     uso no caduca hasta que pasen N días de medición real.
   2. **Propone** una revisión de compactación por proyecto con sus memorias ``disputed``. NO la
      aplica: un ``tenant_admin`` la confirma desde la API (la cola la pinta ``task_ui_31``).
 
@@ -37,7 +39,10 @@ def maintain_memory_lifecycle() -> dict[str, Any]:
 
 async def _maintain_memory_lifecycle_async(settings: Settings) -> dict[str, Any]:
     """Núcleo async (los tests lo llaman con los settings de la BD de prueba)."""
-    from api_server.db.platform_settings import get_memory_archive_after_days
+    from api_server.db.platform_settings import (
+        get_memory_archive_after_days,
+        get_memory_usage_tracking_since,
+    )
     from api_server.memorizer.lifecycle import archive_expired, propose_compactions
 
     engine = worker_engine(settings)
@@ -47,8 +52,11 @@ async def _maintain_memory_lifecycle_async(settings: Settings) -> dict[str, Any]
         try:
             async with sessionmaker() as session:
                 days = await get_memory_archive_after_days(session)
+                usage_since = await get_memory_usage_tracking_since(session)
             async with sessionmaker() as session, session.begin():
-                out["archived"] = await archive_expired(session, older_than_days=days)
+                out["archived"] = await archive_expired(
+                    session, older_than_days=days, usage_since=usage_since
+                )
             out["older_than_days"] = days
         except Exception as exc:  # una pasada no tumba a la otra
             _log.warning("maintenance.memory_lifecycle.archive_failed", error=str(exc))

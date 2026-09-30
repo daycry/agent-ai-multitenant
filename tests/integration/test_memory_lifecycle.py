@@ -53,6 +53,12 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             " user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute("DELETE FROM platform_settings WHERE key LIKE 'memory.%'")
+        # El histórico sembrado es anterior a la medición del uso: para que caduque hay que
+        # adelantar el inicio de la medición (por defecto es 2026-09-30, ver platform_settings).
+        await conn.execute(
+            "INSERT INTO platform_settings (key, value)"
+            " VALUES ('memory.usage_tracking_since', '\"2020-01-01T00:00:00+00:00\"'::jsonb)"
+        )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1,'A','lc-a'),"
             " ($2,'B','lc-b'), ($3,'P','lc-p')",
@@ -407,9 +413,11 @@ async def test_job_proposes_one_review_per_project_without_applying_it(
 
 
 @pytest.mark.asyncio
-async def test_pending_review_is_refreshed_when_a_new_memory_is_disputed(
+async def test_pending_review_is_not_touched_and_new_disputes_wait_for_a_new_one(
     configured_app, migrations_pg_dsn, workers_settings
 ) -> None:
+    """La propuesta pendiente es el conjunto que el admin mira: no se le añade nada; lo nuevo
+    espera a una propuesta NUEVA tras la decisión."""
     import json
 
     ids = await _seed(migrations_pg_dsn)
@@ -425,7 +433,19 @@ async def test_pending_review_is_refreshed_when_a_new_memory_is_disputed(
     await _run_job(workers_settings)
     p1 = [r for r in await _proposals(migrations_pg_dsn) if r["project_id"] == ids["p1"]]
     assert len(p1) == 1
-    assert len(json.loads(p1[0]["memory_ids"])) == 3
+    assert sorted(json.loads(p1[0]["memory_ids"])) == sorted([str(ids["d1"]), str(ids["d2"])])
+    # tras confirmar, la nueva disputada tiene su propuesta
+    admin = await _headers(ids["admin"], ids["ta"])
+    async with _client(configured_app) as c:
+        ok = await c.post(
+            f"/memories/compactions/{p1[0]['id']}/confirm",
+            json={"memory_ids": [str(ids["d1"]), str(ids["d2"])]},
+            headers=admin,
+        )
+    assert ok.status_code == 200
+    await _run_job(workers_settings)
+    again = [r for r in await _proposals(migrations_pg_dsn) if r["project_id"] == ids["p1"]]
+    assert len(again) == 1 and json.loads(again[0]["memory_ids"]) == [str(ids["d_keep"])]
 
 
 @pytest.mark.asyncio
@@ -439,11 +459,22 @@ async def test_confirm_archives_with_reason_and_audit_and_needs_a_tenant_admin(
     member = await _headers(ids["member"], ids["ta"])
     async with _client(configured_app) as c:
         denied_list = await c.get("/memories/compactions", headers=member)
-        denied = await c.post(f"/memories/compactions/{pend[ids['p1']]}/confirm", headers=member)
+        body = {"memory_ids": [str(ids["d1"]), str(ids["d2"])]}
+        denied = await c.post(
+            f"/memories/compactions/{pend[ids['p1']]}/confirm", json=body, headers=member
+        )
         listed = await c.get("/memories/compactions", headers=admin)
-        cross = await c.post(f"/memories/compactions/{pend[ids['pb']]}/confirm", headers=admin)
-        ok = await c.post(f"/memories/compactions/{pend[ids['p1']]}/confirm", headers=admin)
-        again = await c.post(f"/memories/compactions/{pend[ids['p1']]}/confirm", headers=admin)
+        cross = await c.post(
+            f"/memories/compactions/{pend[ids['pb']]}/confirm",
+            json={"memory_ids": [str(ids["d_b"])]},
+            headers=admin,
+        )
+        ok = await c.post(
+            f"/memories/compactions/{pend[ids['p1']]}/confirm", json=body, headers=admin
+        )
+        again = await c.post(
+            f"/memories/compactions/{pend[ids['p1']]}/confirm", json=body, headers=admin
+        )
     assert denied_list.status_code == 403 and denied.status_code == 403
     # sólo las del tenant A: la de B no se ve
     assert {p["project_id"] for p in listed.json()} == {str(ids["p1"]), str(ids["p2"])}
@@ -495,8 +526,107 @@ async def test_rejected_review_keeps_the_memories_and_is_not_proposed_again(
     async with _client(configured_app) as c:
         r = await c.post(f"/memories/compactions/{pend[ids['p2']]}/reject", headers=admin)
     assert r.status_code == 200 and r.json()["status"] == "rejected"
-    assert ids["d3"] not in await _archived(migrations_pg_dsn)  # sigue disputada y viva
+    assert ids["d3"] not in await _archived(migrations_pg_dsn)  # sigue viva
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:  # ...pero ya NO disputada: el rechazo limpia la disputa
+        assert (
+            await conn.fetchval("SELECT disputed_at FROM memory_entries WHERE id=$1", ids["d3"])
+            is None
+        )
+    finally:
+        await conn.close()
     await _run_job(workers_settings)
     still_pending = {r["project_id"] for r in await _proposals(migrations_pg_dsn)}
     assert ids["p2"] not in still_pending  # no se re-propone lo rechazado
     assert len(await _proposals(migrations_pg_dsn, "rejected")) == 1
+
+
+# ---------------------------------------------------------------------------
+# D1 (intento 1) — la cola lleva titulares vivos: el panel no pide la ficha de cada memoria
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_compaction_list_carries_live_headlines_in_one_payload(
+    configured_app, migrations_pg_dsn, workers_settings
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    await _run_job(workers_settings)
+    admin = await _headers(ids["admin"], ids["ta"])
+    async with _client(configured_app) as c:
+        listed = await c.get("/memories/compactions", headers=admin)
+    assert listed.status_code == 200, listed.text
+    by_project = {p["project_id"]: p for p in listed.json()}
+    p1 = by_project[str(ids["p1"])]
+    assert {m["id"]: m["headline"] for m in p1["memories"]} == {
+        str(ids["d1"]): "falsa uno",
+        str(ids["d2"]): "falsa dos",
+    }
+    # jamás una memoria de otro tenant
+    everything = {m["id"] for p in listed.json() for m in p["memories"]}
+    assert str(ids["d_b"]) not in everything
+
+
+# ---------------------------------------------------------------------------
+# B5/D5 (intento 1) — GET /memories/resolve: las citas de un informe, en UNA consulta
+# ---------------------------------------------------------------------------
+async def _seed_ambiguous(dsn: str, ids: dict[str, UUID]) -> tuple[UUID, UUID]:
+    twin_a = UUID("abcdef12-0000-4000-8000-000000000001")
+    twin_b = UUID("abcdef12-0000-4000-8000-000000000002")
+    conn = await asyncpg.connect(dsn)
+    try:
+        for mid in (twin_a, twin_b):
+            await conn.execute(
+                "INSERT INTO memory_entries (id, tenant_id, scope, type, content, project_id)"
+                " VALUES ($1,$2,'project_shared','episodic','gemela',$3)",
+                mid, ids["ta"], ids["p1"],
+            )  # fmt: skip
+    finally:
+        await conn.close()
+    return twin_a, twin_b
+
+
+@pytest.mark.asyncio
+async def test_resolve_maps_each_prefix_to_ok_ambiguous_or_unknown(
+    configured_app, migrations_pg_dsn
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    await _seed_ambiguous(migrations_pg_dsn, ids)
+    admin = await _headers(ids["admin"], ids["ta"])
+    member = await _headers(ids["member"], ids["ta"])
+    ok_prefix = str(ids["young"])[:8]
+    private_prefix = str(ids["private"])[:8]
+    other_tenant_prefix = str(ids["b_old"])[:8]
+    deleted_prefix = str(ids["deleted"])[:8]
+    wanted = ",".join(
+        [ok_prefix, "abcdef12", private_prefix, other_tenant_prefix, deleted_prefix, "0badc0de"]
+    )
+    async with _client(configured_app) as c:
+        as_admin = await c.get("/memories/resolve", params={"prefixes": wanted}, headers=admin)
+        as_member = await c.get("/memories/resolve", params={"prefixes": wanted}, headers=member)
+    assert as_admin.status_code == 200, as_admin.text
+    got = {r["prefix"]: r for r in as_admin.json()}
+    assert got[ok_prefix]["status"] == "ok"
+    assert got[ok_prefix]["memory"]["id"] == str(ids["young"])
+    assert got["abcdef12"]["status"] == "ambiguous" and got["abcdef12"].get("memory") is None
+    assert got[private_prefix]["status"] == "ok"  # su dueño sí la ve
+    assert got[other_tenant_prefix]["status"] == "unknown"  # jamás otro tenant
+    assert got[deleted_prefix]["status"] == "unknown"
+    assert got["0badc0de"]["status"] == "unknown"
+    seen_by_member = {r["prefix"]: r["status"] for r in as_member.json()}
+    assert seen_by_member[private_prefix] == "unknown"  # jamás la privada ajena
+    assert seen_by_member[ok_prefix] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_resolve_rejects_short_malformed_or_too_many_prefixes(
+    configured_app, migrations_pg_dsn
+) -> None:
+    ids = await _seed(migrations_pg_dsn)
+    admin = await _headers(ids["admin"], ids["ta"])
+    many = ",".join(f"{i:08x}" for i in range(60))
+    async with _client(configured_app) as c:
+        short = await c.get("/memories/resolve", params={"prefixes": "abc123"}, headers=admin)
+        wild = await c.get("/memories/resolve", params={"prefixes": "abcd%efgh"}, headers=admin)
+        too_many = await c.get("/memories/resolve", params={"prefixes": many}, headers=admin)
+        empty = await c.get("/memories/resolve", params={"prefixes": ""}, headers=admin)
+    assert short.status_code == 422 and wild.status_code == 422
+    assert too_many.status_code == 422 and empty.status_code == 422

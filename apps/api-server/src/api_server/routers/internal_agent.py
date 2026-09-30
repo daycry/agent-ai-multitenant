@@ -198,11 +198,30 @@ _MEMORY_GET_MAX_IDS = 20
 
 
 class MemoryGetRequest(BaseModel):
-    """Body of POST /internal/agent/memory-get (task_mem_01): hasta 20 ids."""
+    """Body of POST /internal/agent/memory-get (task_mem_01): hasta 20 ids.
+
+    Los ids llegan como cadenas y se validan en el handler: un modelo pequeño se equivoca
+    con un id y eso no debe tumbar el lote. Los que no son UUID se descartan y se devuelven
+    en ``ignored_ids``."""
 
     model_config = _BASE_CONFIG
 
-    ids: list[UUID] = Field(min_length=1, max_length=_MEMORY_GET_MAX_IDS)
+    ids: list[str] = Field(min_length=1, max_length=_MEMORY_GET_MAX_IDS)
+
+
+def split_memory_ids(raw: list[str]) -> tuple[list[UUID], list[str]]:
+    """``(ids válidos sin repetir, cadenas ignoradas)``, en orden de aparición."""
+    valid: list[UUID] = []
+    ignored: list[str] = []
+    for item in raw:
+        try:
+            parsed = UUID(item.strip())
+        except (ValueError, AttributeError):
+            ignored.append(item)
+            continue
+        if parsed not in valid:
+            valid.append(parsed)
+    return valid, ignored
 
 
 class MemoryDetailOut(BaseModel):
@@ -223,6 +242,8 @@ class MemoryGetResponse(BaseModel):
     model_config = _BASE_CONFIG
 
     memories: list[MemoryDetailOut]
+    #: Las cadenas de la petición que no eran un UUID (descartadas, no un error).
+    ignored_ids: list[str] = Field(default_factory=list)
 
 
 class McpOAuthTokenRequest(BaseModel):
@@ -534,14 +555,23 @@ async def memory_get(
     resueltos en el servidor) y RLS: un id de otro tenant, de otro proyecto o
     ``private`` de una persona no se devuelve. Cada memoria devuelta cuenta como
     uso (``recall_count`` y log, task_mem_02).
+
+    Tolerante con los ids: los que no son UUID se descartan y vuelven en ``ignored_ids``;
+    sólo es 422 si no queda ninguno válido (o se pasan más de 20).
     """
+    valid_ids, ignored_ids = split_memory_ids(payload.ids)
+    if not valid_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"no valid memory id in the request (ignored: {ignored_ids})",
+        )
     agent, _project = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
     project = await _resolve_effective_project(session, agent=agent, principal=principal)
     # `private` es del usuario humano: un agente ni la lee ni la escribe.
     scopes = [s for s in _default_readable_scopes(agent.memory_scope) if s != "private"]
     rows = await get_memories(
         session,
-        ids=payload.ids,
+        ids=valid_ids,
         tenant_id=principal.tenant_id,
         scopes=scopes,
         user_id=None,
@@ -576,7 +606,8 @@ async def memory_get(
                 tokens=estimate_tokens(r.content),
             )
             for r in rows
-        ]
+        ],
+        ignored_ids=ignored_ids,
     )
 
 

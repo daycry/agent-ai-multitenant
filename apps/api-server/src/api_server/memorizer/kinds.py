@@ -50,6 +50,7 @@ _ALIASES: dict[str, str] = {
     "dato": "fact",
     # inglés, variantes habituales
     "bug": "bugfix",
+    "bug fix": "bugfix",
     "bug_fix": "bugfix",
     "bug-fix": "bugfix",
     "fix": "bugfix",

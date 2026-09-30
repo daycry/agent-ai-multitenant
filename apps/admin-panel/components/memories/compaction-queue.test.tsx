@@ -24,6 +24,10 @@ const PROPOSAL = {
   project_name: "Proyecto Uno",
   status: "pending",
   memory_ids: [M1, M2],
+  memories: [
+    { id: M1, headline: "falsa uno" },
+    { id: M2, headline: "falsa dos" },
+  ],
   summary: "2 memorias disputadas del proyecto",
   created_at: "2026-09-30T04:10:00Z",
   decided_at: null,
@@ -33,8 +37,6 @@ function mount(proposals: unknown[] = [PROPOSAL]) {
   apiFetchMock.mockImplementation((path: string, init?: { method?: string }) => {
     if (init?.method === "POST") return Promise.resolve({ id: PROPOSAL.id, status: "confirmed" });
     if (path.startsWith("/memories/compactions")) return Promise.resolve(proposals);
-    if (path === `/memories/${M1}`) return Promise.resolve({ id: M1, content: "falsa uno" });
-    if (path === `/memories/${M2}`) return Promise.resolve({ id: M2, content: "falsa dos" });
     return Promise.resolve([]);
   });
   window.localStorage.setItem("admin-panel.lang", "es");
@@ -61,8 +63,17 @@ describe("cola de compactación", () => {
     expect(apiFetchMock).toHaveBeenCalledWith("/memories/compactions?status=pending");
     const card = screen.getByTestId(`compaction-${PROPOSAL.id}`);
     expect(card.textContent).toContain("Proyecto Uno");
-    await waitFor(() => expect(card.textContent).toContain("falsa uno"));
+    expect(card.textContent).toContain("falsa uno");
     expect(card.textContent).toContain("falsa dos");
+  });
+
+  it("no pide la ficha de cada memoria: una sola petición para toda la cola", async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId(`compaction-${PROPOSAL.id}`)).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(apiFetchMock.mock.calls.map((c) => c[0])).toEqual([
+      "/memories/compactions?status=pending",
+    ]);
   });
 
   it("confirmar y rechazar llaman a sus endpoints", async () => {

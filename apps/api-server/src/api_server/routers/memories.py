@@ -20,13 +20,14 @@ calls the same persistence module the endpoint uses
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import Select, String, cast, or_, select, text
+from sqlalchemy import Select, String, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
@@ -39,7 +40,9 @@ from api_server.db.memory import MemoryCompactionProposal, MemoryEntry
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
 from api_server.memorizer.feedback import apply_feedback, voter_key
+from api_server.memorizer.index_format import headline_of
 from api_server.memorizer.lifecycle import (
+    CompactionMismatchError,
     CompactionNotFoundError,
     confirm_compaction,
     reject_compaction,
@@ -314,6 +317,12 @@ async def store_memory(
         extra_metadata={"source": "manual", "actor_user_id": str(principal.user_id)},
         embedder=embedder,
     )
+    if not rows:
+        # Todo el contenido era `<private>` (o ya existía): no queda nada que guardar.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="nothing to store: the content was entirely <private> or already memorized",
+        )
     await session.flush()
     row = rows[0]
     await session.refresh(row)
@@ -434,6 +443,82 @@ async def list_memories(
     stmt = stmt.limit(limit).offset(offset)
     result = await session.execute(stmt)
     return await _enriched(session, tenant_id, list(result.scalars().all()))
+
+
+# ---------------------------------------------------------------------------
+# GET /memories/resolve — las citas `[mem:<id corto>]` de un informe, en UNA consulta
+# ---------------------------------------------------------------------------
+_RESOLVE_MAX_PREFIXES = 50
+_RESOLVE_PREFIX_RE = re.compile(r"^[0-9a-fA-F-]{8,36}$")
+
+
+class ResolvedCitation(BaseModel):
+    model_config = _BASE_CONFIG
+
+    prefix: str
+    status: Literal["ok", "ambiguous", "unknown"]
+    memory: MemoryResponse | None = None
+
+
+@router.get("/resolve", response_model=list[ResolvedCitation])
+async def resolve_citations(
+    prefixes: str = Query(min_length=1, max_length=2500),
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[ResolvedCitation]:
+    """Resuelve por lotes los prefijos de id de las citas de un informe.
+
+    ``prefixes`` = lista separada por comas (hex y guiones, >= 8 caracteres, como mucho 50).
+    Por prefijo: ``ok`` (una memoria), ``ambiguous`` (dos o más: no se adivina cuál) o
+    ``unknown`` (borrada, de otro tenant o privada ajena: misma visibilidad que el listado).
+    Una sola consulta para todos; las archivadas resuelven (una cita antigua debe abrirse)."""
+    tenant_id = require_tenant_id(principal)
+    wanted: list[str] = []
+    for raw in prefixes.split(","):
+        p = raw.strip().lower()
+        if not _RESOLVE_PREFIX_RE.match(p):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="each prefix must be 8-36 hex/dash characters",
+            )
+        if p not in wanted:
+            wanted.append(p)
+    if len(wanted) > _RESOLVE_MAX_PREFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"at most {_RESOLVE_MAX_PREFIXES} prefixes",
+        )
+    id_text = cast(MemoryEntry.id, String)
+    rows = list(
+        (
+            await session.execute(
+                select(MemoryEntry)
+                .where(
+                    MemoryEntry.tenant_id == tenant_id,
+                    MemoryEntry.deleted_at.is_(None),
+                    or_(MemoryEntry.scope != "private", MemoryEntry.user_id == principal.user_id),
+                    or_(*[id_text.like(f"{p}%") for p in wanted]),
+                )
+                .order_by(MemoryEntry.id)
+                .limit(len(wanted) * 4)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    matches = {p: [r for r in rows if str(r.id).startswith(p)] for p in wanted}
+    unique = [m[0] for m in matches.values() if len(m) == 1]
+    enriched = {str(r.id): r for r in await _enriched(session, tenant_id, unique)}
+    out: list[ResolvedCitation] = []
+    for p in wanted:
+        found = matches[p]
+        if not found:
+            out.append(ResolvedCitation(prefix=p, status="unknown"))
+        elif len(found) > 1:
+            out.append(ResolvedCitation(prefix=p, status="ambiguous"))
+        else:
+            out.append(ResolvedCitation(prefix=p, status="ok", memory=enriched[str(found[0].id)]))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -843,15 +928,27 @@ async def merge_memory_into(
 # El job `workers.maintain_memory_lifecycle` propone una revisión `pending` por proyecto con
 # sus memorias `disputed`; NO aplica nada. Un `tenant_admin` la confirma (se archivan con
 # motivo, nunca se borran) o la rechaza. La cola la pinta la UI de `task_ui_31` / `task_mem_20`.
+class CompactionMemory(BaseModel):
+    """Una memoria de la propuesta con su titular VIVO (la cola no pide la ficha de cada una)."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    headline: str
+
+
 class CompactionOut(BaseModel):
     model_config = _BASE_CONFIG
 
     id: UUID
-    project_id: UUID
+    scope: str = "project_shared"
+    project_id: UUID | None = None
+    team_id: UUID | None = None
     project_name: str | None = None
     status: str
     memory_ids: list[str]
     summary: str
+    memories: list[CompactionMemory] = Field(default_factory=list)
     created_at: datetime
     decided_at: datetime | None = None
 
@@ -898,18 +995,39 @@ async def list_compactions(
     if rows:
         res = await session.execute(
             select(Project.id, Project.name).where(
-                Project.tenant_id == tenant_id, Project.id.in_({r.project_id for r in rows})
+                Project.tenant_id == tenant_id,
+                Project.id.in_({r.project_id for r in rows if r.project_id}),
             )
         )
         names = {pid: name for pid, name in res.tuples().all()}  # noqa: C416
+    # Los titulares de TODAS las memorias de la página en una consulta (con tenant_id).
+    wanted_ids = {UUID(i) for r in rows for i in r.memory_ids}
+    headlines: dict[UUID, str] = {}
+    if wanted_ids:
+        heads = await session.execute(
+            select(MemoryEntry.id, func.substr(MemoryEntry.content, 1, 400)).where(
+                MemoryEntry.tenant_id == tenant_id,
+                MemoryEntry.id.in_(wanted_ids),
+                MemoryEntry.deleted_at.is_(None),
+                or_(MemoryEntry.scope != "private", MemoryEntry.user_id == principal.user_id),
+            )
+        )
+        headlines = {mid: headline_of(content) for mid, content in heads.tuples().all()}
     return [
         CompactionOut(
             id=r.id,
+            scope=r.scope,
             project_id=r.project_id,
-            project_name=names.get(r.project_id),
+            team_id=r.team_id,
+            project_name=names.get(r.project_id) if r.project_id else None,
             status=r.status,
             memory_ids=[str(i) for i in r.memory_ids],
             summary=r.summary,
+            memories=[
+                CompactionMemory(id=UUID(i), headline=headlines[UUID(i)])
+                for i in r.memory_ids
+                if UUID(i) in headlines
+            ],
             created_at=r.created_at,
             decided_at=r.decided_at,
         )
@@ -917,21 +1035,42 @@ async def list_compactions(
     ]
 
 
+class CompactionConfirmRequest(BaseModel):
+    """Lo que el admin VIO al confirmar: el conjunto exacto de ids de la propuesta."""
+
+    model_config = _BASE_CONFIG
+
+    memory_ids: list[UUID] = Field(max_length=500)
+
+
 @router.post("/compactions/{proposal_id}/confirm", response_model=CompactionDecision)
 async def confirm_memory_compaction(
     proposal_id: UUID,
+    payload: CompactionConfirmRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> CompactionDecision:
-    """Aplica la revisión: archiva sus memorias (motivo `disputed_compacted`), con auditoría."""
+    """Aplica la revisión: archiva sus memorias (motivo `disputed_compacted`), con auditoría.
+
+    El cuerpo trae `memory_ids`, el conjunto que el admin vio: si la propuesta cambió (o
+    difiere), 409 y no se archiva nada."""
     tenant_id = require_tenant_id(principal)
     try:
         archived = await confirm_compaction(
-            session, tenant_id=tenant_id, proposal_id=proposal_id, actor_user_id=principal.user_id
+            session,
+            tenant_id=tenant_id,
+            proposal_id=proposal_id,
+            actor_user_id=principal.user_id,
+            expected_memory_ids=payload.memory_ids,
         )
     except CompactionNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="pending compaction not found"
+        ) from None
+    except CompactionMismatchError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="the compaction proposal changed: reload it and confirm again",
         ) from None
     return CompactionDecision(id=proposal_id, status="confirmed", archived=archived)
 

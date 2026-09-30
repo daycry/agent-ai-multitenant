@@ -30,6 +30,12 @@ afterEach(() => {
   apiFetchMock.mockReset();
 });
 
+const RESOLVED = {
+  prefix: "abcdef12",
+  status: "ok",
+  memory: { id: "abcdef12-0000-0000-0000-000000000000", content: "El proyecto usa asyncpg." },
+};
+
 describe("CitedText", () => {
   it("sin citas pinta el texto tal cual y no consulta nada", () => {
     mount("Todo hecho, sin memorias.");
@@ -38,12 +44,10 @@ describe("CitedText", () => {
   });
 
   it("resuelve la cita por prefijo de id y despliega la memoria citada", async () => {
-    apiFetchMock.mockResolvedValue([
-      { id: "abcdef12-0000-0000-0000-000000000000", content: "El proyecto usa asyncpg." },
-    ]);
+    apiFetchMock.mockResolvedValue([RESOLVED]);
     mount("Elegí asyncpg [mem:abcdef12] por eso.");
 
-    expect(apiFetchMock).toHaveBeenCalledWith("/memories?id_prefix=abcdef12&limit=1");
+    expect(apiFetchMock).toHaveBeenCalledWith("/memories/resolve?prefixes=abcdef12");
     const chip = await screen.findByRole("button", { name: /mem:abcdef12/ });
     await waitFor(() => expect((chip as HTMLButtonElement).disabled).toBe(false));
     expect(screen.getByTestId("out").textContent).toContain("Elegí asyncpg ");
@@ -56,9 +60,7 @@ describe("CitedText", () => {
   });
 
   it("la cita desplegada enlaza a la ficha de la memoria (task_mem_20)", async () => {
-    apiFetchMock.mockResolvedValue([
-      { id: "abcdef12-0000-0000-0000-000000000000", content: "El proyecto usa asyncpg." },
-    ]);
+    apiFetchMock.mockResolvedValue([RESOLVED]);
     mount("Elegí asyncpg [mem:abcdef12].");
     const chip = await screen.findByRole("button", { name: /mem:abcdef12/ });
     await waitFor(() => expect((chip as HTMLButtonElement).disabled).toBe(false));
@@ -69,11 +71,33 @@ describe("CitedText", () => {
   });
 
   it("una cita que no se resuelve se enseña como desconocida, sin desplegable", async () => {
-    apiFetchMock.mockResolvedValue([]);
+    apiFetchMock.mockResolvedValue([{ prefix: "deadbeef", status: "unknown" }]);
     mount("Según [mem:deadbeef] hice esto.");
 
     const chip = await screen.findByRole("button", { name: /mem:deadbeef \(desconocida\)/ });
     expect((chip as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByTestId("memory-citation-body-deadbeef")).toBeNull();
+  });
+
+  it("todas las citas del informe se resuelven en UNA petición (sin repetidas)", async () => {
+    apiFetchMock.mockResolvedValue([
+      RESOLVED,
+      { prefix: "deadbeef", status: "unknown" },
+      { prefix: "cafe0123", status: "unknown" },
+    ]);
+    mount("A [mem:abcdef12], B [mem:deadbeef], C [mem:cafe0123] y otra vez A [mem:abcdef12].");
+    await screen.findAllByRole("button", { name: /mem:deadbeef \(desconocida\)/ });
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      "/memories/resolve?prefixes=abcdef12,deadbeef,cafe0123",
+    );
+  });
+
+  it("un prefijo ambiguo se pinta como ambigua, sin adivinar memoria", async () => {
+    apiFetchMock.mockResolvedValue([{ prefix: "abcdef12", status: "ambiguous" }]);
+    mount("Según [mem:abcdef12] hice esto.");
+    const chip = await screen.findByRole("button", { name: /mem:abcdef12 \(ambigua\)/ });
+    expect((chip as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId("memory-citation-body-abcdef12")).toBeNull();
   });
 });

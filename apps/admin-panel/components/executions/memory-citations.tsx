@@ -4,10 +4,12 @@
  * Texto de un run con sus citas de memoria resueltas (`task_mem_02`).
  *
  * El agente cita `[mem:<id corto>]` en su informe cuando una memoria condicionó
- * una decisión. Aquí cada cita se resuelve contra `GET /memories?id_prefix=`
- * (mismo aislamiento que el listado: tenant + visibilidad de la persona) y se
- * pinta como un chip que despliega la memoria citada. Si no se resuelve (borrada,
- * de otro ámbito, id inventado) se enseña como «desconocida», sin adornarla.
+ * una decisión. Todas las citas del informe se resuelven en UNA petición contra
+ * `GET /memories/resolve?prefixes=` (mismo aislamiento que el listado: tenant +
+ * visibilidad de la persona) y cada una se pinta como un chip que despliega la
+ * memoria citada. Si no se resuelve (borrada, de otro ámbito, id inventado) se
+ * enseña como «desconocida»; si el prefijo lo comparten varias memorias, como
+ * «ambigua» — nunca se adivina cuál.
  */
 
 import { useState } from "react";
@@ -19,17 +21,32 @@ import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { splitCitations } from "@/lib/memory/citations";
 
-function CitationChip({ short }: { short: string }) {
+/** Lo que devuelve `GET /memories/resolve` por prefijo. */
+interface ResolvedCitation {
+  prefix: string;
+  status: "ok" | "ambiguous" | "unknown";
+  memory?: MemoryResponse | null;
+}
+
+/** El endpoint exige al menos 8 caracteres: un prefijo más corto no se envía (y no se adivina). */
+const MIN_PREFIX = 8;
+
+function CitationChip({
+  short,
+  resolution,
+  settled,
+}: {
+  short: string;
+  resolution: ResolvedCitation | undefined;
+  settled: boolean;
+}) {
   const t = useT("memoriesProvenance");
   const tc = useT("memoriesCard");
   const [open, setOpen] = useState(false);
-  const query = useQuery({
-    queryKey: ["memory-citation", short],
-    queryFn: () => apiFetch<MemoryResponse[]>(`/memories?id_prefix=${short}&limit=1`),
-    staleTime: 60_000,
-  });
-  const memory = query.data?.[0];
-  const unresolved = query.isSuccess && !memory;
+  const memory = resolution?.status === "ok" ? (resolution.memory ?? undefined) : undefined;
+  const ambiguous = resolution?.status === "ambiguous";
+  const unresolved = settled && !memory && !ambiguous;
+  const unresolvedLabel = ambiguous ? t("citationAmbiguous") : t("citationUnknown");
 
   return (
     <span className="inline" data-testid={`memory-citation-${short}`}>
@@ -38,15 +55,17 @@ function CitationChip({ short }: { short: string }) {
         onClick={() => memory && setOpen((v) => !v)}
         disabled={!memory}
         aria-expanded={memory ? open : undefined}
-        title={memory ? memory.content.slice(0, 120) : unresolved ? t("citationUnknown") : ""}
+        title={
+          memory ? memory.content.slice(0, 120) : unresolved || ambiguous ? unresolvedLabel : ""
+        }
         className={
-          unresolved
+          unresolved || ambiguous
             ? "text-muted-foreground rounded border border-dashed px-1 font-mono text-xs"
             : "bg-primary/10 text-primary rounded border px-1 font-mono text-xs"
         }
       >
         {`mem:${short}`}
-        {unresolved ? ` (${t("citationUnknown")})` : ""}
+        {unresolved || ambiguous ? ` (${unresolvedLabel})` : ""}
       </button>
       {memory && open && (
         <span
@@ -69,13 +88,33 @@ function CitationChip({ short }: { short: string }) {
 
 /** El texto con cada `[mem:…]` sustituido por su chip. Sin citas, es el texto tal cual. */
 export function CitedText({ text }: { text: string }) {
+  const parts = splitCitations(text);
+  const prefixes = [
+    ...new Set(
+      parts.flatMap((p) => (p.type === "cite" && p.short.length >= MIN_PREFIX ? [p.short] : [])),
+    ),
+  ];
+  const query = useQuery({
+    queryKey: ["memory-citations", prefixes.join(",")],
+    queryFn: () => apiFetch<ResolvedCitation[]>(`/memories/resolve?prefixes=${prefixes.join(",")}`),
+    enabled: prefixes.length > 0,
+    staleTime: 60_000,
+  });
+  const byPrefix = new Map((query.data ?? []).map((r) => [r.prefix, r]));
+  // Sin respuesta aún no se pinta «desconocida»; un prefijo demasiado corto ya no la tendrá nunca.
+  const settled = (short: string) => query.isSuccess || short.length < MIN_PREFIX;
   return (
     <>
-      {splitCitations(text).map((part, i) =>
+      {parts.map((part, i) =>
         part.type === "text" ? (
           <span key={i}>{part.value}</span>
         ) : (
-          <CitationChip key={i} short={part.short} />
+          <CitationChip
+            key={i}
+            short={part.short}
+            resolution={byPrefix.get(part.short)}
+            settled={settled(part.short)}
+          />
         ),
       )}
     </>

@@ -3773,6 +3773,8 @@ export const dictionary = {
     recallTimes: { es: "{count} veces", en: "{count} times" },
     // task_mem_02: cita `[mem:<id>]` del informe de un run que no se resuelve.
     citationUnknown: { es: "desconocida", en: "unknown" },
+    // La cita apunta a un prefijo que comparten dos o más memorias: no se adivina cuál.
+    citationAmbiguous: { es: "ambigua", en: "ambiguous" },
     unknown: { es: "desconocido", en: "unknown" },
     byAgent: { es: "agente", en: "agent" },
     byHuman: { es: "persona (sesión de trabajo)", en: "person (work session)" },

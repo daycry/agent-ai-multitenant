@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { invalidateMemoryViews } from "@/lib/memory/invalidate";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 import { MemoryFeedbackButtons } from "./memory-feedback-buttons";
@@ -39,7 +40,7 @@ export function MemoryCardView({ id }: { id: string }) {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
+  const refresh = () => invalidateMemoryViews(queryClient, id);
 
   if (query.isLoading) {
     return <p className="text-muted-foreground text-sm">{tCommon("loading")}</p>;
