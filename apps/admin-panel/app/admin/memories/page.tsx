@@ -48,6 +48,14 @@ const SCOPE_OPTIONS: (MemoryScope | "all")[] = [
   "global",
 ];
 
+/** Una inserción entre página y página desplaza el `offset` y repite filas: se
+ * dedupica por `id` (conserva la primera aparición) para que `key` y el «N de M»
+ * cuenten filas únicas. */
+function dedupeById(rows: MemoryResponse[]): MemoryResponse[] {
+  const seen = new Set<string>();
+  return rows.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)));
+}
+
 export default function MemoriesPage() {
   const t = useT("memories");
   const tp = useT("memoriesProvenance");
@@ -98,7 +106,7 @@ export default function MemoriesPage() {
   const active = searching ? searchQuery : listQuery;
   const memories: MemoryResponse[] = searching
     ? (searchQuery.data ?? []).map((h) => h.memory)
-    : (listQuery.data?.pages.flat() ?? []);
+    : dedupeById(listQuery.data?.pages.flat() ?? []);
   const total = counts?.[scopeFilter];
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
 

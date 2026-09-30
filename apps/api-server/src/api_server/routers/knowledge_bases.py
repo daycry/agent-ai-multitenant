@@ -778,11 +778,14 @@ async def list_documents(
         select(Document)
         .where(
             Document.kb_id == kb_id,
-            Document.tenant_id == require_tenant_id(principal),
             Document.deleted_at.is_(None),
         )
         .order_by(Document.created_at.desc(), Document.id)
     )
+    # Lectura: con tenant activo se acota; el System Admin en «todos» (BYPASSRLS)
+    # no lleva predicado y `kb_id` (ya cargada) acota igualmente.
+    if principal.tenant_id is not None:
+        stmt = stmt.where(Document.tenant_id == principal.tenant_id)
     if ids is not None:
         stmt = stmt.where(Document.id.in_(ids))
     result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))

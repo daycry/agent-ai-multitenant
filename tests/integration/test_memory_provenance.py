@@ -356,3 +356,31 @@ async def test_builtin_agent_is_resolved_but_other_tenants_agent_is_not(
     assert rows[str(m_builtin)]["agent_name"] == "PM Builtin"
     assert rows[str(m_foreign)]["created_by"]["name"] is None
     assert rows[str(m_foreign)]["agent_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_pagination_is_total_order_with_equal_created_at(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Las N memorias de un run comparten `created_at`: sin desempate por `id`, la
+    frontera de página repite u oculta filas. Página 1 + página 2 = todas, sin repetir."""
+    ids = await _seed(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO memory_entries (id, tenant_id, scope, type, content, created_at)"
+            " SELECT gen_random_uuid(), $1, 'global', 'semantic', 'lote ' || g,"
+            " '2026-08-01T10:00:00Z' FROM generate_series(1, 60) g",
+            ids["ta"],
+        )
+    finally:
+        await conn.close()
+    h = await _headers(ids["alice"], ids["ta"])
+    async with _client(configured_app) as c:
+        everything = (await c.get("/memories?limit=200", headers=h)).json()
+        seen: list[str] = []
+        for offset in range(0, len(everything), 7):
+            page = (await c.get(f"/memories?limit=7&offset={offset}", headers=h)).json()
+            seen.extend(r["id"] for r in page)
+    assert len(seen) == len(set(seen)) == len(everything)
+    assert seen == [r["id"] for r in everything]

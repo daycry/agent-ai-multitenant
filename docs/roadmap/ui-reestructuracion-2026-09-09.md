@@ -1,10 +1,17 @@
 ---
 plan_id: ui-reestructuracion-2026-09-09
 title: Reestructuración de la UI del panel — el proyecto como hub, el Sistema aparte, y recursos con procedencia
-status: in_progress
+status: blocked
 blocking_plan: []
 started_at: 2026-09-09
 completed_at: null
+blocked_at: 2026-09-30
+blocked_reason: >-
+  Once de las trece casillas cerradas con su test en verde y la revisión adversarial
+  cerrada en tres intentos. Las dos abiertas no piden más código, sino decisiones del
+  operador: la mitad URL de task_ui_21 espera al ADR 0170 (proposed) y task_ui_40, la
+  piel visual, sólo se hace si la aprueba tras ver el panel. Decididas las dos, el plan
+  pasa a pending_human_validation para sus tests humanos human_ui_01..04.
 estimated_duration_calendar: 5 semanas
 estimated_effort_person_days: 24
 created_by: claude-fable-5-1-brainstorming-2026-09-09
@@ -275,13 +282,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_10` — Barra contextual del proyecto y Resumen
 
-- [ ] **Título**: `sidebar-project.tsx` con las ocho entradas; `GET /projects/{id}/overview` y la página de
+- [x] **Título**: `sidebar-project.tsx` con las ocho entradas; `GET /projects/{id}/overview` y la página de
       Resumen con planes activos, runs, gasto, avisos (MCP, egress, repo, roles sin agente) y actividad de
       agentes, cada bloque enlazando a su pestaña.
       **Test**: integración del overview (cross-tenant; avisos calculados); vitest del Resumen; e2e de
       navegación entre pestañas del proyecto.
       **Coste**: 2 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta por un aviso.** `GET /projects/{id}/overview`
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. Historia: `GET /projects/{id}/overview`
     (`dashboard/project.py` más un router fino) con planes activos, runs, gasto y actividad, y cinco avisos
     calculados: MCP sin conectar, MCP sin tools, egress bloqueado, repo sin sincronizar y pausa por
     presupuesto. La barra del proyecto tiene las ocho entradas; Runs, Equipo y Costes salen deshabilitadas
@@ -314,12 +321,12 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_12` — Runs, Equipo y Costes del proyecto
 
-- [ ] **Título**: pestaña Runs (filtros por plan, agente y estado, reutilizando `/executions`); pestaña Equipo
+- [x] **Título**: pestaña Runs (filtros por plan, agente y estado, reutilizando `/executions`); pestaña Equipo
       (equipo asignado, agentes por rol, agentes humanos, huecos de rol con enlace a la ficha del agente);
       pestaña Costes (gasto por plan, agente y modelo contra presupuesto; pausa por presupuesto).
       **Test**: vitest de las tres pestañas; e2e de filtrar runs por plan.
       **Coste**: 2,5 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /projects/{id}/team`
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. `GET /projects/{id}/team`
     (miembro) y `/costs` (sólo `tenant_admin`), filtro `project_id` en `/runs` y en `tenant_stats`, y las tres
     pestañas. El hueco de rol tiene una sola definición (`dashboard/project_team.role_gaps`), compartida con el
     aviso del Resumen. **Queda una incoherencia registrada** (revisión, intento 2): Equipo enseña a los miembros
@@ -331,7 +338,7 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_20` — Capacidades del proyecto en una pantalla
 
-- [ ] **Título**: `GET /projects/{id}/capabilities` y la pestaña Capacidades con MCP · Tools · Skills. En MCP,
+- [x] **Título**: `GET /projects/{id}/capabilities` y la pestaña Capacidades con MCP · Tools · Skills. En MCP,
       cada servidor lleva procedencia (declarado / desplegado desde el listing X vY), conexión (probado,
       OAuth conectado), «N tools importadas» / «sin importar» con Probar e Importar directos (lo que
       `task_mk_01` ya entrega en la tarjeta) y estado de egress (aviso D11 de `task_mk_02`). La sección
@@ -339,7 +346,7 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       **Test**: integración del endpoint; vitest de las tres pestañas y de la procedencia; e2e de desplegar
       desde el marketplace y verlo aparecer en Capacidades.
       **Coste**: 2,5 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /projects/{id}/capabilities`
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. `GET /projects/{id}/capabilities`
     ampliado de forma aditiva (procedencia, OAuth con tres estados, tools importadas y egress) y la pestaña
     `/capabilities` con MCP · Tools · Skills. «Capacidades disponibles» se funde en ella. Lo no persistido está
     en §«Revisión adversarial de las olas 2 y 3» (gap 17).
@@ -354,7 +361,7 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
       «documento»; los ids y los términos de ingesta sólo en el detalle de un fallo.
       **Test**: vitest del asistente (tres pasos, fallo con reintento); e2e de añadir conocimiento a un proyecto.
       **Coste**: 2,5 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta en su mitad URL.** Asistente de tres pasos (elegir o crear
+  - ⏳ **Implementada el 2026-09-29; la casilla sigue abierta por su mitad URL.** Asistente de tres pasos (elegir o crear
     base → subir ficheros o pegar texto → indexado en vivo con reintento), concesión implícita, «activar una base
     existente» sin subir (incluidas las built-in), y tarjetas con cifras exactas calculadas en SQL. **La URL no
     existe en el dominio** y añadirla abre SSRF: la decide el operador en el
@@ -365,27 +372,29 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_30` — Patrón de pantalla de recurso
 
-- [ ] **Título**: `components/resource/` con cabecera (título, contador, acción principal), barra de filtros y
+- [x] **Título**: `components/resource/` con cabecera (título, contador, acción principal), barra de filtros y
       búsqueda, lista/tarjetas con campos en el mismo sitio (nombre, procedencia, ámbito, uso, última
       actividad) y panel lateral de detalle; se aplica a Agentes, Equipos, Agentes humanos y Skills y tools.
       **Test**: vitest del patrón y de cada pantalla migrada.
       **Coste**: 1,5 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `components/resource/`
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. `components/resource/`
     (cabecera, barra, tarjeta con campos fijos y panel lateral), aplicado a Agentes, Equipos, Agentes humanos y a
     Skills y tools, que tiene dos pestañas. Los campos del patrón salen sólo donde el dominio los tiene: «última
     actividad» sólo en Agentes, calculada de `executions`. En Equipos, Agentes humanos y Tools no existe ese dato
-    y no se inventa. «Uso» es el número de equipos del agente y de miembros del equipo; el resto no lo guarda.
+    y no se inventa. «Uso» es el número de equipos del agente y de miembros del equipo. En Skills, ese hueco lo
+    ocupa «N tools requeridas», que es lo que `/skills` devuelve: es un requisito de la skill, no
+    cuántas veces se usa, que el dominio no guarda.
 
 ### `task_ui_31` — Memorias por ámbito con procedencia
 
-- [ ] **Título**: `GET /memories` ampliado (ámbito, proyecto, agente, categoría, fecha, `created_by`,
+- [x] **Título**: `GET /memories` ampliado (ámbito, proyecto, agente, categoría, fecha, `created_by`,
       `execution_id`, `recall_count`); `/admin/memories` con pestañas por ámbito y contador, cada memoria con
       quién, cuándo, dónde y cuántas veces se recuperó; buscador semántico. Las privadas sólo para su dueño
       (principio de ámbitos). Lo que una memoria antigua no tenga registrado se enseña como «desconocida»; si
       el dominio no guarda la procedencia, esta casilla propone la migración en un ADR antes de inventarla.
       **Test**: integración del endpoint (cross-tenant y ámbito privado); vitest de las pestañas y la ficha.
       **Coste**: 2 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** `GET /memories` con
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. `GET /memories` con
     procedencia resuelta en lote y filtros nuevos, más `/memories/counts` y `/memories/search` (híbrido), todos con
     la regla de privadas del listado. **«Cuántas veces se recuperó» sale «desconocido»** porque la columna
     `recall_count` la crea `task_mem_02` del plan
@@ -395,13 +404,13 @@ Todo endpoint nuevo lleva test de integración con caso cross-tenant.
 
 ### `task_ui_32` — Agentes por pestañas y marketplace con «dónde está desplegado»
 
-- [ ] **Título**: la ficha del agente agrupa en pestañas Identidad y modelo · Skills y tools · Conocimiento ·
+- [x] **Título**: la ficha del agente agrupa en pestañas Identidad y modelo · Skills y tools · Conocimiento ·
       Memorias · Actividad; el marketplace queda en Catálogo · Instaladas · Publicar, con nombres en vez de
       UUID, la capacidad de cada instalación (`task_mk_10`), sus despliegues por proyecto (endpoint ampliado)
       y «Desplegar en un proyecto» que lleva a Capacidades.
       **Test**: vitest de la ficha por pestañas y de Instaladas; e2e de la cola de revisión enlazada.
       **Coste**: 1,5 d.
-  - ⏳ **Implementada el 2026-09-29, casilla abierta hasta cerrar la revisión adversarial.** Ficha del agente en
+  - ✅ **Cerrada el 2026-09-30**, tras el intento 3 de la revisión adversarial. Ficha del agente en
     cinco pestañas; marketplace en Catálogo · Instaladas · Publicar; `GET /marketplace/installations` con
     `deployments` en una consulta. «Desplegar en un proyecto» navega a Capacidades del proyecto, porque el
     despliegue vive allí: no hay acción de despliegue global.
@@ -479,7 +488,7 @@ una con su test. La lente C, sin hallazgos. Gaps nuevos:
 | 22  | Important | B     | La pestaña por defecto de la bandeja se recalcula con el sondeo y remonta lo que se está escribiendo   | ui_03         | corregido                                                                                                                  |
 | 23  | Important | A     | «Skills y tools» se quedó sin la pestaña Skills, y `GET /skills` existe                                | ui_30         | corregido                                                                                                                  |
 | 24  | Minor     | A     | «Última actividad» no se pinta, y para Agentes el dato está en `executions`                            | ui_30         | corregido                                                                                                                  |
-| 25  | Minor     | B     | La caché de la sonda OAuth no se invalida al conectar, y el Resumen cachea `vault_unavailable`         | ui_20         | corregido                                                                                                                  |
+| 25  | Minor     | B     | La caché de la sonda OAuth no se invalida al conectar, y el Resumen cachea `vault_unavailable`         | ui_20         | corregido; deuda aceptada: la caché de la sonda es por proceso y el resto la renueva a los 30 s                            |
 | 26  | Minor     | B     | Memorias: la cabecera cuenta todas y la lista corta en 50 sin aviso                                    | ui_31         | corregido                                                                                                                  |
 | 27  | Minor     | B     | Clave React duplicada con un despliegue activo y otro deshabilitado en el mismo proyecto               | ui_32         | corregido                                                                                                                  |
 | 28  | Minor     | B     | «Activar una base existente» ofrece candidatos antes de saber cuáles ya están concedidas               | ui_21         | corregido                                                                                                                  |
@@ -493,6 +502,29 @@ una con su test. La lente C, sin hallazgos. Gaps nuevos:
 Descartado con evidencia de la lente B: las bases built-in salen con 0 documentos en el agregado, pero ya
 salían así antes del diff, porque la RLS de `documents` no tiene política de lectura built-in. No lo introduce
 esta ola.
+
+**Intento 3 (2026-09-30), el último**, sobre `e0aa4feb..a21b4263`. La lente A confirma las correcciones
+20 a 33, cada una con su test; las lentes C y D, sin hallazgos de seguridad y con el gap 20 confirmado.
+La lente B encontró defectos introducidos por las correcciones del intento 2. Como era el tercer intento, se
+corrigieron **sin una cuarta ronda de revisión**, verificados por el orquestador y anotados aquí para que el
+operador los audite:
+
+| #   | Grado     | Lente | Gap                                                                                       | Tarea        | Estado                                                                       |
+| --- | --------- | ----- | ----------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------- |
+| 35  | Important | B     | `GET /agents` y `GET …/documents?ids=` daban 400 a un System Admin en «Todos los tenants» | ui_30, ui_21 | corregido: el predicado de tenant sólo con tenant activo (rojo visto)        |
+| 36  | Important | B     | La paginación de memorias por `offset` sin desempate repetía u ocultaba filas             | ui_31        | corregido: `created_at DESC, id DESC` y deduplicado en el panel (rojo visto) |
+| 37  | Minor     | B     | `autocommit_block` en la migración 0150 soltaba el cerrojo que serializa las migraciones  | ui_21        | corregido: vuelve a índice transaccional, con el porqué de la 0142           |
+| 38  | Minor     | B     | Insignia verde con el texto «deshabilitada» cuando hay un despliegue activo               | ui_32        | corregido (rojo visto)                                                       |
+| 39  | Important | A     | El changelog anticipaba un estado del plan que el ledger aún no tenía                     | —            | corregido: este cierre                                                       |
+| 40  | Minor     | A     | La nota de `task_ui_30` llamaba «uso» a las tools requeridas de una skill                 | ui_30        | corregido                                                                    |
+| 41  | Minor     | D     | «Última actividad» sin índice por `agent_id`: crece con los runs del tenant en 90 días    | ui_30        | deuda aceptada: 30 ms con el volumen de hoy y el listado no se sondea        |
+
+El gap 30 del intento 2 (`CONCURRENTLY`) queda por tanto **revertido con evidencia**: la convención de
+`conventions.md` choca con el cerrojo de migraciones de prod-01, y el precedente escrito es la migración 0142.
+
+**Verificación final** del orquestador sobre el árbol cerrado: vitest **1793 de 1794** en la suite completa (210 ficheros); el único rojo era un timeout por carga del test de paginación de memorias, con el tope explícito ya puesto pasa solo;
+subset mockeado de Playwright con la misma receta que CI (build de producción y `next start`) **437 de 438**; el rojo, `sso-roundtrip`, era el mismo mock de `/tenant/dashboard` que ya había tumbado `logout-cache-purge`, y con el fixture compartido `e2e/helpers/dashboard.ts` sus dos specs dan 5 de 5; integración de los endpoints de este plan y del RBAC de
+recursos **132 passed**; `tsc`, eslint, `check-i18n`, `check-component-size`, `ruff` y `mypy_gate` limpios.
 
 ## Tests humanos
 

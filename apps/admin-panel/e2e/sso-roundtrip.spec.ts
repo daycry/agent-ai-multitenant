@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { EMPTY_DASHBOARD } from "./helpers/dashboard";
 import { CSRF_COOKIE, SESSION_COOKIE, clearSession } from "./helpers/session";
 
 /**
@@ -98,6 +99,7 @@ async function stubPanelReads(page: Page): Promise<void> {
     (url) => url.origin === API_ORIGIN,
     (route) => route.fulfill(json([])),
   );
+  await page.route(onApiPath("/tenant/dashboard"), (route) => route.fulfill(json(EMPTY_DASHBOARD)));
   await page.route(onApiPath("/admin/system-health"), (route) =>
     route.fulfill(json({ services: [] })),
   );

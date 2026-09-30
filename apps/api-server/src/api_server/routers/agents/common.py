@@ -100,23 +100,24 @@ LAST_ACTIVITY_WINDOW: Final = timedelta(days=90)
 
 
 async def _last_activity_by_agent(
-    session: AsyncSession, tenant_id: UUID, agent_ids: list[UUID]
+    session: AsyncSession, tenant_id: UUID | None, agent_ids: list[UUID]
 ) -> dict[UUID, datetime]:
     """`{agent_id: max(executions.created_at)}` en UNA consulta agrupada, con
     `tenant_id` (además de RLS: un built-in lo comparten todos los tenants, pero
-    sólo cuentan los runs del propio) y la ventana `LAST_ACTIVITY_WINDOW`."""
+    sólo cuentan los runs del propio) y la ventana `LAST_ACTIVITY_WINDOW`.
+    Sin tenant activo (System Admin en «todos los tenants», BYPASSRLS) no se
+    añade el predicado: agrupa por agente sobre todos los tenants."""
     if not agent_ids:
         return {}
     since = datetime.now(tz=UTC) - LAST_ACTIVITY_WINDOW
-    rows = await session.execute(
+    stmt = (
         select(Execution.agent_id, func.max(Execution.created_at))
-        .where(
-            Execution.tenant_id == tenant_id,
-            Execution.agent_id.in_(agent_ids),
-            Execution.created_at >= since,
-        )
+        .where(Execution.agent_id.in_(agent_ids), Execution.created_at >= since)
         .group_by(Execution.agent_id)
     )
+    if tenant_id is not None:
+        stmt = stmt.where(Execution.tenant_id == tenant_id)
+    rows = await session.execute(stmt)
     return {aid: last for aid, last in rows.all() if aid is not None}
 
 

@@ -353,7 +353,10 @@ async def list_memories(
         stmt = stmt.where(MemoryEntry.created_at >= created_from)
     if created_to is not None:
         stmt = stmt.where(MemoryEntry.created_at <= created_to)
-    stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit).offset(offset)
+    # `id` desempata: las memorias de un run comparten `created_at` y el panel
+    # pagina por `offset` (orden total, como `list_documents`).
+    stmt = stmt.order_by(MemoryEntry.created_at.desc(), MemoryEntry.id.desc())
+    stmt = stmt.limit(limit).offset(offset)
     result = await session.execute(stmt)
     return await _enriched(session, tenant_id, list(result.scalars().all()))
 

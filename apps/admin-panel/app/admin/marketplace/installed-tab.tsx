@@ -296,7 +296,7 @@ function DeploymentsLine({
             >
               <Badge variant={d.active ? "success" : "warning"}>
                 {d.name}
-                {d.disabled ? ` · ${t("deploymentDisabled")}` : ""}
+                {d.disabled && !d.active ? ` · ${t("deploymentDisabled")}` : ""}
               </Badge>
             </Link>
           ))}

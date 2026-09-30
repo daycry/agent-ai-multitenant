@@ -86,15 +86,17 @@ además de la RLS, y todos tienen test de integración con caso cross-tenant.
 ## Cómo se verificó
 
 - **Método:** cada tarea la implementó el agente `implementer` del plugin `custom-agents`
-  con la skill `tdd`. Hubo dos intentos de la skill `adversarial-review` con cuatro lentes
-  (conformidad, robustez, seguridad y rendimiento). Todos los gaps Critical e Important se
+  con la skill `tdd`. Hubo tres intentos de la skill `adversarial-review` con cuatro lentes
+  (conformidad, robustez, seguridad y rendimiento), el máximo del método, y una última tanda
+  de correcciones tras el tercero, verificada por el orquestador sin cuarta ronda. Todos los gaps Critical e Important se
   corrigieron o se llevaron a decisión del operador. La traza completa está en el plan,
   §«Revisión adversarial de las olas 2 y 3».
-- **Suites:** unit 6677 passed; vitest 1792 passed (209 ficheros); integración de los
-  endpoints de este plan 90 passed; `tsc`, eslint, `check-i18n`, `check-component-size`,
+- **Suites:** unit 6677 passed; vitest 1793 de 1794 (210 ficheros; el rojo, un timeout por carga, pasa solo con su tope); integración de los
+  endpoints de este plan 132 passed; `tsc`, eslint, `check-i18n`, `check-component-size`,
   `ruff` y `mypy_gate` (802 ficheros) limpios.
-- **E2E:** subset mockeado de Playwright contra `next dev`. Las cifras finales están en la
-  nota de cierre del plan.
+- **E2E:** subset mockeado de Playwright con la receta de CI (build de producción y `next start`): 437 de 438,
+  y el rojo (`sso-roundtrip`, un mock) corregido y en verde. El detalle de
+  los intentos está en el plan, §«Revisión adversarial de las olas 2 y 3».
 
 ## Lo que decide el operador
 
@@ -111,5 +113,6 @@ además de la RLS, y todos tienen test de integración con caso cross-tenant.
 - «Conectar» desde Capacidades vuelve a la pantalla de MCP, porque el callback OAuth es un
   contrato del ADR 0127.
 - Memorias precarga `/similar` fila a fila, algo que viene de antes del plan.
+- «Última actividad» de los agentes sin índice por `agent_id`: 30 ms con el volumen de hoy.
 - La caché de la sonda OAuth es por proceso: la invalidación al conectar afecta al proceso
   que atiende el callback, y el resto la renueva a los 30 s.

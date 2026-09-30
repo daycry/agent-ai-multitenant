@@ -103,7 +103,7 @@ async def list_agents(
     agent_ids = [a.id for a in agents]
     teams_by_agent = await _teams_by_agent(session, agent_ids)
     # `task_ui_30`: «última actividad» de cada agente, en una sola consulta agrupada.
-    last_by_agent = await _last_activity_by_agent(session, require_tenant_id(principal), agent_ids)
+    last_by_agent = await _last_activity_by_agent(session, principal.tenant_id, agent_ids)
     return [
         to_agent_response(a, teams_by_agent.get(a.id, []), last_by_agent.get(a.id)) for a in agents
     ]

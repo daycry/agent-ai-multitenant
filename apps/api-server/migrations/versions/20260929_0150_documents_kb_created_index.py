@@ -5,11 +5,13 @@
 miles de documentos era un sort completo por página. ADITIVA y reversible; parcial
 sobre `deleted_at IS NULL`, igual que el resto de índices del listado.
 
-`CONCURRENTLY` (docs/context/conventions.md §Alembic): `documents` crece a miles de
-filas por base y un `CREATE INDEX` normal bloquea las escrituras (subidas) mientras
-se construye. No puede correr dentro de la transacción de Alembic, así que va en
-`autocommit_block()`. `IF [NOT] EXISTS` lo hace reintentable: una construcción
-interrumpida deja un índice INVALID; se descarta y se reconstruye.
+**Sin `CONCURRENTLY` a propósito**, como la migración 0142 (que lo descartó con el
+mismo argumento): `CONCURRENTLY` exige `autocommit_block()`, que comitea la
+transacción externa y libera el `pg_advisory_xact_lock` que `migrations/env.py`
+toma para serializar `alembic upgrade` concurrentes (prod-01 task_12); un segundo
+upgrade podría correr esta migración a la vez y fallar. `documents` pesa miles a
+decenas de miles de filas: el `CREATE INDEX` bloquea las escrituras menos de un
+segundo. `IF [NOT] EXISTS` lo hace reintentable.
 """
 
 from __future__ import annotations
@@ -26,28 +28,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.get_context().autocommit_block():
-        # Un intento previo interrumpido deja el índice INVALID: fuera antes de reconstruir.
-        op.drop_index(
-            "ix_documents_kb_created",
-            table_name="documents",
-            postgresql_concurrently=True,
-            if_exists=True,
-        )
-        op.create_index(
-            "ix_documents_kb_created",
-            "documents",
-            ["kb_id", sa.text("created_at DESC"), "id"],
-            postgresql_where=sa.text("deleted_at IS NULL"),
-            postgresql_concurrently=True,
-        )
+    op.create_index(
+        "ix_documents_kb_created",
+        "documents",
+        ["kb_id", sa.text("created_at DESC"), "id"],
+        postgresql_where=sa.text("deleted_at IS NULL"),
+        if_not_exists=True,
+    )
 
 
 def downgrade() -> None:
-    with op.get_context().autocommit_block():
-        op.drop_index(
-            "ix_documents_kb_created",
-            table_name="documents",
-            postgresql_concurrently=True,
-            if_exists=True,
-        )
+    op.drop_index("ix_documents_kb_created", table_name="documents", if_exists=True)

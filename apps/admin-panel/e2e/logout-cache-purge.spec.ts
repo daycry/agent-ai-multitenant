@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { EMPTY_DASHBOARD } from "./helpers/dashboard";
 import { CSRF_COOKIE, TENANT_STORAGE_KEY, seedSession } from "./helpers/session";
 
 /**
@@ -85,16 +86,6 @@ const INCOMING = fakeUser(
 /** Cuerpo mínimo válido de `GET /tenant/dashboard`. El comodín `[]` de los tests
  *  revienta el render del dashboard (`data.spend` sin definir) y el error boundary
  *  se lleva el header: el test se lee como «no aparece `user-menu`». */
-const EMPTY_DASHBOARD = {
-  pending: { total: 0, by_kind: {}, oldest: [] },
-  projects: [],
-  spend: { available: false, reason: "forbidden" },
-  issues: [],
-  activity: [],
-  mcp: [],
-  generated_at: "2026-09-30T00:00:00Z",
-};
-
 function json(body: unknown, status = 200) {
   return { status, contentType: "application/json", body: JSON.stringify(body) };
 }

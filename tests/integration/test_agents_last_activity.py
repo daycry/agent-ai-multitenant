@@ -192,3 +192,41 @@ async def test_list_agents_reports_last_activity_within_window_and_tenant(
     builtin = when("builtin")
     assert builtin is not None
     assert abs((builtin - older).total_seconds()) < 1
+
+
+async def _mint_sysadmin_token(user_id: UUID) -> str:
+    """System Admin SIN tenant activo («Todos los tenants» del panel)."""
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+
+    sid = uuid7()
+    await SessionStore(get_redis()).create(sid, user_id=user_id, tenant_id=None, ttl_seconds=3600)
+    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=None, is_system_admin=True)
+
+
+@pytest.mark.asyncio
+async def test_system_admin_without_tenant_lists_agents_of_all_tenants(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Regresión: sin `tid` el System Admin (BYPASSRLS) lee, no recibe 400."""
+    ids = await _seed(migrations_pg_dsn)
+    dsn = migrations_pg_dsn
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("UPDATE users SET is_system_admin = true WHERE id = $1", ids["ua"])
+    finally:
+        await conn.close()
+    now = datetime.now(tz=UTC)
+    task_b = ids["task_b"]
+    await _seed_run(dsn, tenant=ids["tb"], task=task_b, agent=ids["other"], at=now)
+
+    token = await _mint_sysadmin_token(ids["ua"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/agents", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    by_name = {a["name"]: a for a in resp.json()}
+    assert {"busy", "other"} <= set(by_name)  # de varios tenants
+    assert by_name["other"]["last_activity_at"] is not None

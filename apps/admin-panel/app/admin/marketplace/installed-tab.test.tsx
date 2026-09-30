@@ -129,7 +129,7 @@ describe("Instaladas", () => {
     const link = await screen.findByTestId("installed-deployment-inst-1-p-1");
     expect(screen.getAllByTestId("installed-deployment-inst-1-p-1")).toHaveLength(1);
     expect(link.textContent).toContain("Web");
-    expect(link.textContent).toContain("deshabilitada");
+    expect(link.textContent).not.toContain("deshabilitada"); // hay uno activo: insignia verde sin «deshabilitada»
     const dupKey = errors.mock.calls.some(([m]) => String(m).includes("same key"));
     errors.mockRestore();
     expect(dupKey).toBe(false);

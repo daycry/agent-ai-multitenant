@@ -101,3 +101,40 @@ async def test_ids_filter_is_capped_and_validated(
         many = [("ids", f"00000000-0000-4000-8000-{i:012d}") for i in range(201)]
         over = await client.get(f"/knowledge-bases/{kb}/documents", params=many, headers=ha)
         assert over.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_system_admin_without_tenant_can_list_documents_with_ids(
+    configured_app,  # noqa: F811
+    migrations_pg_dsn: str,
+) -> None:
+    """Regresión: el System Admin en «Todos los tenants» lee (200), no recibe 400."""
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+    from uuid6 import uuid7
+
+    app, _ = configured_app
+    seeded = await _seed_two_tenants(migrations_pg_dsn)
+    a = seeded["a"]
+    ha = {"Authorization": f"Bearer {await _mint_token(a['user_id'], a['tenant_id'])}"}
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute("UPDATE users SET is_system_admin = true WHERE id = $1", a["user_id"])
+    finally:
+        await conn.close()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        kb = (await client.post("/knowledge-bases", json={"name": "K1"}, headers=ha)).json()["id"]
+        docs = await _insert_docs(migrations_pg_dsn, tenant_id=a["tenant_id"], kb_id=kb, n=3)
+        sid = uuid7()
+        await SessionStore(get_redis()).create(
+            sid, user_id=a["user_id"], tenant_id=None, ttl_seconds=3600
+        )
+        tok = encode_jwt(user_id=a["user_id"], session_id=sid, tenant_id=None, is_system_admin=True)
+        got = await client.get(
+            f"/knowledge-bases/{kb}/documents",
+            params=[("ids", docs[0]), ("ids", docs[1])],
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+    assert got.status_code == 200, got.text
+    assert sorted(d["id"] for d in got.json()) == sorted(docs[:2])

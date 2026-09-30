@@ -103,5 +103,47 @@ describe("Memorias: paginación", () => {
     );
     expect(apiFetchMock).toHaveBeenCalledWith("/memories?offset=100");
     expect(screen.queryByTestId("memories-load-more")).toBeNull();
+    // Pinta 120 filas en tres páginas: solo tarda ~1 s, pero con la suite entera en
+    // paralelo pasaba de los 5 s por defecto de vitest (medido el 2026-09-30).
+  }, 20000);
+
+  it("deduplica por id si una inserción entre páginas repite filas en la frontera", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === "/memories/counts")
+        return Promise.resolve({
+          all: 51,
+          private: 0,
+          team_shared: 0,
+          project_shared: 0,
+          global: 51,
+        });
+      if (path.startsWith("/memories")) {
+        const offset = Number(new URL(path, "http://x").searchParams.get("offset") ?? 0);
+        // Página 2: repite la última fila de la 1 (m-49) y trae la nueva.
+        return Promise.resolve(
+          offset === 0 ? Array.from({ length: 50 }, (_, i) => mem(i)) : [mem(49), mem(50)],
+        );
+      }
+      return Promise.resolve([]);
+    });
+    window.localStorage.setItem("admin-panel.lang", "es");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <LanguageProvider>
+          <MemoriesPage />
+        </LanguageProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("memories-showing");
+    fireEvent.click(screen.getByTestId("memories-load-more"));
+    await waitFor(() =>
+      expect(screen.getByTestId("memories-showing").textContent).toBe("Mostrando 51 de 51"),
+    );
+    expect(document.querySelectorAll('[data-testid^="memory-m-"]')).toHaveLength(51);
+    const dupKey = errors.mock.calls.some(([m]) => String(m).includes("same key"));
+    errors.mockRestore();
+    expect(dupKey).toBe(false);
   });
 });

@@ -41,21 +41,17 @@ async def test_index_upgrade_downgrade_upgrade(alembic_config, migrations_pg_dsn
     assert await _indexdef(migrations_pg_dsn) is not None
 
 
-def test_migration_builds_and_drops_the_index_concurrently() -> None:
-    """`conventions.md` §Alembic: `CREATE INDEX CONCURRENTLY` en bloque no transaccional.
+def test_migration_is_transactional_to_keep_the_migration_lock() -> None:
+    """Sin `CONCURRENTLY`/`autocommit_block` (precedente: migración 0142).
 
-    Sin `CONCURRENTLY`, en una tabla `documents` de miles de filas el `CREATE INDEX`
-    bloquea las escrituras durante la construcción. Se comprueba sobre el módulo
-    porque el efecto (un lock más corto) no se ve desde un esquema vacío.
+    `autocommit_block()` comitea y libera el `pg_advisory_xact_lock` de `env.py`
+    que serializa los upgrades concurrentes; `documents` es pequeña y el bloqueo
+    de escritura dura menos de un segundo.
     """
     import pathlib
 
-    path = next(
-        pathlib.Path("apps/api-server/migrations/versions").glob(
-            "*_0150_documents_kb_created_index.py"
-        )
-    )
+    versions = pathlib.Path(__file__).resolve().parents[2] / "apps/api-server/migrations/versions"
+    path = next(versions.glob("*_0150_documents_kb_created_index.py"))
     src = path.read_text(encoding="utf-8")
-    # drop + create (upgrade) y drop (downgrade)
-    assert src.count("postgresql_concurrently=True") == 3
-    assert "autocommit_block" in src
+    assert "autocommit_block()" not in src.split('"""', 2)[2]
+    assert "postgresql_concurrently" not in src.split('"""', 2)[2]
