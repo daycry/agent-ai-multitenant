@@ -121,6 +121,11 @@ async function setup(page: Page): Promise<Capture> {
     }),
   );
 
+  // task_mem_20: el tenant_admin de la sesión también pinta la cola de compactación.
+  await page.route(/http:\/\/localhost:8001\/memories\/compactions(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+
   // task_ui_31: el contador de cada pestaña sale de `GET /memories/counts`.
   await page.route(/http:\/\/localhost:8001\/memories\/counts$/, (route) => {
     const n = (s: string) => (store[s] ?? []).length;

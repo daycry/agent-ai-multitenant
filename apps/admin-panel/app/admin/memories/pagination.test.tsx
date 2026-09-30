@@ -57,6 +57,8 @@ function wire() {
         project_shared: 0,
         global: TOTAL,
       });
+    // task_mem_20: el usuario del test es admin y la página pinta la cola de compactación.
+    if (path.startsWith("/memories/compactions")) return Promise.resolve([]);
     if (path.startsWith("/memories")) {
       const offset = Number(new URL(path, "http://x").searchParams.get("offset") ?? 0);
       const n = Math.min(50, TOTAL - offset);
@@ -118,6 +120,8 @@ describe("Memorias: paginación", () => {
           project_shared: 0,
           global: 51,
         });
+      // task_mem_20: el usuario del test es admin y la página pinta la cola de compactación.
+      if (path.startsWith("/memories/compactions")) return Promise.resolve([]);
       if (path.startsWith("/memories")) {
         const offset = Number(new URL(path, "http://x").searchParams.get("offset") ?? 0);
         // Página 2: repite la última fila de la 1 (m-49) y trae la nueva.

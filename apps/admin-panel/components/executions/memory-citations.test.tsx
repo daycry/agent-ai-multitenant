@@ -50,8 +50,21 @@ describe("CitedText", () => {
     expect(screen.getByTestId("out").textContent).toContain(" por eso.");
 
     fireEvent.click(chip);
-    expect(screen.getByTestId("memory-citation-body-abcdef12").textContent).toBe(
+    expect(screen.getByTestId("memory-citation-body-abcdef12").textContent).toContain(
       "El proyecto usa asyncpg.",
+    );
+  });
+
+  it("la cita desplegada enlaza a la ficha de la memoria (task_mem_20)", async () => {
+    apiFetchMock.mockResolvedValue([
+      { id: "abcdef12-0000-0000-0000-000000000000", content: "El proyecto usa asyncpg." },
+    ]);
+    mount("Elegí asyncpg [mem:abcdef12].");
+    const chip = await screen.findByRole("button", { name: /mem:abcdef12/ });
+    await waitFor(() => expect((chip as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(chip);
+    expect(screen.getByTestId("memory-citation-open-abcdef12").getAttribute("href")).toBe(
+      "/admin/memories/abcdef12-0000-0000-0000-000000000000",
     );
   });
 

@@ -22,7 +22,14 @@ const KIND_KEY = {
   unknown: "unknown",
 } as const satisfies Record<string, MemoriesProvenanceKey>;
 
-export function MemoryProvenance({ memory }: { memory: MemoryResponse }) {
+export function MemoryProvenance({
+  memory,
+  executionTitle,
+}: {
+  memory: MemoryResponse;
+  /** Título de la tarea de la ejecución (la ficha lo resuelve; el listado no). */
+  executionTitle?: string | null;
+}) {
   const t = useT("memoriesProvenance");
   const lang = useLangOptional();
   const by = memory.created_by ?? { kind: "unknown" as const, id: null, name: null };
@@ -59,7 +66,11 @@ export function MemoryProvenance({ memory }: { memory: MemoryResponse }) {
       {executionId ? (
         <Field
           label={t("execution")}
-          value={executionId.slice(0, 8)}
+          value={
+            executionTitle
+              ? `${executionTitle} · ${executionId.slice(0, 8)}`
+              : executionId.slice(0, 8)
+          }
           testid={`memory-execution-${memory.id}`}
         />
       ) : null}

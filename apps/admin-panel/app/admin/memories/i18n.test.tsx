@@ -24,6 +24,17 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const apiFetchMock = vi.fn();
+// `task_mem_20`: la página lee el rol (la cola de compactación es de tenant_admin).
+// Estos tests son de un miembro sin rol de admin, sin cola.
+vi.mock("@/lib/use-current-user", () => ({
+  useCurrentUser: () => ({
+    isSystemAdmin: false,
+    isTenantAdmin: false,
+    isTenantMember: true,
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };

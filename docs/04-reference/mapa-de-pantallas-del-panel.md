@@ -90,24 +90,25 @@ Todas cuelgan de `/admin/projects/[id]`; conservan su ruta y pasan a ser pestañ
 
 ## Trabajo — Recursos del tenant
 
-| Ruta                                                | Sitio en el menú                     | Rol          | Notas                                             |
-| --------------------------------------------------- | ------------------------------------ | ------------ | ------------------------------------------------- |
-| `/admin/agents`                                     | Recursos · Agentes                   | tenant_admin | `task_ui_30` le aplica el patrón de recurso       |
-| `/admin/agents/[id]`                                | Sin entrada — desde Agentes          | tenant_admin | `task_ui_32` la agrupa en cinco pestañas          |
-| `/admin/teams`                                      | Recursos · Equipos                   | tenant_admin |                                                   |
-| `/admin/teams/[team_id]`                            | Sin entrada — desde Equipos          | tenant_admin |                                                   |
-| `/admin/human-agents`                               | Recursos · Agentes humanos           | tenant_admin |                                                   |
-| `/admin/tools`                                      | Recursos · Skills y tools            | tenant_admin | Una pantalla, dos pestañas                        |
-| `/admin/knowledge-bases`                            | Recursos · Conocimiento              | tenant_admin |                                                   |
-| `/admin/knowledge-bases/categories`                 | Sin entrada — desde arriba           | tenant_admin |                                                   |
-| `/admin/documents`                                  | Recursos · Conocimiento (documentos) | tenant_admin |                                                   |
-| `/admin/documents/[id]/ingestion`                   | Sin entrada — desde el documento     | tenant_admin | Detalle del indexado                              |
-| `/admin/documents/[id]/citations`                   | Sin entrada — desde el documento     | tenant_admin |                                                   |
-| `/admin/memories`                                   | Recursos · Memorias                  | tenant_admin | `task_ui_31`: pestañas por ámbito con procedencia |
-| `/admin/marketplace`                                | Recursos · Marketplace               | tenant_admin | Catálogo · Instaladas · Publicar                  |
-| `/admin/marketplace/private`                        | Sin entrada — desde Marketplace      | tenant_admin | Catálogo privado del tenant                       |
-| `/admin/marketplace/installations/[id]`             | Sin entrada — desde Instaladas       | tenant_admin |                                                   |
-| `/admin/marketplace/installations/[id]/permissions` | Sin entrada — consentimiento         | tenant_admin | La puerta de permisos de una instalación          |
+| Ruta                                                | Sitio en el menú                     | Rol          | Notas                                                       |
+| --------------------------------------------------- | ------------------------------------ | ------------ | ----------------------------------------------------------- |
+| `/admin/agents`                                     | Recursos · Agentes                   | tenant_admin | `task_ui_30` le aplica el patrón de recurso                 |
+| `/admin/agents/[id]`                                | Sin entrada — desde Agentes          | tenant_admin | `task_ui_32` la agrupa en cinco pestañas                    |
+| `/admin/teams`                                      | Recursos · Equipos                   | tenant_admin |                                                             |
+| `/admin/teams/[team_id]`                            | Sin entrada — desde Equipos          | tenant_admin |                                                             |
+| `/admin/human-agents`                               | Recursos · Agentes humanos           | tenant_admin |                                                             |
+| `/admin/tools`                                      | Recursos · Skills y tools            | tenant_admin | Una pantalla, dos pestañas                                  |
+| `/admin/knowledge-bases`                            | Recursos · Conocimiento              | tenant_admin |                                                             |
+| `/admin/knowledge-bases/categories`                 | Sin entrada — desde arriba           | tenant_admin |                                                             |
+| `/admin/documents`                                  | Recursos · Conocimiento (documentos) | tenant_admin |                                                             |
+| `/admin/documents/[id]/ingestion`                   | Sin entrada — desde el documento     | tenant_admin | Detalle del indexado                                        |
+| `/admin/documents/[id]/citations`                   | Sin entrada — desde el documento     | tenant_admin |                                                             |
+| `/admin/memories`                                   | Recursos · Memorias                  | tenant_admin | `task_ui_31`: pestañas por ámbito con procedencia           |
+| `/admin/memories/[id]`                              | Sin entrada — desde Memorias         | tenant_admin | `task_mem_20`: ficha con procedencia, uso y línea de tiempo |
+| `/admin/marketplace`                                | Recursos · Marketplace               | tenant_admin | Catálogo · Instaladas · Publicar                            |
+| `/admin/marketplace/private`                        | Sin entrada — desde Marketplace      | tenant_admin | Catálogo privado del tenant                                 |
+| `/admin/marketplace/installations/[id]`             | Sin entrada — desde Instaladas       | tenant_admin |                                                             |
+| `/admin/marketplace/installations/[id]/permissions` | Sin entrada — consentimiento         | tenant_admin | La puerta de permisos de una instalación                    |
 
 ## Trabajo — Ajustes del tenant
 

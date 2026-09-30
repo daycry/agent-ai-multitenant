@@ -242,7 +242,7 @@ rompe un run.
 
 ### `task_mem_20` — API y UI de memoria con la nueva forma
 
-- [ ] **Título**: `GET /memories` acepta `kind`, `agent_id`, `execution_id`, `min_recall_count`,
+- [x] **Título**: `GET /memories` acepta `kind`, `agent_id`, `execution_id`, `min_recall_count`,
       `disputed`, `archived` y devuelve `recall_count`, `last_recalled_at`, `useful_count`,
       `harmful_count`, `kind`; `GET /memories/{id}` devuelve la ficha con su procedencia resuelta
       (nombre del agente, título de la ejecución, proyecto) y su línea de tiempo. La UI de `task_ui_31`
@@ -250,6 +250,18 @@ rompe un run.
       filtro «nunca recuperadas». El preámbulo del run y el visor de ejecución muestran las citas.
       **Test**: integración del listado con filtros (cross-tenant y privado ajeno); vitest de la ficha.
       **Coste**: 2 d.
+  - ✅ **Cerrada el 2026-09-30.** `GET /memories` suma los filtros `min_recall_count`, `max_recall_count`
+    (`max_recall_count=0` significa «nunca recuperada») y `disputed`, más los campos `last_recalled_at` y
+    `disputed_at`. `GET /memories/{id}` devuelve la ficha con procedencia resuelta (agente, proyecto y título de la
+    tarea de la ejecución), el voto propio y la línea de tiempo embebida. `POST /memories/{id}/feedback` es el voto
+    humano, uno por persona, que necesita `human_mem_02`. Una privada ajena, otro tenant o una memoria archivada dan
+    404 sin escribir. En el panel: ruta `/admin/memories/[id]`, pestaña «Disputadas», casilla «Nunca recuperadas»,
+    botones de voto, la cola de compactación para `tenant_admin`, y citas del visor que enlazan a la ficha. No hizo
+    falta migración: `memory_feedback` ya admitía votante humano. Rojo visto en integración (6) y vitest (5).
+    **Verificado por el orquestador:** vitest completo 1823 de 1823, integración de la API de memorias 54 de 54, e2e
+    de memorias y del visor 10 de 10 con build de producción. Tres tests de la página fallaban porque sus mocks no
+    respondían a `/me`, que la página ahora lee para la cola; se corrigieron con el mock de `useCurrentUser` que
+    usan otros tests del repo.
 
 ---
 

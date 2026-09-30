@@ -20,13 +20,13 @@ import { useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, Search } from "lucide-react";
 
+import { CompactionQueue } from "@/components/memories/compaction-queue";
 import { CreateMemoryCard } from "@/components/memories/create-memory-card";
 import { MemoryList } from "@/components/memories/memory-list";
 import {
   SCOPE_KEY,
   type MemoryCounts,
   type MemoryResponse,
-  type MemoryScope,
   type MemorySearchHit,
 } from "@/components/memories/types";
 import { PageHeader } from "@/components/layout/page-header";
@@ -35,17 +35,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { memoryListPath, type MemoryView } from "@/lib/memory/list-query";
+import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
 
 /** Tamaño de página por defecto de `GET /memories` (`limit=50`). */
 const PAGE_SIZE = 50;
 
-const SCOPE_OPTIONS: (MemoryScope | "all")[] = [
+const SCOPE_OPTIONS: MemoryView[] = [
   "all",
   "private",
   "team_shared",
   "project_shared",
   "global",
+  "disputed",
 ];
 
 /** Una inserción entre página y página desplaza el `offset` y repite filas: se
@@ -59,26 +62,28 @@ function dedupeById(rows: MemoryResponse[]): MemoryResponse[] {
 export default function MemoriesPage() {
   const t = useT("memories");
   const tp = useT("memoriesProvenance");
+  const tc = useT("memoriesCard");
   const tCommon = useT("common");
+  const { isTenantAdmin } = useCurrentUser();
   const errorText = useErrorText();
   const queryClient = useQueryClient();
-  const [scopeFilter, setScopeFilter] = useState<MemoryScope | "all">("all");
+  const [scopeFilter, setScopeFilter] = useState<MemoryView>("all");
+  const [neverRecalled, setNeverRecalled] = useState(false);
   const [draft, setDraft] = useState("");
   const [term, setTerm] = useState("");
   const searching = term.length > 0;
-  const scopeParam = scopeFilter === "all" ? "" : `&scope=${scopeFilter}`;
+  const scopeParam =
+    scopeFilter === "all" || scopeFilter === "disputed" ? "" : `&scope=${scopeFilter}`;
+  const tabLabel = (v: MemoryView) => (v === "disputed" ? tc("tabDisputed") : t(SCOPE_KEY[v]));
 
   // Paginado con el `offset` de `GET /memories` (el backend corta en PAGE).
   const listQuery = useInfiniteQuery({
-    queryKey: ["memories", "list", scopeFilter],
+    queryKey: ["memories", "list", scopeFilter, neverRecalled],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => {
-      const qs = [
-        scopeFilter === "all" ? "" : `scope=${scopeFilter}`,
-        pageParam > 0 ? `offset=${pageParam}` : "",
-      ].filter(Boolean);
-      return apiFetch<MemoryResponse[]>(`/memories${qs.length ? `?${qs.join("&")}` : ""}`);
-    },
+    queryFn: ({ pageParam }) =>
+      apiFetch<MemoryResponse[]>(
+        memoryListPath({ view: scopeFilter, neverRecalled, offset: pageParam }),
+      ),
     getNextPageParam: (last, pages) =>
       last.length >= PAGE_SIZE ? pages.reduce((n, p) => n + p.length, 0) : undefined,
     refetchOnWindowFocus: false,
@@ -107,7 +112,10 @@ export default function MemoriesPage() {
   const memories: MemoryResponse[] = searching
     ? (searchQuery.data ?? []).map((h) => h.memory)
     : dedupeById(listQuery.data?.pages.flat() ?? []);
-  const total = counts?.[scopeFilter];
+  // «Disputadas» y «nunca recuperadas» son filtros del listado: el contador por ámbito no los
+  // conoce, así que ahí no se inventa un total.
+  const filtered = scopeFilter === "disputed" || neverRecalled;
+  const total = scopeFilter === "disputed" || neverRecalled ? undefined : counts?.[scopeFilter];
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["memories"] });
 
   return (
@@ -125,8 +133,7 @@ export default function MemoriesPage() {
         <CardHeader className="flex flex-col gap-3">
           <div className="flex flex-row items-center justify-between gap-4">
             <CardTitle>
-              {t(SCOPE_KEY[scopeFilter])} (
-              {searching ? memories.length : (counts?.[scopeFilter] ?? "…")})
+              {tabLabel(scopeFilter)} ({searching || filtered ? memories.length : (total ?? "…")})
             </CardTitle>
             <div
               className="border-muted bg-muted/40 inline-flex rounded-md border p-0.5 text-xs"
@@ -148,8 +155,8 @@ export default function MemoriesPage() {
                       : "text-muted-foreground hover:text-foreground")
                   }
                 >
-                  {t(SCOPE_KEY[opt])}
-                  {counts ? (
+                  {tabLabel(opt)}
+                  {counts && opt !== "disputed" ? (
                     <span className="ml-1 tabular-nums" data-testid={`memories-count-${opt}`}>
                       {counts[opt]}
                     </span>
@@ -181,6 +188,15 @@ export default function MemoriesPage() {
               {tp("searchSubmit")}
             </Button>
           </form>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={neverRecalled}
+              onChange={(e) => setNeverRecalled(e.target.checked)}
+              data-testid="memories-never-recalled"
+            />
+            {tc("neverRecalled")}
+          </label>
         </CardHeader>
         <CardContent>
           {active.isLoading ? (
@@ -222,6 +238,8 @@ export default function MemoriesPage() {
           )}
         </CardContent>
       </Card>
+
+      {isTenantAdmin ? <CompactionQueue /> : null}
     </div>
   );
 }

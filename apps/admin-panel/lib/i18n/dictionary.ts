@@ -3784,6 +3784,60 @@ export const dictionary = {
     agent: { es: "Agente", en: "Agent" },
   },
   /**
+   * Ficha de memoria, voto humano y cola de compactación (`task_mem_20`): pestaña
+   * «Disputadas», filtro «nunca recuperadas», contadores de uso y utilidad, línea
+   * de tiempo y la revisión que el `tenant_admin` confirma o rechaza.
+   */
+  memoriesCard: {
+    tabDisputed: { es: "Disputadas", en: "Disputed" },
+    neverRecalled: { es: "Nunca recuperadas", en: "Never recalled" },
+    openCard: { es: "Ver ficha", en: "Open card" },
+    cardTitle: { es: "Ficha de la memoria", en: "Memory card" },
+    back: { es: "Volver a las memorias", en: "Back to memories" },
+    notVisible: {
+      es: "Esta memoria no existe o no es visible para ti.",
+      en: "This memory does not exist or is not visible to you.",
+    },
+    disputedBadge: { es: "Disputada", en: "Disputed" },
+    archivedBadge: { es: "Archivada", en: "Archived" },
+    usageRecalls: { es: "Recuperaciones", en: "Recalls" },
+    usageNever: { es: "nunca", en: "never" },
+    usageLast: { es: "Última recuperación", en: "Last recalled" },
+    usageUseful: { es: "Votos «útil»", en: "“Useful” votes" },
+    usageHarmful: { es: "Votos «errónea/desfasada»", en: "“Wrong/outdated” votes" },
+    feedbackTitle: { es: "¿Es correcta esta memoria?", en: "Is this memory correct?" },
+    verdictUseful: { es: "Útil", en: "Useful" },
+    verdictWrong: { es: "Errónea", en: "Wrong" },
+    verdictOutdated: { es: "Desfasada", en: "Outdated" },
+    feedbackHint: {
+      es: "Una memoria errónea o desfasada baja en el recall; no se borra.",
+      en: "A wrong or outdated memory drops in recall; it is not deleted.",
+    },
+    timelineTitle: { es: "Línea de tiempo", en: "Timeline" },
+    timelineHint: {
+      es: "Qué se aprendió en las ejecuciones vecinas, del mismo ámbito y dueño.",
+      en: "What was learned in neighbouring runs, in the same scope and owner.",
+    },
+    timelineNow: { es: "Esta ejecución", en: "This run" },
+    timelineBefore: { es: "{n} antes", en: "{n} earlier" },
+    timelineAfter: { es: "{n} después", en: "{n} later" },
+    timelineManual: { es: "Sin ejecución (alta manual)", en: "No run (manual entry)" },
+    timelineEmpty: { es: "Sin vecinas en la línea de tiempo.", en: "No timeline neighbours." },
+    compactionTitle: { es: "Revisiones de compactación", en: "Compaction reviews" },
+    compactionHint: {
+      es: "Memorias disputadas agrupadas por proyecto. Confirmar las archiva con motivo; nunca se borran.",
+      en: "Disputed memories grouped by project. Confirming archives them with a reason; nothing is deleted.",
+    },
+    compactionEmpty: {
+      es: "No hay revisiones pendientes.",
+      en: "No reviews pending.",
+    },
+    compactionProject: { es: "Proyecto", en: "Project" },
+    compactionCount: { es: "{count} memorias disputadas", en: "{count} disputed memories" },
+    compactionConfirm: { es: "Confirmar y archivar", en: "Confirm and archive" },
+    compactionReject: { es: "Rechazar", en: "Reject" },
+  },
+  /**
    * SSO empresarial OIDC (`settings/sso/`): la pantalla, la tarjeta de la URL
    * base pública, la ficha de la config y el diálogo de alta/edición.
    *

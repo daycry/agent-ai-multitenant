@@ -39,6 +39,14 @@ export interface MemoryResponse {
   created_by?: MemoryCreatedBy;
   /** Runs que la recuperaron (`task_mem_02`); `null` sólo si falta el dato: «desconocido». */
   recall_count?: number | null;
+  /** Última recuperación (`task_mem_02`); `null` = nunca. */
+  last_recalled_at?: string | null;
+  /** Votos de utilidad (`task_mem_10`) y marca de disputa; opcionales por compat. */
+  useful_count?: number;
+  harmful_count?: number;
+  disputed?: boolean;
+  disputed_at?: string | null;
+  archived_at?: string | null;
   has_embedding: boolean;
   created_at: string;
   updated_at: string;
@@ -115,3 +123,54 @@ export interface MemorySearchHit {
 
 /** Las claves del namespace `memoriesProvenance`. */
 export type MemoriesProvenanceKey = Parameters<Translator<"memoriesProvenance">>[0];
+
+/** Veredicto humano o de agente sobre una memoria (`POST /memories/{id}/feedback`). */
+export type MemoryVerdict = "useful" | "wrong" | "outdated";
+
+/** Un vecino de la línea de tiempo: índice, nunca el contenido completo. */
+export interface TimelineHit {
+  id: string;
+  headline: string;
+  type: MemoryType;
+  kind: MemoryKind | null;
+  scope: MemoryScope;
+  created_at: string;
+  agent: string | null;
+  project: string | null;
+  execution_id: string | null;
+}
+
+export interface MemoryTimeline {
+  anchor_memory_id: string | null;
+  anchor_execution_id: string | null;
+  window: number;
+  executions: {
+    execution_id: string | null;
+    /** 0 = la ejecución de la memoria; negativo = anteriores; positivo = posteriores. */
+    position: number;
+    started_at: string | null;
+    memories: TimelineHit[];
+  }[];
+}
+
+/** `GET /memories/{id}`: la memoria con su procedencia resuelta y su línea de tiempo. */
+export interface MemoryCardData extends MemoryResponse {
+  execution_title: string | null;
+  my_verdict: MemoryVerdict | null;
+  timeline: MemoryTimeline | null;
+}
+
+/** `GET /memories/compactions` (sólo `tenant_admin`). */
+export interface Compaction {
+  id: string;
+  project_id: string;
+  project_name: string | null;
+  status: "pending" | "confirmed" | "rejected";
+  memory_ids: string[];
+  summary: string;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** Las claves del namespace `memoriesCard`. */
+export type MemoriesCardKey = Parameters<Translator<"memoriesCard">>[0];

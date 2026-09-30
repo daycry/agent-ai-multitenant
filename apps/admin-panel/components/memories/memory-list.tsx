@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 
@@ -13,6 +14,7 @@ import { useLang } from "@/lib/lang-context";
 import { memoryDetectorState } from "@/lib/memory/honesty";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
+import { MemoryFeedbackButtons } from "./memory-feedback-buttons";
 import { MemoryProvenance } from "./memory-provenance";
 import { SimilarMemoriesDialog, type SimilarItem } from "./similar-memories-dialog";
 import {
@@ -45,6 +47,7 @@ export function MemoryList({
 
 function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: () => void }) {
   const t = useT("memories");
+  const tc = useT("memoriesCard");
   const [similarOpen, setSimilarOpen] = useState(false);
 
   const deleteMutation = useMutation({
@@ -77,6 +80,11 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
           ) : (
             <SimilarUnavailableBadge memoryId={memory.id} />
           )}
+          {memory.disputed ? (
+            <Badge variant="danger" data-testid={`memory-disputed-${memory.id}`}>
+              {tc("disputedBadge")}
+            </Badge>
+          ) : null}
           <SimilarCountBadge
             memoryId={memory.id}
             hasEmbedding={memory.has_embedding}
@@ -88,6 +96,16 @@ function MemoryRow({ memory, onDeleted }: { memory: MemoryResponse; onDeleted: (
         </div>
         <div className="mt-1 text-sm">{renderPlanDraft(memory.content)}</div>
         <MemoryProvenance memory={memory} />
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <MemoryFeedbackButtons memoryId={memory.id} onVoted={onDeleted} />
+          <Link
+            href={`/admin/memories/${memory.id}`}
+            className="text-primary text-xs underline"
+            data-testid={`memory-open-${memory.id}`}
+          >
+            {tc("openCard")}
+          </Link>
+        </div>
       </div>
       <div className="flex gap-1">
         <Button

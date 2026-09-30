@@ -69,6 +69,10 @@ async function setup(
   } = {},
 ): Promise<void> {
   await seedSession(page);
+  // task_mem_20: el tenant_admin de la sesión también pinta la cola de compactación.
+  await page.route(apiRoute("/memories/compactions?**"), (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
   await page.route(apiRoute("/memories?**"), (route) =>
     route.fulfill({
       status: 200,

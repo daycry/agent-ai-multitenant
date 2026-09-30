@@ -26,7 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import Select, String, cast, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
@@ -38,6 +38,7 @@ from api_server.auth.deps import (
 from api_server.db.memory import MemoryCompactionProposal, MemoryEntry
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.memorizer import MemoryCandidate, persist_memory_candidates
+from api_server.memorizer.feedback import apply_feedback, voter_key
 from api_server.memorizer.lifecycle import (
     CompactionNotFoundError,
     confirm_compaction,
@@ -164,6 +165,9 @@ class MemoryResponse(BaseModel):
     """Votos `useful` / `wrong`+`outdated` de `memory_feedback` (`task_mem_10`)."""
     disputed: bool = False
     """Marcada como errónea o desfasada (`task_mem_10`); el ranking la baja, no se borra."""
+    disputed_at: datetime | None = None
+    last_recalled_at: datetime | None = None
+    """Última vez que un run la recuperó (`task_mem_02`); `None` = nunca."""
     archived_at: datetime | None = None
     archive_reason: str | None = None
     """Archivado soft (`task_mem_11`): el recall no la ve; sólo sale con `archived=true`."""
@@ -198,6 +202,8 @@ def _to_response(row: MemoryEntry, names: Names | None = None) -> MemoryResponse
         useful_count=row.useful_count or 0,
         harmful_count=row.harmful_count or 0,
         disputed=row.disputed_at is not None,
+        disputed_at=row.disputed_at,
+        last_recalled_at=row.last_recalled_at,
         archived_at=row.archived_at,
         archive_reason=row.archive_reason,
         has_embedding=row.embedding is not None,
@@ -314,6 +320,21 @@ async def store_memory(
     return _to_response(row)
 
 
+def _usage_filters(
+    stmt: Select[Any], min_recall: int | None, max_recall: int | None, disputed: bool | None
+) -> Select[Any]:
+    """Filtros de uso y disputa del listado (`task_mem_20`)."""
+    if min_recall is not None:
+        stmt = stmt.where(MemoryEntry.recall_count >= min_recall)
+    if max_recall is not None:
+        stmt = stmt.where(MemoryEntry.recall_count <= max_recall)
+    if disputed is not None:
+        stmt = stmt.where(
+            MemoryEntry.disputed_at.is_not(None) if disputed else MemoryEntry.disputed_at.is_(None)
+        )
+    return stmt
+
+
 # ---------------------------------------------------------------------------
 # GET /memories
 # ---------------------------------------------------------------------------
@@ -330,6 +351,9 @@ async def list_memories(
     execution_id: UUID | None = Query(default=None),
     id_prefix: str | None = Query(default=None, pattern=r"^[0-9a-fA-F-]{6,36}$"),
     archived: bool = Query(default=False),
+    min_recall_count: int | None = Query(default=None, ge=0),
+    max_recall_count: int | None = Query(default=None, ge=0),
+    disputed: bool | None = Query(default=None),
     created_from: datetime | None = Query(default=None),
     created_to: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -343,7 +367,10 @@ async def list_memories(
     ``created_by`` (an agent id, or a user id for private/manual/human-session
     memories), ``execution_id``, ``id_prefix`` (resolves a ``[mem:<id>]`` citation)
     ``archived`` (task_mem_11: por defecto se OCULTAN las archivadas; ``archived=true`` enseña
-    SÓLO las archivadas, con su motivo) and a ``created_at`` range. RLS handles the
+    SÓLO las archivadas, con su motivo), ``min_recall_count`` / ``max_recall_count``
+    (task_mem_20; «nunca recuperada» = ``max_recall_count=0``), ``disputed``
+    (true = sólo las dadas por erróneas, false = sólo las no disputadas) and a
+    ``created_at`` range. RLS handles the
     tenant boundary (``tenant_id`` is also explicit); on top of it a ``private``
     row is visible ONLY to its owning user (H1) — no filter can lift that.
     Names (project/team/agent/creator) are resolved in a batch, not per row."""
@@ -376,6 +403,7 @@ async def list_memories(
         stmt = stmt.where(MemoryEntry.agent_id == agent_id)
     if execution_id is not None:
         stmt = stmt.where(MemoryEntry.source_execution_id == execution_id)
+    stmt = _usage_filters(stmt, min_recall_count, max_recall_count, disputed)
     if id_prefix is not None:
         # Resuelve la cita `[mem:<id corto>]` del informe de un run (task_mem_02).
         # El patrón de la query sólo admite hex y guiones: sin comodines de LIKE.
@@ -925,6 +953,146 @@ async def reject_memory_compaction(
             status_code=status.HTTP_404_NOT_FOUND, detail="pending compaction not found"
         ) from None
     return CompactionDecision(id=proposal_id, status="rejected")
+
+
+# ---------------------------------------------------------------------------
+# GET /memories/{id} — la ficha (task_mem_20)
+# ---------------------------------------------------------------------------
+class MemoryCard(MemoryResponse):
+    """La memoria con su procedencia resuelta y su línea de tiempo."""
+
+    execution_title: str | None = None
+    """Título de la tarea de la ejecución que la aprendió (`None` si no consta)."""
+    my_verdict: str | None = None
+    """El voto de quien pregunta (`useful|wrong|outdated`), `None` si no ha votado."""
+    timeline: dict[str, Any] | None = None
+
+
+class FeedbackRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    verdict: Literal["useful", "wrong", "outdated"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+class FeedbackOut(BaseModel):
+    model_config = _BASE_CONFIG
+
+    memory_id: UUID
+    verdict: str
+    useful_count: int
+    harmful_count: int
+    disputed: bool
+
+
+async def _visible_memory(
+    session: AsyncSession, principal: AuthPrincipal, tenant_id: UUID, memory_id: UUID
+) -> MemoryEntry:
+    """La memoria si quien pregunta puede verla (archivadas incluidas); si no, 404: una
+    privada ajena, otro tenant y una inexistente son indistinguibles."""
+    row = (
+        await session.execute(
+            select(MemoryEntry).where(
+                MemoryEntry.id == memory_id,
+                MemoryEntry.tenant_id == tenant_id,
+                MemoryEntry.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or not _can_access_memory(row, principal):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    return row
+
+
+@router.get("/{memory_id}", response_model=MemoryCard)
+async def get_memory_card(
+    memory_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MemoryCard:
+    """Ficha de una memoria: procedencia con nombres (agente, proyecto, título de la
+    ejecución), contadores de uso y utilidad, su voto y su línea de tiempo embebida."""
+    from api_server.db.domain import Execution, Task
+
+    tenant_id = require_tenant_id(principal)
+    row = await _visible_memory(session, principal, tenant_id, memory_id)
+    base = (await _enriched(session, tenant_id, [row]))[0]
+    title: str | None = None
+    if row.source_execution_id is not None:
+        title = (
+            await session.execute(
+                select(Task.title)
+                .join(Execution, Execution.task_id == Task.id)
+                .where(
+                    Execution.id == row.source_execution_id,
+                    Execution.tenant_id == tenant_id,
+                    Task.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    my_verdict: str | None = None
+    if principal.user_id is not None:
+        voter = voter_key(agent_id=None, execution_id=None, user_id=principal.user_id)
+        my_verdict = (
+            await session.execute(
+                text(
+                    "SELECT verdict FROM memory_feedback WHERE tenant_id = :t"
+                    " AND memory_id = :m AND voter_key = :v"
+                ),
+                {"t": tenant_id, "m": memory_id, "v": voter},
+            )
+        ).scalar_one_or_none()
+    timeline = await build_timeline(
+        session,
+        tenant_id=tenant_id,
+        visible=human_visibility(principal.user_id),
+        memory_id=memory_id,
+        window=5,
+        include_archived=True,
+    )
+    return MemoryCard(
+        **base.model_dump(),
+        execution_title=title,
+        my_verdict=my_verdict,
+        timeline=timeline.as_dict() if timeline is not None else None,
+    )
+
+
+@router.post("/{memory_id}/feedback", response_model=FeedbackOut)
+async def give_memory_feedback(
+    memory_id: UUID,
+    payload: FeedbackRequest,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> FeedbackOut:
+    """Voto humano sobre una memoria (`useful|wrong|outdated`), para `human_mem_02`.
+
+    Un voto por persona (repetirlo no suma, cambiarlo lo reescribe); `wrong`/`outdated`
+    la dejan `disputed` y el recall la baja, sin borrarla. Misma visibilidad que el
+    listado: la privada de otra persona y todo lo de otro tenant, 404 sin escribir nada."""
+    tenant_id = require_tenant_id(principal)
+    if principal.user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="auth required")
+    await _visible_memory(session, principal, tenant_id, memory_id)
+    result = await apply_feedback(
+        session,
+        tenant_id=tenant_id,
+        memory_id=memory_id,
+        verdict=payload.verdict,
+        note=payload.note,
+        agent_id=None,
+        execution_id=None,
+        user_id=principal.user_id,
+    )
+    if result is None:  # archivada: ya no es contexto, no se vota
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="memory not found")
+    return FeedbackOut(
+        memory_id=result.memory_id,
+        verdict=result.verdict,
+        useful_count=result.useful_count,
+        harmful_count=result.harmful_count,
+        disputed=result.disputed,
+    )
 
 
 async def _reembed_content(embedder: Embedder | None, content: str) -> list[float] | None:

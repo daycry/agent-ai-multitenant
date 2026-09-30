@@ -43,8 +43,13 @@ class FeedbackResult:
     disputed: bool
 
 
-def voter_key(*, agent_id: UUID | None, execution_id: UUID | None) -> str:
-    """La identidad del voto: la ejecución si hay una en marcha, si no el agente."""
+def voter_key(
+    *, agent_id: UUID | None, execution_id: UUID | None, user_id: UUID | None = None
+) -> str:
+    """La identidad del voto: la persona si vota un humano (`task_mem_20`), si no la
+    ejecución en marcha y, sin ella, el agente."""
+    if user_id is not None:
+        return f"user:{user_id}"
     if execution_id is not None:
         return f"exec:{execution_id}"
     if agent_id is not None:
@@ -67,9 +72,12 @@ async def apply_feedback(
     note: str | None,
     agent_id: UUID | None,
     execution_id: UUID | None,
+    user_id: UUID | None = None,
 ) -> FeedbackResult | None:
     """Registra el voto y recalcula contadores y `disputed`. ``None`` si la memoria no
-    existe, es de otro tenant, está borrada o archivada (el llamador responde 404)."""
+    existe, es de otro tenant, está borrada o archivada (el llamador responde 404).
+
+    ``user_id``: el votante humano (`POST /memories/{id}/feedback`); un voto por persona."""
     if verdict not in VERDICTS:
         raise ValueError(f"verdict must be one of {VERDICTS}")
     exists = await session.execute(
@@ -95,7 +103,7 @@ async def apply_feedback(
         {
             "tenant_id": tenant_id,
             "memory_id": memory_id,
-            "voter": voter_key(agent_id=agent_id, execution_id=execution_id),
+            "voter": voter_key(agent_id=agent_id, execution_id=execution_id, user_id=user_id),
             "agent_id": agent_id,
             "execution_id": execution_id,
             "verdict": verdict,

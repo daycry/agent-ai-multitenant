@@ -11,6 +11,7 @@
  */
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import type { MemoryResponse } from "@/components/memories/types";
@@ -20,6 +21,7 @@ import { splitCitations } from "@/lib/memory/citations";
 
 function CitationChip({ short }: { short: string }) {
   const t = useT("memoriesProvenance");
+  const tc = useT("memoriesCard");
   const [open, setOpen] = useState(false);
   const query = useQuery({
     queryKey: ["memory-citation", short],
@@ -52,6 +54,13 @@ function CitationChip({ short }: { short: string }) {
           data-testid={`memory-citation-body-${short}`}
         >
           {memory.content}
+          <Link
+            href={`/admin/memories/${memory.id}`}
+            className="text-primary mt-1 block underline"
+            data-testid={`memory-citation-open-${short}`}
+          >
+            {tc("openCard")}
+          </Link>
         </span>
       )}
     </span>
