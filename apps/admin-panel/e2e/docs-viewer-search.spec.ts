@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -126,12 +127,14 @@ async function setup(page: Page): Promise<void> {
 /** Open the visor scoped to a project (so search is enabled). */
 async function openVisor(page: Page): Promise<void> {
   await page.goto(`/admin/docs?project=${PROJECT_A}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await expect(page.getByTestId("docs-search-panel")).toBeVisible();
 }
 
 test("search input is disabled until a project is selected", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/docs", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("docs-search-input")).toBeDisabled();
   await expect(page.getByTestId("docs-search-idle")).toBeVisible();

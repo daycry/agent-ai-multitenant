@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -60,6 +61,7 @@ test("plans tab lists all plans with status badges and filter chips", async ({ p
   await page.goto(`/admin/projects/${PROJECT_ID}/plans`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   // 4 rows render.
   const rows = page.getByTestId("plans-list").locator("li");
@@ -86,6 +88,7 @@ test("filtering by approved narrows the list to one row", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}/plans`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   await page.getByTestId("plans-filter-approved").click();
   await expect(page.getByTestId("plans-filter-approved")).toHaveAttribute("data-active", "true");
@@ -103,6 +106,7 @@ test("filtering by a status with zero matches shows the empty-state", async ({ p
   await page.goto(`/admin/projects/${PROJECT_ID}/plans`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   await page.getByTestId("plans-filter-archived").click();
   await expect(page.getByTestId("plans-empty")).toContainText("Ningún plan en este estado");
@@ -114,6 +118,7 @@ test("plan row links to the detail page", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}/plans`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   const link = page.getByTestId(`plan-row-${PLANS[0].id}`);
   await expect(link).toHaveAttribute("href", `/admin/projects/${PROJECT_ID}/plans/${PLANS[0].id}`);

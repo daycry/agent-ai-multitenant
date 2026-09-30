@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -112,6 +113,7 @@ async function setup(page: Page, listRows: unknown[] = [CURRENT_PRICE]): Promise
 test("lists the catalog with USD prices and a current badge", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("model-prices-page")).toBeVisible();
   await expect(page.getByTestId("prices-table")).toBeVisible();
@@ -139,6 +141,7 @@ test("applies provider/model/modality filters to the list request", async ({ pag
   });
 
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("filter-provider").fill("anthropic");
   await page.getByTestId("filter-model").fill("claude-sonnet-4-5");
   await page.getByTestId("filter-modality").selectOption("text");
@@ -169,6 +172,7 @@ test("system admin creates a price (USD-canonical, no currency field)", async ({
   });
 
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("price-create-open").click();
   await expect(page.getByTestId("price-form-dialog")).toBeVisible();
 
@@ -207,6 +211,7 @@ test("system admin edits a price; the catalog key is immutable", async ({ page }
   });
 
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`price-edit-${CURRENT_ID}`).click();
   await expect(page.getByTestId("price-form-dialog")).toBeVisible();
 
@@ -242,6 +247,7 @@ test("system admin supersedes the current price", async ({ page }) => {
   });
 
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`price-supersede-${CURRENT_ID}`).click();
 
   await expect.poll(() => deletedPath).toBe(`/admin/model-prices/${CURRENT_ID}`);
@@ -256,6 +262,7 @@ test("opens per-model price history with effective-dated rows and a chart", asyn
   await setup(page, [CURRENT_PRICE, OLD_PRICE]);
 
   await page.goto("/admin/model-prices", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`price-history-${CURRENT_ID}`).click();
 
   await expect(page.getByTestId("price-history-dialog")).toBeVisible();

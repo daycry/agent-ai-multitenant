@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -37,6 +38,7 @@ async function setup(page: Page, opts: { rerunStatus?: number } = {}): Promise<v
 test("rerun button is visible and clickable", async ({ page }) => {
   await setup(page);
   await page.goto(`/admin/review/${SESSION_ID}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   const button = page.getByTestId("review-rerun-button");
   await expect(button).toBeVisible();
   await button.click();

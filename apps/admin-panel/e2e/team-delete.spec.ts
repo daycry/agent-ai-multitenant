@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { apiRoute } from "./helpers/api";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -53,6 +54,7 @@ test("confirm disabled until name matches; matching name fires DELETE", async ({
   let deleted = false;
   await setup(page, { onDelete: () => (deleted = true) });
   await page.goto(`/admin/teams/${TEAM_ID}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await page.getByTestId("team-delete-button").click();
   await expect(page.getByTestId("delete-team-confirm")).toBeDisabled();
@@ -61,7 +63,7 @@ test("confirm disabled until name matches; matching name fires DELETE", async ({
   await expect(page.getByTestId("delete-team-confirm")).toBeEnabled();
   await page.getByTestId("delete-team-confirm").click();
 
-  await page.waitForURL("**/admin/teams", { timeout: 3000 });
+  await page.waitForURL("**/admin/teams", { timeout: 30_000 });
   expect(deleted).toBe(true);
 });
 
@@ -83,6 +85,7 @@ test("builtin team hides edit/delete buttons", async ({ page }) => {
   );
 
   await page.goto(`/admin/teams/${TEAM_ID}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await expect(page.getByTestId("team-edit-button")).toHaveCount(0);
   await expect(page.getByTestId("team-delete-button")).toHaveCount(0);
 });

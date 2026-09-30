@@ -82,6 +82,19 @@ const INCOMING = fakeUser(
   "Bruno Admin",
 );
 
+/** Cuerpo mínimo válido de `GET /tenant/dashboard`. El comodín `[]` de los tests
+ *  revienta el render del dashboard (`data.spend` sin definir) y el error boundary
+ *  se lleva el header: el test se lee como «no aparece `user-menu`». */
+const EMPTY_DASHBOARD = {
+  pending: { total: 0, by_kind: {}, oldest: [] },
+  projects: [],
+  spend: { available: false, reason: "forbidden" },
+  issues: [],
+  activity: [],
+  mcp: [],
+  generated_at: "2026-09-30T00:00:00Z",
+};
+
 function json(body: unknown, status = 200) {
   return { status, contentType: "application/json", body: JSON.stringify(body) };
 }
@@ -112,6 +125,7 @@ test("cerrar sesión y entrar como otro usuario no pinta los datos del anterior"
   // El dashboard hace `health.data?.services.length`: con un `[]` genérico
   // revienta el render y la navegación se deshace, que se lee igual que "el
   // router no navega".
+  await page.route(onApiPath("/tenant/dashboard"), (route) => route.fulfill(json(EMPTY_DASHBOARD)));
   await page.route(onApiPath("/admin/system-health"), (route) =>
     route.fulfill(json({ services: [] })),
   );
@@ -184,6 +198,7 @@ test("cerrar sesión suelta también el tenant activo y la cookie CSRF", async (
     (url) => url.origin === API_ORIGIN,
     (route) => route.fulfill(json([])),
   );
+  await page.route(onApiPath("/tenant/dashboard"), (route) => route.fulfill(json(EMPTY_DASHBOARD)));
   await page.route(onApiPath("/admin/system-health"), (route) =>
     route.fulfill(json({ services: [] })),
   );

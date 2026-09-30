@@ -54,6 +54,9 @@ export function CopilotDeviceFlowDialog({
   const cancelledRef = useRef(false);
 
   useEffect(() => {
+    // Rearmar al montar: StrictMode (next dev) hace montar → limpiar → montar y el
+    // limpiar deja el flag en `true`, con lo que `startFlow` descartaba su respuesta.
+    cancelledRef.current = false;
     return () => {
       cancelledRef.current = true;
       if (timerRef.current !== null) clearTimeout(timerRef.current);

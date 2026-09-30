@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -57,16 +58,18 @@ async function setup(page: Page): Promise<void> {
 }
 
 async function emitWsFrame(page: Page, frame: Record<string, unknown>): Promise<void> {
-  // The page builds the WebSocket inside a useEffect — wait until at
-  // least one instance exists before pushing a frame.
+  // The page builds the WebSocket inside a useEffect — wait until the
+  // documents socket exists before pushing a frame. `next dev` opens its own
+  // HMR WebSocket through the same patched constructor, so "the last instance"
+  // may be HMR's and the frame would vanish: select by URL.
   await page.waitForFunction(() => {
-    const wins = (window as unknown as { __fakeWsInstances?: { emit: (p: unknown) => void }[] })
-      .__fakeWsInstances;
-    return Array.isArray(wins) && wins.length > 0;
+    const wins = (window as unknown as { __fakeWsInstances?: { url: string }[] }).__fakeWsInstances;
+    return Array.isArray(wins) && wins.some((w) => w.url.includes("/ws/documents/"));
   });
   await page.evaluate((f) => {
-    const wins = (window as unknown as { __fakeWsInstances: { emit: (p: unknown) => void }[] })
-      .__fakeWsInstances;
+    const wins = (
+      window as unknown as { __fakeWsInstances: { url: string; emit: (p: unknown) => void }[] }
+    ).__fakeWsInstances.filter((w) => w.url.includes("/ws/documents/"));
     wins[wins.length - 1].emit(f);
   }, frame);
 }
@@ -76,6 +79,7 @@ test("page renders with an empty events list", async ({ page }) => {
   await page.goto(`/admin/documents/${DOCUMENT_ID}/ingestion`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
   await expect(page.getByTestId("ingestion-page")).toBeVisible();
   await expect(page.getByTestId("ingestion-events-empty")).toBeVisible();
   await expect(page.getByTestId("ingestion-status-badge")).toHaveAttribute(
@@ -89,6 +93,7 @@ test("a status event flips the badge and appends to the list", async ({ page }) 
   await page.goto(`/admin/documents/${DOCUMENT_ID}/ingestion`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   await emitWsFrame(page, {
     type: "document.status",
@@ -113,6 +118,7 @@ test("a progress event appends an entry below the status one", async ({ page }) 
   await page.goto(`/admin/documents/${DOCUMENT_ID}/ingestion`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   await emitWsFrame(page, {
     type: "document.status",
@@ -137,6 +143,7 @@ test("a final status indexed flips the badge to success", async ({ page }) => {
   await page.goto(`/admin/documents/${DOCUMENT_ID}/ingestion`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 
   await emitWsFrame(page, {
     type: "document.status",

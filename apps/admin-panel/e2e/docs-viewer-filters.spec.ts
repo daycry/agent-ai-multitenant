@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -137,6 +138,7 @@ async function setup(page: Page): Promise<void> {
  */
 async function openTree(page: Page): Promise<void> {
   await page.goto(`/admin/docs?project=${PROJECT_A}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await expect(page.getByTestId("docs-visor")).toBeVisible();
   await expect(page.getByTestId(`docs-project-toggle-${PROJECT_A}`)).toHaveAttribute(
     "aria-expanded",
@@ -148,6 +150,7 @@ async function openTree(page: Page): Promise<void> {
 test("filters are disabled until a project is selected", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/docs", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("docs-filters-panel")).toBeVisible();
   // The category fieldset is disabled (no project to scope to).
@@ -182,6 +185,7 @@ test("a category filter prunes the sidebar tree", async ({ page }) => {
 test("a type filter narrows search hits", async ({ page }) => {
   await setup(page);
   await page.goto(`/admin/docs?project=${PROJECT_A}`, { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await page.getByTestId("docs-search-input").fill("llm");
   await expect(page.getByTestId("docs-search-hit-chunk-ov")).toBeVisible();
@@ -242,6 +246,7 @@ test("the viewer header star toggles the open doc's bookmark", async ({ page }) 
     `/admin/docs?project=${PROJECT_A}&path=${encodeURIComponent("docs/01-overview/vision.md")}`,
     { waitUntil: "domcontentloaded" },
   );
+  await waitForHydration(page);
 
   await expect(page.getByTestId("docs-selected-path")).toHaveText("docs/01-overview/vision.md");
   const star = page.getByTestId("docs-viewer-star");

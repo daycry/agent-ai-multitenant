@@ -285,6 +285,15 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
 - [uvicorn-windows-multiprocessing-spawn.md](./uvicorn-windows-multiprocessing-spawn.md)
   — `Stop-Process` no mata workers spawnados por `multiprocessing`;
   usa `taskkill /F /T`.
+- [playwright-click-before-hydration.md](./playwright-click-before-hydration.md)
+  — un clic antes de que React hidrate se pierde sin error; esperar a
+  `data-hydrated` con `waitForHydration(page)`.
+- [playwright-fake-websocket-catches-hmr.md](./playwright-fake-websocket-catches-hmr.md)
+  — un `WebSocket` falso también registra el de HMR de `next dev`; elegir
+  la instancia por URL, no la última.
+- [react-strictmode-cancelled-ref.md](./react-strictmode-cancelled-ref.md)
+  — un `cancelledRef` que no se rearma al montar descarta respuestas bajo
+  StrictMode.
 
 ### next.js / typescript
 

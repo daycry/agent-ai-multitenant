@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -117,6 +118,7 @@ async function openDoc(page: Page): Promise<void> {
   await page.goto(`/admin/docs?project=${PROJECT_A}&path=${encodeURIComponent("docs/guide.md")}`, {
     waitUntil: "domcontentloaded",
   });
+  await waitForHydration(page);
 }
 
 test("compares two refs and renders the classified diff with counts", async ({ page }) => {

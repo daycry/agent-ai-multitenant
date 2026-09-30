@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { waitForHydration } from "./helpers/hydration";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -115,6 +116,7 @@ async function setup(
 test("lists providers with kind, credential and active state", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("llm-providers-page")).toBeVisible();
   await expect(page.getByTestId("providers-table")).toBeVisible();
@@ -134,6 +136,7 @@ test("lists providers with kind, credential and active state", async ({ page }) 
 test("shows an empty state when there are no providers", async ({ page }) => {
   await setup(page, []);
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   await expect(page.getByTestId("providers-empty")).toBeVisible();
 });
@@ -162,6 +165,7 @@ test("creates an azure_foundry provider; api_key + base_url ride in the POST", a
   });
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("provider-create-open").click();
   await expect(page.getByTestId("provider-form-dialog")).toBeVisible();
 
@@ -185,6 +189,7 @@ test("creates an azure_foundry provider; api_key + base_url ride in the POST", a
 test("ollama credential input is the optional bearer token", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId("provider-create-open").click();
 
   await page.getByTestId("form-kind").selectOption("ollama");
@@ -213,6 +218,7 @@ test("edit keeps kind immutable and shows 'configured' for the secret", async ({
   });
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-edit-${COPILOT_ID}`).click();
   await expect(page.getByTestId("provider-form-dialog")).toBeVisible();
 
@@ -252,6 +258,7 @@ test("toggles a provider active state", async ({ page }) => {
   });
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-toggle-${OLLAMA_ID}`).click();
 
   // OLLAMA is active → toggling sends is_active:false.
@@ -278,6 +285,7 @@ test("probar conexión shows an OK result", async ({ page }) => {
   );
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-test-${OLLAMA_ID}`).click();
 
   const result = page.getByTestId(`provider-test-result-${OLLAMA_ID}`);
@@ -307,6 +315,7 @@ test("probar conexión shows a classified error", async ({ page }) => {
   );
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-test-${OLLAMA_ID}`).click();
 
   const result = page.getByTestId(`provider-test-result-${OLLAMA_ID}`);
@@ -331,6 +340,7 @@ test("deletes a provider", async ({ page }) => {
   });
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-delete-${OLLAMA_ID}`).click();
 
   await expect.poll(() => deletedPath).toBe(`/admin/llm-providers/${OLLAMA_ID}`);
@@ -374,6 +384,7 @@ test("copilot device flow: start shows code + link, poll authorizes", async ({ p
   });
 
   await page.goto("/admin/llm-providers", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
   await page.getByTestId(`provider-device-flow-${COPILOT_ID}`).click();
   await expect(page.getByTestId("device-flow-dialog")).toBeVisible();
 
