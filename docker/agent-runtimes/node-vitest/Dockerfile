@@ -9,7 +9,7 @@
 # node-jest: Node 20 salió de soporte (libgnutls30 con dos CRITICAL sin parchear
 # en su base) y el npm de la línea 24 aún empaqueta `node-tar` 7.5.16
 # (CVE-2026-59873, CRITICAL). La 26 trae npm 11.19 con `node-tar` 7.5.19.
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runtime
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-node-vitest" \
       org.opencontainers.image.version="v1" \
