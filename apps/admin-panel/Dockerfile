@@ -30,13 +30,13 @@
 # Se sube al hilo del bump de `@types/node` (PR #96): subir los tipos por
 # encima del intérprete real es una incoherencia que `tsc` no delata, porque
 # valida contra la declaración de tipos y no contra el runtime.
-FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS deps
+FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---- builder: compile the standalone server bundle ----
-FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS builder
+FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -50,7 +50,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
 RUN mkdir -p public && npm run build
 
 # ---- runner: minimal standalone server, non-root ----
-FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS runner
+FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS runner
 LABEL org.opencontainers.image.title="admin-panel" \
       org.opencontainers.image.description="agentic-platform Next.js admin/tenant UI." \
       org.opencontainers.image.source="https://github.com/daycry/agent-ai-multitenant"
